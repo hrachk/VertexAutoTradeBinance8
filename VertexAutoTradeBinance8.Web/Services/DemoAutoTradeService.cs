@@ -239,12 +239,21 @@ public sealed class DemoAutoTradeService : BackgroundService
             string side = (sideRaw ?? "").Contains("Sell", StringComparison.OrdinalIgnoreCase)
                           || (sideRaw ?? "").Contains("SHORT", StringComparison.OrdinalIgnoreCase)
                 ? "SHORT" : "LONG";
-            const int maxSameSide = 2;
-            int sameSide = _demo.GetSameSideOpenCountForClient(clientId, side);
-            if (sameSide >= maxSameSide)
+            // User-configurable directional limit (Trading:*)
+            string corrMode = _cfg.GetValue("Trading:CorrelationFilterMode", "Disabled") ?? "Disabled";
+            int maxSameSide = _cfg.GetValue("Trading:MaxSameSidePositions", 0);
+            if (!corrMode.Equals("Disabled", StringComparison.OrdinalIgnoreCase))
             {
-                _journal?.LogSignal(symbol, "DEMO", "REJECT_DEMO", $"DIR_CORR_MAX_SAME_SIDE:{sameSide}>={maxSameSide}");
-                return false;
+                int sameSide = _demo.GetSameSideOpenCountForClient(clientId, side);
+                int cap = maxSameSide;
+                if (corrMode.Equals("DynamicCorrelation", StringComparison.OrdinalIgnoreCase) && cap <= 0)
+                    cap = 2;
+                if (cap > 0 && sameSide >= cap)
+                {
+                    _journal?.LogSignal(symbol, "DEMO", "REJECT_DEMO",
+                        $"DIR_MAX_SAME_SIDE_REACHED:{sameSide}>={cap} mode={corrMode}");
+                    return false;
+                }
             }
             if (_demo.HasOpenSymbolForClient(clientId, symbol))
             {

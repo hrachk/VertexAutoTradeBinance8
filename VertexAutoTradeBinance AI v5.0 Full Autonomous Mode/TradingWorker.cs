@@ -1048,21 +1048,55 @@ namespace VertexAutoTradeBinance8
                     return;
                 }
 
-                // Directional correlation: max 2 positions same side (one-way BTC dump risk)
-                const int maxSameSide = 2;
-                bool wantLong = signal.Side == SignalSide.Buy;
-                int sameSide = await _supervisor.GetSameSideOpenCountAsync(wantLong, ct).ConfigureAwait(false);
-                if (sameSide >= maxSameSide)
+                // Directional exposure — user-configurable (Trading:CorrelationFilterMode / MaxSameSidePositions)
+                // Disabled / MaxSameSidePositions<=0 → only MaxOpenPositions applies (no hardcode 2).
                 {
-                    _logger.LogWarning(
-                        "[DIR-CORR] REJECT {sym} {side}: already {n} same-direction open (max {m})",
-                        symbol, wantLong ? "LONG" : "SHORT", sameSide, maxSameSide);
-                    await RejectAsync(
-                        signal, symbol, tf,
-                        "RISK",
-                        $"DIR_CORR_MAX_SAME_SIDE:{sameSide}>={maxSameSide}",
-                        ct);
-                    return;
+                    var to = _tradingMonitor?.CurrentValue ?? _options;
+                    string mode = (to.CorrelationFilterMode ?? "Disabled").Trim();
+                    if (string.IsNullOrEmpty(mode)) mode = "Disabled";
+                    int maxSame = to.MaxSameSidePositions;
+                    bool wantLong = signal.Side == SignalSide.Buy;
+                    string sideLabel = wantLong ? "LONG" : "SHORT";
+
+                    if (!mode.Equals("Disabled", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int sameSide = await _supervisor.GetSameSideOpenCountAsync(wantLong, ct).ConfigureAwait(false);
+
+                        if (mode.Equals("StaticLimit", StringComparison.OrdinalIgnoreCase)
+                            && maxSame > 0
+                            && sameSide >= maxSame)
+                        {
+                            _logger.LogWarning(
+                                "[RiskEngine] Order REJECTED for {sym} ({side}). Reason: User SameSideLimit reached (Active {side}s: {n} / MaxAllowed: {m}). Configurable via Trading:MaxSameSidePositions / CorrelationFilterMode.",
+                                symbol, sideLabel, sideLabel, sameSide, maxSame);
+                            await RejectAsync(
+                                signal, symbol, tf,
+                                "RISK",
+                                $"DIR_MAX_SAME_SIDE_REACHED:{sameSide}>={maxSame}",
+                                ct);
+                            return;
+                        }
+
+                        if (mode.Equals("DynamicCorrelation", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // v1: treat additional same-side alts as high BTC-beta exposure when
+                            // same-side book already at MaxSameSide (default floor 2 if unset).
+                            int dynCap = maxSame > 0 ? maxSame : 2;
+                            bool isBtc = symbol.StartsWith("BTC", StringComparison.OrdinalIgnoreCase);
+                            if (!isBtc && sameSide >= dynCap)
+                            {
+                                _logger.LogWarning(
+                                    "[RiskEngine] Order REJECTED for {sym} ({side}). Reason: HIGH_CORRELATION_EXPOSURE vs open same-side book (Active: {n} / Cap: {m}). Mode=DynamicCorrelation. Configurable via Trading:MaxSameSidePositions.",
+                                    symbol, sideLabel, sameSide, dynCap);
+                                await RejectAsync(
+                                    signal, symbol, tf,
+                                    "RISK",
+                                    $"HIGH_CORRELATION_EXPOSURE:{sameSide}>={dynCap}",
+                                    ct);
+                                return;
+                            }
+                        }
+                    }
                 }
             }
             catch (Exception ex)

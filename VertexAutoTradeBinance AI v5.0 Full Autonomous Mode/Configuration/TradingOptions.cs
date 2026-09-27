@@ -48,6 +48,22 @@ public class TradingOptions
     public int MaxOpenPositions { get; set; } = 5;
 
     /// <summary>
+    /// Max concurrent positions in the same direction (LONG or SHORT).
+    /// 0 = unlimited (only MaxOpenPositions applies). Configurable from UI.
+    /// </summary>
+    public int MaxSameSidePositions { get; set; } = 0;
+
+    /// <summary>
+    /// Disabled | StaticLimit | DynamicCorrelation
+    /// Disabled: ignore same-side counts. StaticLimit: MaxSameSidePositions.
+    /// DynamicCorrelation: reject high co-movement vs open same-side books (v1: BTC-led).
+    /// </summary>
+    public string CorrelationFilterMode { get; set; } = "Disabled";
+
+    /// <summary>Used when CorrelationFilterMode = DynamicCorrelation (0..1).</summary>
+    public decimal MaxAllowedCorrelation { get; set; } = 0.85m;
+
+    /// <summary>
     /// Maximum margin as a fraction of balance that a single position may consume.
     /// Default 0.12 = 12%. Previously hardcoded as const decimal in RiskManager.
     /// </summary>

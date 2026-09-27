@@ -581,6 +581,24 @@
                            @onchange="OnMaxOpenPositionsChanged" />
                     <span class="st-field-hint">Trading:MaxOpenPositions — лимит одновременных позиций</span>
                 </div>
+
+                <div class="st-field">
+                    <label>Max Same-Side Positions</label>
+                    <input class="st-input" type="number" min="0" max="50" step="1"
+                           value="@GetInt("Trading:MaxSameSidePositions", 0)"
+                           @onchange="OnMaxSameSidePositionsChanged" />
+                    <span class="st-field-hint">0 = без лимита по стороне. Работает только если режим ≠ Disabled</span>
+                </div>
+                <div class="st-field">
+                    <label>Correlation Filter Mode</label>
+                    <select class="st-input" value="@GetStr("Trading:CorrelationFilterMode", "Disabled")"
+                            @onchange="OnCorrelationFilterModeChanged">
+                        <option value="Disabled">Disabled — только MaxOpenPositions</option>
+                        <option value="StaticLimit">StaticLimit — жёсткий лимит по стороне</option>
+                        <option value="DynamicCorrelation">DynamicCorrelation — BTC-beta exposure</option>
+                    </select>
+                    <span class="st-field-hint">Disabled = до MaxOpenPositions LONG/SHORT без хардкода 2</span>
+                </div>
             </div>
 
             <div class="st-field" style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px">
@@ -670,6 +688,14 @@
     private Task OnLegacyMlGateToggle(ChangeEventArgs e) => SetAsync("MlGate:EnableMlSkipGate", ParseCheck(e));
     private Task OnNewsShadowToggle(ChangeEventArgs e) => SetAsync("News:ShadowMode", ParseCheck(e));
     private Task OnMaxOpenPositionsChanged(ChangeEventArgs e) => SetAsync("Trading:MaxOpenPositions", Math.Clamp(ParseIntOr(e.Value, 5) ?? 5, 1, 50));
+    private Task OnMaxSameSidePositionsChanged(ChangeEventArgs e) => SetAsync("Trading:MaxSameSidePositions", Math.Clamp(ParseIntOr(e.Value, 0) ?? 0, 0, 50));
+    private Task OnCorrelationFilterModeChanged(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString() ?? "Disabled";
+        if (v is not ("Disabled" or "StaticLimit" or "DynamicCorrelation"))
+            v = "Disabled";
+        return SetAsync("Trading:CorrelationFilterMode", v);
+    }
 
     private Task OnBaseRiskPercentChanged(ChangeEventArgs e) => SetAsync("Trading:BaseRiskPercent", ParseDecimalOr(e.Value, 0m));
     private Task OnMinNotionalGuardPercentChanged(ChangeEventArgs e) => SetAsync("Trading:MinNotionalGuardPercent", ParseDecimalOr(e.Value, 0m));
