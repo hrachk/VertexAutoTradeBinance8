@@ -788,6 +788,44 @@
         return SetAsync("Trading:CorrelationFilterMode", v);
     }
 
+    private Task OnMaxAllowedCorrelationChanged(ChangeEventArgs e) =>
+        SetAsync("Trading:MaxAllowedCorrelation", Math.Clamp(ParseDecimalOr(e.Value, 0.85m) ?? 0.85m, 0.50m, 1.0m));
+
+    private Task OnDynamicLiquiditySizingToggle(ChangeEventArgs e) =>
+        SetAsync("Trading:DynamicLiquiditySizing", ParseCheck(e));
+
+    private Task OnSqMinQualityChanged(ChangeEventArgs e) =>
+        SetAsync("SignalQuality:MinQualityThreshold", Math.Clamp(ParseDecimalOr(e.Value, 70m) ?? 70m, 50m, 95m));
+
+    private Task OnSqStrategyChanged(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString() ?? "BestScoreAuction";
+        if (v is not ("BestScoreAuction" or "FirstComeFirstServed"))
+            v = "BestScoreAuction";
+        return SetAsync("SignalQuality:SignalSelectionStrategy", v);
+    }
+
+    private Task OnSqAuctionMsChanged(ChangeEventArgs e) =>
+        SetAsync("SignalQuality:AuctionWindowMs", Math.Clamp(ParseIntOr(e.Value, 400) ?? 400, 0, 2000));
+
+    private Task OnSqWTrendChanged(ChangeEventArgs e) =>
+        SetAsync("SignalQuality:WeightTrend", ParseDecimalOr(e.Value, 0.35m));
+
+    private Task OnSqWDerivChanged(ChangeEventArgs e) =>
+        SetAsync("SignalQuality:WeightDerivatives", ParseDecimalOr(e.Value, 0.20m));
+
+    private Task OnSqWVolChanged(ChangeEventArgs e) =>
+        SetAsync("SignalQuality:WeightVolume", ParseDecimalOr(e.Value, 0.20m));
+
+    private Task OnSqWRrChanged(ChangeEventArgs e) =>
+        SetAsync("SignalQuality:WeightRiskReward", ParseDecimalOr(e.Value, 0.25m));
+
+    private Task OnSqMaxSpreadChanged(ChangeEventArgs e) =>
+        SetAsync("SignalQuality:MaxSpreadPct", Math.Clamp(ParseDecimalOr(e.Value, 0.0008m) ?? 0.0008m, 0.0001m, 0.01m));
+
+    private Task OnSqObGuardToggle(ChangeEventArgs e) =>
+        SetAsync("SignalQuality:OrderbookGuardEnabled", ParseCheck(e));
+
     private Task OnBaseRiskPercentChanged(ChangeEventArgs e) => SetAsync("Trading:BaseRiskPercent", ParseDecimalOr(e.Value, 0m));
     private Task OnMinNotionalGuardPercentChanged(ChangeEventArgs e) => SetAsync("Trading:MinNotionalGuardPercent", ParseDecimalOr(e.Value, 0m));
     private Task OnMaxMarginPercentChanged(string profileKey, ChangeEventArgs e) => SetAsync($"{profileKey}:MaxMarginPercent", ParseDecimalOr(e.Value, 0.12m));
