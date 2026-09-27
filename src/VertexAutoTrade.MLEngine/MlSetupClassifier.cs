@@ -87,7 +87,7 @@ public sealed class MlSetupClassifier
         conf = Math.Clamp(conf, 0m, 1m);
 
         decimal p = 0.28m + conf * 0.55m;
-        if (conf < 0.60m) p -= 0.04m;
+        if (conf < 0.55m) p -= 0.05m;
         if (conf >= 0.70m) p += 0.03m;
 
         p += Math.Clamp(f.AvgRealizedR, -1.5m, 1.5m) * 0.12m;

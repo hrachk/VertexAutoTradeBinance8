@@ -130,7 +130,7 @@ public sealed class ShadowMlGatekeeper
 
         // Base: conf 0.58 → ~0.599; conf 0.62 → ~0.621 (before memory)
         double p = 0.28 + conf * 0.55;
-        if (conf < 0.60) p -= 0.04;          // soft signals pay a tax
+        if (conf < 0.55) p -= 0.05;          // soft signals pay a tax
         if (conf >= 0.70) p += 0.03;
 
         double avgR = mem != null && mem.Note != null && mem.Note.Contains("avgR=", StringComparison.Ordinal)
