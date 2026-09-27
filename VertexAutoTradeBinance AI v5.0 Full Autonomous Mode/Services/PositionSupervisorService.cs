@@ -2337,6 +2337,28 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
+        /// <summary>
+        /// Count open positions in the same direction (LONG if isLong, else SHORT).
+        /// Used to cap correlated one-way portfolio risk (max 2 same side).
+        /// </summary>
+        public async Task<int> GetSameSideOpenCountAsync(bool isLong, CancellationToken ct = default)
+        {
+            using var client = _factory.CreateRestClient();
+            try
+            {
+                var result = await client.UsdFuturesApi.Trading.GetPositionsAsync(ct: ct).ConfigureAwait(false);
+                if (!result.Success || result.Data == null) return 0;
+                return result.Data.Count(p =>
+                    p.PositionAmt != 0 &&
+                    (isLong ? p.PositionAmt > 0 : p.PositionAmt < 0));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[DIR-CORR] same-side count failed");
+                return 0;
+            }
+        }
+
 
         //    private async Task HandleSideAsync(
         //        BinanceRestClient client,

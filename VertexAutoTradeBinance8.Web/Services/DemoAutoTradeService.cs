@@ -239,6 +239,13 @@ public sealed class DemoAutoTradeService : BackgroundService
             string side = (sideRaw ?? "").Contains("Sell", StringComparison.OrdinalIgnoreCase)
                           || (sideRaw ?? "").Contains("SHORT", StringComparison.OrdinalIgnoreCase)
                 ? "SHORT" : "LONG";
+            const int maxSameSide = 2;
+            int sameSide = _demo.GetSameSideOpenCountForClient(clientId, side);
+            if (sameSide >= maxSameSide)
+            {
+                _journal?.LogSignal(symbol, "DEMO", "REJECT_DEMO", $"DIR_CORR_MAX_SAME_SIDE:{sameSide}>={maxSameSide}");
+                return false;
+            }
             if (_demo.HasOpenSymbolForClient(clientId, symbol))
             {
                 _journal?.LogSignal(symbol, "DEMO", "REJECT_DEMO", "ALREADY_OPEN");

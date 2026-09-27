@@ -54,13 +54,14 @@ public sealed class StrategyCoreEngine
     private const decimal MinAtrPct = 0.0015m;
     private const decimal MaxAtrPct = 0.060m;
     // Structure SL: swing ± pad; hard caps prevent 4%+ "lottery" stops
-    private const decimal MinRiskAtr = 1.20m;   // noise floor (was 1.85 — too wide vs TP)
-    private const decimal MaxRiskAtr = 2.60m;   // reject if SL farther than ~2.6 ATR
-    private const decimal MaxRiskPct = 0.022m;  // reject if |entry-SL|/entry > 2.2%
-    private const decimal StructurePadAtr = 0.50m; // SwingLow/High ± 0.5 ATR (desk style)
+    private const decimal MinRiskAtr = 1.20m;   // ATR floor
+    private const decimal MaxRiskAtr = 2.80m;   // reject if SL farther than ~2.8 ATR
+    private const decimal MinRiskPct = 0.008m;  // CRITICAL: never micro-SL < 0.8% of entry
+    private const decimal MaxRiskPct = 0.025m;  // reject if |entry-SL|/entry > 2.5%
+    private const decimal StructurePadAtr = 0.50m; // SwingLow/High ± 0.5 ATR
     private const decimal MaxExtensionAtr = 1.80m; // no FOMO chase past structure
-    private const decimal RsiLongMax = 65m;     // no LONG if RSI15 > 65
-    private const decimal RsiShortMin = 35m;    // no SHORT if RSI15 < 35
+    private const decimal RsiLongMax = 62m;     // no LONG if RSI15 > 62 (was 65 — still FOMO)
+    private const decimal RsiShortMin = 38m;    // no SHORT if RSI15 < 38
     private const int RsiPeriod = 14;
     private const int EmaFast = 21;
     private const int EmaSlow = 50;
@@ -622,12 +623,15 @@ public sealed class StrategyCoreEngine
 
     private static decimal EnforceMinRiskSl(bool isLong, decimal entry, decimal sl, decimal atr)
     {
-        if (entry <= 0 || atr <= 0) return sl;
+        if (entry <= 0) return sl;
         decimal risk = Math.Abs(entry - sl);
-        decimal minRisk = atr * MinRiskAtr;
-        // Never force SL beyond portfolio geometry cap
+        // Floor: max(ATR×MinRiskAtr, entry×MinRiskPct) — kills 0.23% micro-stops on BTC
+        decimal minByAtr = atr > 0 ? atr * MinRiskAtr : 0m;
+        decimal minByPct = entry * MinRiskPct;
+        decimal minRisk = Math.Max(minByAtr, minByPct);
         decimal maxRisk = entry * MaxRiskPct;
-        if (maxRisk > 0) minRisk = Math.Min(minRisk, maxRisk);
+        if (maxRisk > 0 && minRisk > maxRisk)
+            minRisk = maxRisk; // if conflict, prefer not exploding size; PassRiskGeometry may reject
         if (risk >= minRisk) return sl;
         return isLong ? entry - minRisk : entry + minRisk;
     }
@@ -651,9 +655,14 @@ public sealed class StrategyCoreEngine
             return false;
         }
         decimal riskPct = risk / entry;
+        if (riskPct < MinRiskPct * 0.98m)
+        {
+            reason = $"MICRO_SL riskPct={riskPct:P2} < {MinRiskPct:P1} (noise stop banned)";
+            return false;
+        }
         if (riskPct > MaxRiskPct)
         {
-            reason = $"SL too far riskPct={riskPct:P2} > {MaxRiskPct:P1} (cap FOMO-wide stops)";
+            reason = $"SL too far riskPct={riskPct:P2} > {MaxRiskPct:P1}";
             return false;
         }
         if (atr > 0 && risk > atr * MaxRiskAtr)
@@ -667,37 +676,54 @@ public sealed class StrategyCoreEngine
     private static bool PassRsiGuard(List<BinanceFuturesUsdtKline> k, TradeSignal s, out string reason)
     {
         reason = "";
+        // Include forming bar: last kline close is current/last traded (mark proxy)
         decimal rsi = CalcRsi(k, RsiPeriod);
-        if (rsi <= 0) return true; // no data → do not block
+        if (rsi <= 0) return true;
         bool isLong = s.Side == SignalSide.Buy;
         if (isLong && rsi > RsiLongMax)
         {
-            reason = $"RSI Overbought ({rsi:F1}) > {RsiLongMax} — no FOMO LONG";
+            reason = $"RSI FOMO LONG ({rsi:F1}) > {RsiLongMax}";
             return false;
         }
         if (!isLong && rsi < RsiShortMin)
         {
-            reason = $"RSI Oversold ({rsi:F1}) < {RsiShortMin} — no FOMO SHORT";
+            reason = $"RSI FOMO SHORT ({rsi:F1}) < {RsiShortMin}";
             return false;
         }
         return true;
     }
 
+    /// <summary>Wilder RSI on closes; last bar = live/forming close so intrabar heat is visible.</summary>
     private static decimal CalcRsi(List<BinanceFuturesUsdtKline> k, int period)
     {
         if (k == null || k.Count < period + 2) return 0;
-        decimal gain = 0, loss = 0;
-        int start = k.Count - period - 1;
-        if (start < 1) start = 1;
-        for (int i = start; i < k.Count; i++)
+        // Seed SMA of first `period` deltas
+        decimal avgGain = 0, avgLoss = 0;
+        int seedEnd = k.Count - period;
+        if (seedEnd < 1) return 0;
+        int seedStart = seedEnd - period;
+        if (seedStart < 1) seedStart = 1;
+        int n = 0;
+        for (int i = seedStart; i < seedEnd; i++)
         {
             decimal d = k[i].ClosePrice - k[i - 1].ClosePrice;
-            if (d >= 0) gain += d;
-            else loss -= d;
+            if (d >= 0) avgGain += d; else avgLoss -= d;
+            n++;
         }
-        if (loss <= 0) return 100m;
-        if (gain <= 0) return 0m;
-        decimal rs = gain / loss;
+        if (n <= 0) return 0;
+        avgGain /= n;
+        avgLoss /= n;
+        for (int i = seedEnd; i < k.Count; i++)
+        {
+            decimal d = k[i].ClosePrice - k[i - 1].ClosePrice;
+            decimal g = d > 0 ? d : 0;
+            decimal l = d < 0 ? -d : 0;
+            avgGain = (avgGain * (period - 1) + g) / period;
+            avgLoss = (avgLoss * (period - 1) + l) / period;
+        }
+        if (avgLoss <= 0) return 100m;
+        if (avgGain <= 0) return 0m;
+        decimal rs = avgGain / avgLoss;
         return 100m - (100m / (1m + rs));
     }
 

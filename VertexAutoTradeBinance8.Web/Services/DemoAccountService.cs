@@ -300,6 +300,30 @@ public sealed class DemoAccountService
         catch { return 0; }
     }
 
+    public int GetSameSideOpenCountForClient(string clientId, string side)
+    {
+        bool wantLong = side.Equals("LONG", StringComparison.OrdinalIgnoreCase)
+                     || side.Equals("BUY", StringComparison.OrdinalIgnoreCase);
+        bool Match(string? s)
+        {
+            bool isLong = (s ?? "").Equals("LONG", StringComparison.OrdinalIgnoreCase)
+                       || (s ?? "").Equals("BUY", StringComparison.OrdinalIgnoreCase);
+            return wantLong ? isLong : !isLong;
+        }
+        if (string.Equals(_clientId, clientId, StringComparison.OrdinalIgnoreCase))
+        {
+            lock (_lock) return _state.Positions.Count(p => Match(p.Side));
+        }
+        try
+        {
+            var path = Path.Combine(_accountsDir, $"client_{clientId}", "demo-account.json");
+            if (!File.Exists(path)) return 0;
+            var state = System.Text.Json.JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path));
+            return state?.Positions?.Count(p => Match(p.Side)) ?? 0;
+        }
+        catch { return 0; }
+    }
+
     public bool HasOpenSymbolForClient(string clientId, string symbol)
     {
         if (string.IsNullOrWhiteSpace(symbol)) return false;

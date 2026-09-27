@@ -1047,6 +1047,23 @@ namespace VertexAutoTradeBinance8
                         ct);
                     return;
                 }
+
+                // Directional correlation: max 2 positions same side (one-way BTC dump risk)
+                const int maxSameSide = 2;
+                bool wantLong = signal.Side == SignalSide.Buy;
+                int sameSide = await _supervisor.GetSameSideOpenCountAsync(wantLong, ct).ConfigureAwait(false);
+                if (sameSide >= maxSameSide)
+                {
+                    _logger.LogWarning(
+                        "[DIR-CORR] REJECT {sym} {side}: already {n} same-direction open (max {m})",
+                        symbol, wantLong ? "LONG" : "SHORT", sameSide, maxSameSide);
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "RISK",
+                        $"DIR_CORR_MAX_SAME_SIDE:{sameSide}>={maxSameSide}",
+                        ct);
+                    return;
+                }
             }
             catch (Exception ex)
             {

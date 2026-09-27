@@ -35,4 +35,15 @@ public class RiskRewardCalculatorTests
         Assert.False(RiskRewardCalculator.IsSlWithinPctCap(100m, 95.5m, 0.022m)); // 4.5%
         Assert.True(RiskRewardCalculator.IsSlWithinPctCap(100m, 98m, 0.022m));  // 2%
     }
+
+    [Fact]
+    public void Micro_Sl_0_23pct_Is_Below_Min_Floor()
+    {
+        // BTC-style micro stop 0.23% must fail 0.8% floor
+        decimal entry = 84907.63m;
+        decimal sl = 84707.72m;
+        decimal riskPct = Math.Abs(entry - sl) / entry;
+        Assert.True(riskPct < 0.008m);
+        Assert.False(riskPct >= 0.008m);
+    }
 }
