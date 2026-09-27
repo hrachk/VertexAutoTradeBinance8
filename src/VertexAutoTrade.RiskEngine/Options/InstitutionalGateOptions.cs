@@ -15,6 +15,6 @@ public sealed class InstitutionalGateOptions
     /// <summary>When true, critical bearish news can hard-block new entries.</summary>
     public bool EnableNewsHardMode { get; set; } = false;
 
-    public decimal MlSkipThreshold { get; set; } = 0.42m;
-    public decimal MlProbeThreshold { get; set; } = 0.55m;
+    public decimal MlSkipThreshold { get; set; } = 0.58m;
+    public decimal MlProbeThreshold { get; set; } = 0.68m;
 }

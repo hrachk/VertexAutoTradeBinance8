@@ -1242,6 +1242,7 @@ namespace VertexAutoTradeBinance8
                     var isLong = signal.Side == SignalSide.Buy;
                     var confRaw = signal.Confidence ?? 0m;
                     var conf = confRaw > 1.5m ? confRaw / 100m : (confRaw > 0 ? confRaw : 0.55m);
+                    var memForInst = _tradeJournal?.GetAdjustments("client_001", symbol);
                     var inst = _instPipe.Evaluate(new InstitutionalEntryContext
                     {
                         Symbol = symbol,
@@ -1250,12 +1251,17 @@ namespace VertexAutoTradeBinance8
                         EntryPrice = signal.EntryPrice,
                         StopLossPrice = signal.StopLoss,
                         ConfiguredRiskFraction = 0.01m,
-                        OpenPositionCount = 0, // optional: wire live count
+                        OpenPositionCount = 0,
                         SignalConfidence = conf,
                         UtcNow = DateTime.UtcNow,
-                        NewsHardMode = false, // overridden by Institutional:EnableNewsHardMode in pipeline
+                        NewsHardMode = false, // real flag: Institutional:EnableNewsHardMode via IOptionsMonitor in pipeline
                         MinQty = minQty,
-                        StepSize = step
+                        StepSize = step,
+                        RecentStops = memForInst?.RecentStops ?? 0,
+                        RecentWins = memForInst?.RecentWins ?? 0,
+                        MemorySizeMult = memForInst is { SizeMult: > 0 } ? memForInst.SizeMult : 1m,
+                        SlPadAtr = memForInst?.SlPadAtr ?? 0m,
+                        SoftSkip = memForInst?.SoftSkip ?? false
                     });
                     if (!inst.Allowed)
                     {

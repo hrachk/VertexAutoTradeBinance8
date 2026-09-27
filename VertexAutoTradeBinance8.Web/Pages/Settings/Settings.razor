@@ -620,13 +620,13 @@
                 <div class="st-field">
                     <label>ML Skip threshold</label>
                     <input class="st-input" type="number" step="0.01" min="0.05" max="0.95"
-                           value="@GetDecimal("Institutional:MlSkipThreshold", 0.42m)"
+                           value="@GetDecimal("Institutional:MlSkipThreshold", 0.58m)"
                            @onchange="OnInstMlSkipChanged" />
                 </div>
                 <div class="st-field">
                     <label>ML Probe threshold</label>
                     <input class="st-input" type="number" step="0.01" min="0.05" max="0.95"
-                           value="@GetDecimal("Institutional:MlProbeThreshold", 0.55m)"
+                           value="@GetDecimal("Institutional:MlProbeThreshold", 0.68m)"
                            @onchange="OnInstMlProbeChanged" />
                 </div>
             </div>
@@ -665,8 +665,8 @@
         // Keep News catalyst path consistent with UI shield on /macro-news
         if (on) await SetAsync("News:ShadowMode", false);
     }
-    private Task OnInstMlSkipChanged(ChangeEventArgs e) => SetAsync("Institutional:MlSkipThreshold", ParseDecimalOr(e.Value, 0.42m));
-    private Task OnInstMlProbeChanged(ChangeEventArgs e) => SetAsync("Institutional:MlProbeThreshold", ParseDecimalOr(e.Value, 0.55m));
+    private Task OnInstMlSkipChanged(ChangeEventArgs e) => SetAsync("Institutional:MlSkipThreshold", ParseDecimalOr(e.Value, 0.58m));
+    private Task OnInstMlProbeChanged(ChangeEventArgs e) => SetAsync("Institutional:MlProbeThreshold", ParseDecimalOr(e.Value, 0.68m));
     private Task OnLegacyMlGateToggle(ChangeEventArgs e) => SetAsync("MlGate:EnableMlSkipGate", ParseCheck(e));
     private Task OnNewsShadowToggle(ChangeEventArgs e) => SetAsync("News:ShadowMode", ParseCheck(e));
     private Task OnMaxOpenPositionsChanged(ChangeEventArgs e) => SetAsync("Trading:MaxOpenPositions", Math.Clamp(ParseIntOr(e.Value, 5) ?? 5, 1, 50));
@@ -695,7 +695,7 @@
     private Task OnTp2PartChanged(ChangeEventArgs e)  => SetAsync("TakeProfit:Tp2Part",       ParseDecimalOr(e.Value, 0.35m));
     private Task OnTp3PartChanged(ChangeEventArgs e)  => SetAsync("TakeProfit:Tp3Part",       ParseDecimalOr(e.Value, 0.25m));
     // PositionSupervisor BE triggers
-    private Task OnBeTriggerRMinorChanged(ChangeEventArgs e)  => SetAsync("PositionSupervisor:BeTriggerRMinor",     ParseDecimalOr(e.Value, 0.58m));
+    private Task OnBeTriggerRMinorChanged(ChangeEventArgs e)  => SetAsync("PositionSupervisor:BeTriggerRMinor",     ParseDecimalOr(e.Value, 0.35m));
     private Task OnBeTriggerRMajorChanged(ChangeEventArgs e)  => SetAsync("PositionSupervisor:BeTriggerRMajor",     ParseDecimalOr(e.Value, 1.1m));
     private Task OnStage1MinorChanged(ChangeEventArgs e)      => SetAsync("PositionSupervisor:Stage1PercentMinor",  ParseDecimalOr(e.Value, 0.25m));
     private Task OnStage1MajorChanged(ChangeEventArgs e)      => SetAsync("PositionSupervisor:Stage1PercentMajor",  ParseDecimalOr(e.Value, 0.35m));

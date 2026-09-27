@@ -28,7 +28,7 @@ public sealed class ShadowMlGatekeeper
     private readonly object _gate = new();
     private Dictionary<string, double>? _weights;
     private double _bias;
-    private double _threshold = 0.42;
+    private double _threshold = 0.58;
     private DateTime _modelLoadedUtc = DateTime.MinValue;
 
     public ShadowMlGatekeeper(IConfiguration cfg, ILogger<ShadowMlGatekeeper> log, TradeJournalService? journal = null, ShadowMlKpiStore? kpi = null)
@@ -39,7 +39,9 @@ public sealed class ShadowMlGatekeeper
         _kpi = kpi;
     }
 
-    public bool EnableMlSkipGate => _cfg.GetValue("MlGate:EnableMlSkipGate", false);
+    public bool EnableMlSkipGate =>
+        _cfg.GetValue("Institutional:EnableMlHardReject", false)
+        || _cfg.GetValue("MlGate:EnableMlSkipGate", false);
     public double HighConfProbe => _cfg.GetValue("TradeMemory:ProbeMinConfidence", 0.72);
 
     public ShadowMlPrediction Evaluate(TradeSignal signal, SymbolAdjustments? mem)
@@ -60,16 +62,16 @@ public sealed class ShadowMlGatekeeper
         }
         else
         {
-            // Heuristic stand-in until offline LightGBM→JSON exported
-            double conf = (double)(signal.Confidence ?? 0m);
-            if (conf > 1.5) conf /= 100.0;
-            double avgR = mem != null && mem.Note != null && mem.Note.Contains("avgR=") ? TryParseAvgR(mem.Note) : 0.0;
-            double sizePen = mem != null && mem.SoftSkip ? -0.25 : (mem != null ? (1.0 - (double)mem.SizeMult) * -0.15 : 0);
-            score = Math.Clamp(0.45 + conf * 0.35 + avgR * 0.15 + sizePen, 0.05, 0.95);
+            // Calibrated heuristic (institutional): conf + SymbolMemory history.
+            // Designed so P(win) spreads ~0.35–0.75, NOT stuck at ~0.65.
+            score = HeuristicPWin(signal, mem);
             src = "heuristic";
         }
 
-        double thr = _cfg.GetValue<double>("MlGate:SkipThreshold", _threshold);
+        // Prefer Institutional threshold; fall back MlGate then model default
+        double thr = _cfg.GetValue<double?>("Institutional:MlSkipThreshold")
+            ?? _cfg.GetValue<double?>("MlGate:SkipThreshold")
+            ?? Math.Max(_threshold, 0.58);
         var pred = new ShadowMlPrediction
         {
             PWin = score,
@@ -114,6 +116,46 @@ public sealed class ShadowMlGatekeeper
         catch { }
 
         return pred;
+    }
+
+    /// <summary>
+    /// Production heuristic: prior 0.28 + confidence slope + memory penalties.
+    /// recentStops / SoftSkip must move P(win) below typical SkipThreshold (0.58–0.62).
+    /// </summary>
+    private static double HeuristicPWin(TradeSignal signal, SymbolAdjustments? mem)
+    {
+        double conf = (double)(signal.Confidence ?? 0m);
+        if (conf > 1.5) conf /= 100.0;
+        conf = Math.Clamp(conf, 0.0, 1.0);
+
+        // Base: conf 0.58 → ~0.599; conf 0.62 → ~0.621 (before memory)
+        double p = 0.28 + conf * 0.55;
+        if (conf < 0.60) p -= 0.04;          // soft signals pay a tax
+        if (conf >= 0.70) p += 0.03;
+
+        double avgR = mem != null && mem.Note != null && mem.Note.Contains("avgR=", StringComparison.Ordinal)
+            ? TryParseAvgR(mem.Note) : 0.0;
+        p += Math.Clamp(avgR, -1.5, 1.5) * 0.12;
+
+        if (mem != null)
+        {
+            int stops = Math.Max(0, mem.RecentStops);
+            int wins = Math.Max(0, mem.RecentWins);
+            // Each recent stop hurts; 2+ consecutive-style weight
+            p -= Math.Min(0.36, stops * 0.12);
+            if (stops >= 2) p -= 0.10;
+            p += Math.Min(0.12, wins * 0.04);
+
+            if (mem.SoftSkip) p -= 0.18;
+            if (mem.SizeMult < 1m) p -= (1.0 - (double)mem.SizeMult) * 0.20;
+            if (mem.SlPadAtr > 0m) p -= Math.Min(0.08, (double)mem.SlPadAtr * 0.06);
+        }
+
+        // CORE tag slight prior (structure setups)
+        if ((signal.Reason ?? "").StartsWith("CORE_", StringComparison.OrdinalIgnoreCase))
+            p += 0.02;
+
+        return Math.Clamp(p, 0.05, 0.95);
     }
 
     private static double TryParseAvgR(string note)

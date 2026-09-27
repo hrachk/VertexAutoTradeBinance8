@@ -58,8 +58,10 @@ public sealed class ShadowMlKpiStore
             {
                 TotalEvaluated = _total,
                 ShadowWouldSkip = _wouldSkip,
-                HardGateEnabled = _cfg.GetValue("MlGate:EnableMlSkipGate", false),
-                Threshold = _cfg.GetValue("MlGate:SkipThreshold", 0.42),
+                HardGateEnabled = _cfg.GetValue("Institutional:EnableMlHardReject", false)
+                    || _cfg.GetValue("MlGate:EnableMlSkipGate", false),
+                Threshold = _cfg.GetValue("Institutional:MlSkipThreshold",
+                    _cfg.GetValue("MlGate:SkipThreshold", 0.58)),
                 UpdatedUtc = DateTime.UtcNow
             };
         }

@@ -39,6 +39,13 @@ public sealed class NewsCatalystService : INewsCatalystService
 
     public bool ShadowMode => _cfg.GetValue("News:ShadowMode", true);
 
+    /// <summary>
+    /// Institutional:EnableNewsHardMode wins over News:ShadowMode.
+    /// When Hard is on, pause/size apply for real even if Shadow checkbox left on in UI.
+    /// </summary>
+    public bool EffectiveNewsHard =>
+        _cfg.GetValue("Institutional:EnableNewsHardMode", false);
+
     public void SetAtrRatio(decimal atr1hOverAvg24h)
     {
         if (atr1hOverAvg24h <= 0) return;
@@ -87,6 +94,9 @@ public sealed class NewsCatalystService : INewsCatalystService
                     break;
                 case NewsEventCategory.TokenSpecific:
                     sizeMult = grade >= NewsImpactGrade.High ? 0.25m : 0.50m;
+                    // Real hard: impact ≥ 0.70 → full pause on tagged symbols (not cosmetic 0.5)
+                    if (EffectiveNewsHard && ev.Impact >= 0.70m)
+                        sizeMult = 0m;
                     reasonCode = NewsReasonCodes.TokenEvent;
                     break;
                 case NewsEventCategory.Infrastructure:
@@ -233,7 +243,8 @@ public sealed class NewsCatalystService : INewsCatalystService
 
     public bool IsEntryPaused(string symbol)
     {
-        if (ShadowMode) return false;
+        // Hard mode (Settings Institutional) applies real blocks; pure Shadow does not.
+        if (!EffectiveNewsHard && ShadowMode) return false;
         var d = EvaluateEntry(symbol);
         return d.WouldBlock;
     }
@@ -241,12 +252,13 @@ public sealed class NewsCatalystService : INewsCatalystService
     public decimal GetEntrySizeMult(string symbol, string? side = null)
     {
         var d = EvaluateEntry(symbol, side);
-        if (ShadowMode)
+        if (!EffectiveNewsHard && ShadowMode)
         {
-            // live size unchanged; intended scale only in logs/shadow
+            // observe-only: do not change live size
             return 1m;
         }
         if (d.SizeMult <= 0.01m) return 0m;
+        // High/critical token or macro: allow down to 0.25; size 0 already WouldBlock
         return Math.Clamp(d.SizeMult, 0.25m, 1m);
     }
 

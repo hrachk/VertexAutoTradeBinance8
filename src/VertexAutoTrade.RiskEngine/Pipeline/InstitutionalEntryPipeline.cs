@@ -34,7 +34,16 @@ public sealed class InstitutionalEntryContext
     public decimal? StepSize { get; init; }
     public decimal? MinNotional { get; init; }
     public DateTime UtcNow { get; init; } = DateTime.UtcNow;
+
+    // SymbolMemory (optional — fills ML feature vector)
+    public int RecentStops { get; init; }
+    public int RecentWins { get; init; }
+    public decimal MemorySizeMult { get; init; } = 1m;
+    public decimal SlPadAtr { get; init; }
+    public bool SoftSkip { get; init; }
+    public decimal AvgRealizedR { get; init; }
 }
+
 
 public sealed class InstitutionalEntryResult
 {
@@ -147,7 +156,13 @@ public sealed class InstitutionalEntryPipeline
             HourUtc = ctx.UtcNow.Hour,
             RegimeCode = (int)regimeKind,
             SideSign = ctx.IsLong ? 1 : -1,
-            NewsImpact = ctx.ActiveNews is null ? 0m : (decimal)(int)ctx.ActiveNews.Impact / 4m
+            NewsImpact = ctx.ActiveNews is null ? 0m : (decimal)(int)ctx.ActiveNews.Impact / 4m,
+            RecentStops = ctx.RecentStops,
+            RecentWins = ctx.RecentWins,
+            SizeMult = ctx.MemorySizeMult <= 0 ? 1m : ctx.MemorySizeMult,
+            SlPadAtr = ctx.SlPadAtr,
+            SoftSkip = ctx.SoftSkip,
+            AvgRealizedR = ctx.AvgRealizedR
         };
         // Live thresholds / hard-reject from config (reloadable via runtime json)
         var mlLive = new MlSetupClassifier(
