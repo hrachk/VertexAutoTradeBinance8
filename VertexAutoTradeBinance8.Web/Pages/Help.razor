@@ -269,9 +269,94 @@ HardCapUsd ограничивает $ риска на сделку</pre>
             </section>
         }
 
+
+        @if (_section == "risk-engine")
+        {
+            <section class="help-section">
+                <div class="help-card">
+                    <h3>Correlation Filter Mode</h3>
+                    <p>Хардкод «макс. 2 LONG/SHORT» <b>удалён</b>. Лимиты задаются только в Settings → Risk.</p>
+                    <table class="help-table">
+                        <tr><th>Режим</th><th>Поведение</th></tr>
+                        <tr><td><code>Disabled</code></td><td>Только <b>MaxOpenPositions</b>. Можно 5 LONG подряд при лимите 5.</td></tr>
+                        <tr><td><code>StaticLimit</code></td><td>Не больше <b>MaxSameSidePositions</b> в одну сторону (0 = без лимита).</td></tr>
+                        <tr><td><code>DynamicCorrelation</code></td><td>Pearson R по 1H log-return с каждой открытой позицией той же стороны. Если R &gt; <b>MaxAllowedCorrelation</b> (default 0.85) → REJECT.</td></tr>
+                    </table>
+                </div>
+                <div class="help-card">
+                    <h3>Pearson R (DynamicCorrelation)</h3>
+                    <pre class="help-code">R = corr( log-returns(X 1H), log-returns(Y 1H) )  // окно ~48 баров
+if R > MaxAllowedCorrelation → REJECT HIGH_CORRELATION</pre>
+                    <p>Смысл: не набирать портфель из почти одинаковых альтов «как один BTC».</p>
+                </div>
+                <div class="help-card">
+                    <h3>LiquidityGuard → Dynamic Sizing</h3>
+                    <p>При <b>DynamicLiquiditySizing</b> soft low volume не всегда блокирует — режет size:</p>
+                    <table class="help-table">
+                        <tr><th>Volume Score</th><th>Действие</th></tr>
+                        <tr><td>0.2–0.3</td><td>size × 0.7</td></tr>
+                        <tr><td>0.1–0.2</td><td>size × 0.5</td></tr>
+                        <tr><td>&lt; 0.1</td><td>REJECT EXTREME_LOW_LIQUIDITY</td></tr>
+                    </table>
+                </div>
+            </section>
+        }
+
+        @if (_section == "signal-quality")
+        {
+            <section class="help-section">
+                <div class="help-card">
+                    <h3>CompositeScore</h3>
+                    <pre class="help-code">Score = wT×Trend + wD×Derivatives + wV×Volume + wR×RiskReward
+(веса нормализуются; default 0.35 / 0.20 / 0.20 / 0.25)</pre>
+                    <ul class="help-list">
+                        <li><b>Trend</b> — confidence CORE/AI, super-signal, reason tags</li>
+                        <li><b>Derivatives</b> — proxy через LiquidityScore (OI feed — roadmap)</li>
+                        <li><b>Volume</b> — SmartFlow / LiquidityGuard score</li>
+                        <li><b>R:R</b> — TP1 distance / SL distance (≥1.5R лучше)</li>
+                    </ul>
+                    <p>Если Score &lt; <b>MinQualityThreshold</b> (default 70) → сделка не идёт на слот.</p>
+                </div>
+                <div class="help-card">
+                    <h3>Signal Auction</h3>
+                    <p><b>BestScoreAuction</b> (рекомендуется): окно ~400 ms, ранг по score, на N свободных слотов — только N лучших.</p>
+                    <p><b>FirstComeFirstServed</b>: FIFO среди тех, кто прошёл MinQuality.</p>
+                    <pre class="help-code">[SignalAuction] Received 5 candidate signals for 2 available slots.
+  1. SOLUSDT LONG | 89.2% -> APPROVED (Slot 1)
+  2. AVAXUSDT LONG | 81.5% -> APPROVED (Slot 2)
+  3. NEARUSDT LONG | 76.0% -> REJECTED (Outperformed in auction)
+  4. DOGEUSDT LONG | 54.1% -> REJECTED (Below MinQualityThreshold 70%)</pre>
+                    <p>Settings → Risk → <b>Signal Quality &amp; Selection</b>.</p>
+                </div>
+                <div class="help-card">
+                    <h3>Рекомендации по рынку</h3>
+                    <table class="help-table">
+                        <tr><th>Режим</th><th>MinQuality</th><th>Веса</th></tr>
+                        <tr><td>Тренд</td><td>65–70</td><td>↑ Trend, ↑ R:R</td></tr>
+                        <tr><td>Флэт / chop</td><td>75–80</td><td>↑ Volume, ↑ Derivatives</td></tr>
+                    </table>
+                </div>
+            </section>
+        }
+
         @if (_section == "logs")
         {
             <section class="help-section">
+                <div class="help-card">
+                    <h3>Справочник REJECT (актуально)</h3>
+                    <table class="help-table">
+                        <tr><th>Код</th><th>Смысл</th><th>Что делать</th></tr>
+                        <tr><td><code>HIGH_CORRELATION</code></td><td>Pearson R к открытой позиции той же стороны выше лимита</td><td>Поднять MaxAllowedCorrelation или закрыть дубль / Disabled</td></tr>
+                        <tr><td><code>DIR_MAX_SAME_SIDE_REACHED</code></td><td>StaticLimit: слишком много LONG или SHORT</td><td>Увеличить MaxSameSidePositions или Disabled</td></tr>
+                        <tr><td><code>EXTREME_LOW_LIQUIDITY</code></td><td>Volume score &lt; 0.1</td><td>Ждать объём / другой символ</td></tr>
+                        <tr><td><code>BELOW_QUALITY_THRESHOLD</code> / auction log</td><td>CompositeScore &lt; MinQuality</td><td>Снизить порог или улучшить сетап (R:R, conf)</td></tr>
+                        <tr><td><code>Outperformed in auction</code></td><td>Свободных слотов мало, score ниже конкурентов</td><td>Норма; поднять MaxOpen или качество</td></tr>
+                        <tr><td><code>MAX_POSITIONS</code></td><td>Достигнут MaxOpenPositions</td><td>Закрыть позицию или поднять лимит</td></tr>
+                        <tr><td><code>MICRO_SL</code> / risk_geo</td><td>Стоп слишком узкий/широкий</td><td>CORE geometry; не руками</td></tr>
+                        <tr><td><code>RSI FOMO</code></td><td>Вход на перекупленности/перепроданности</td><td>Ждать откат</td></tr>
+                    </table>
+                </div>
+
                 <div class="help-card">
                     <table class="help-table">
                         <tr><th>Причина</th><th>Действие</th></tr>
@@ -368,7 +453,9 @@ a{color:#3b9eff}
     private static readonly TocItem[] Toc =
     {
         new("quick", "Quick Start", "🚀", "Быстрый старт", "SharedData, Futures, Demo $10k.", new[]{"start","demo","shareddata","binance"}),
-        new("settings", "Settings & Risk", "⚙️", "Настройки и риск", "1R, Institutional gates, HardCap, Memory.", new[]{"risk","1r","hardcap","institutional","ml hard","news hard","settings"}),
+        new("settings", "Settings & Risk", "⚙️", "Настройки и риск", "1R, Institutional, Signal Quality.", new[]{"risk","1r","hardcap","institutional","signal quality","settings"}),
+        new("risk-engine", "Risk Engine", "🛡️", "Risk Engine", "Pearson, same-side, Liquidity sizing.", new[]{"correlation","pearson","same side","liquidity","dir_max"}),
+        new("signal-quality", "Signal Quality", "🎯", "Отбор сигналов", "CompositeScore, Auction, EV.", new[]{"auction","quality","score","composite","threshold"}),
         new("ml", "ML Gate & News", "🧠", "ML & News", "Shadow → train → Institutional hard.", new[]{"ml","shadow","gate","news","institutional","hard reject"}),
         new("macro", "Macro News Hub", "📰", "Macro & Live News", "Лента, Impact, Shadow/Hard, KPI.", new[]{"macro","news","fomc","cpi","fear","greed","impact","/macro-news"}),
         new("arch", "Architecture & UI", "🗺️", "Архитектура", "CORE → Demo/Live и экраны.", new[]{"architecture","market","ui"}),

@@ -139,6 +139,10 @@ public class Program
                     services.Configure<BybitOptions>(ctx.Configuration.GetSection("Bybit"));
                     services.Configure<ExchangeRuntimeOptions>(ctx.Configuration.GetSection("Exchanges"));
 
+                    services.Configure<VertexAutoTradeBinance8.Configuration.SignalQualityOptions>(
+                        ctx.Configuration.GetSection("SignalQuality"));
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.SignalQuality.SignalQualityEvaluator>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.SignalQuality.SignalAuction>();
                     services.Configure<TradingOptions>(
                       ctx.Configuration.GetSection("Trading")); // TRUE default
 
