@@ -669,7 +669,7 @@
     private Task OnInstMlProbeChanged(ChangeEventArgs e) => SetAsync("Institutional:MlProbeThreshold", ParseDecimalOr(e.Value, 0.55m));
     private Task OnLegacyMlGateToggle(ChangeEventArgs e) => SetAsync("MlGate:EnableMlSkipGate", ParseCheck(e));
     private Task OnNewsShadowToggle(ChangeEventArgs e) => SetAsync("News:ShadowMode", ParseCheck(e));
-    private Task OnMaxOpenPositionsChanged(ChangeEventArgs e) => SetAsync("Trading:MaxOpenPositions", Math.Clamp(ParseIntOr(e.Value, 5), 1, 50));
+    private Task OnMaxOpenPositionsChanged(ChangeEventArgs e) => SetAsync("Trading:MaxOpenPositions", Math.Clamp(ParseIntOr(e.Value, 5) ?? 5, 1, 50));
 
     private Task OnBaseRiskPercentChanged(ChangeEventArgs e) => SetAsync("Trading:BaseRiskPercent", ParseDecimalOr(e.Value, 0m));
     private Task OnMinNotionalGuardPercentChanged(ChangeEventArgs e) => SetAsync("Trading:MinNotionalGuardPercent", ParseDecimalOr(e.Value, 0m));
