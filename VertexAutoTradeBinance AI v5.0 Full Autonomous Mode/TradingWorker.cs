@@ -8,6 +8,7 @@ using System.Threading.Channels;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Services.SignalQuality;
 using VertexAutoTrade.Core.Risk;
 using VertexAutoTradeBinance8.Services.Entry;
 using VertexAutoTradeBinance8.Services.Ml;
@@ -62,6 +63,9 @@ namespace VertexAutoTradeBinance8
         private readonly VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed? _dataDbFeed;
         private readonly BinanceClientFactory _factory;
         private readonly LiquidityGuardService _liq;
+        private readonly SignalAuction _signalAuction;
+        private readonly SignalQualityEvaluator _signalQuality;
+        private readonly IOptionsMonitor<SignalQualityOptions> _sqOpt;
         private readonly SmartFlowGuardService _smartFlow;
         private readonly OrderCleanerService _cleaner;
         private readonly PredictiveEngineV4ConfirmationService _predict;
@@ -161,6 +165,9 @@ namespace VertexAutoTradeBinance8
             ExchangeExecutionRouter exchangeRouter,
             BinanceClientFactory factory,
             LiquidityGuardService liq,
+            SignalAuction signalAuction,
+            SignalQualityEvaluator signalQuality,
+            IOptionsMonitor<SignalQualityOptions> sqOpt,
             OrderCleanerService cleaner,
             PredictiveEngineV4ConfirmationService predict,
             AiStopLossOptimizer slOpt,
@@ -218,6 +225,9 @@ namespace VertexAutoTradeBinance8
             _killCtrl = killCtrl;
             _factory = factory;
             _liq = liq;
+            _signalAuction = signalAuction;
+            _signalQuality = signalQuality;
+            _sqOpt = sqOpt;
             _cleaner = cleaner;
             _predict = predict;
             _slOpt = slOpt;
@@ -644,19 +654,47 @@ namespace VertexAutoTradeBinance8
                 // ===========================================
                 // STRATEGY SIGNAL CONSUMER (PRO)
                 // ===========================================
-                while (_signalChannel.Reader.TryRead(out var signal))
+                // ========== SIGNAL AUCTION / QUALITY GATE ==========
+                var batch = new List<TradeSignal>();
+                while (_signalChannel.Reader.TryRead(out var sig))
+                    if (sig != null) batch.Add(sig);
+
+                if (batch.Count > 0)
                 {
-                    try
+                    var sq = _sqOpt.CurrentValue;
+                    int windowMs = Math.Clamp(sq.AuctionWindowMs, 0, 2000);
+                    // Brief window to let competing bar-close signals arrive
+                    if (windowMs > 0 && batch.Count < 8)
                     {
-                        await HandleStrategySignalAsync(signal, ct).ConfigureAwait(false);
+                        try { await Task.Delay(windowMs, ct).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { throw; }
+                        while (_signalChannel.Reader.TryRead(out var more))
+                            if (more != null) batch.Add(more);
                     }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception ex)
+
+                    int openN = 0;
+                    try { openN = await _supervisor.GetActivePositionsCountAsync(ct).ConfigureAwait(false); }
+                    catch { /* soft */ }
+                    int maxLive = _tradingMonitor?.CurrentValue?.MaxOpenPositions
+                        ?? _options.MaxOpenPositions;
+                    if (maxLive <= 0) maxLive = 5;
+                    int slots = Math.Max(0, maxLive - openN);
+
+                    var winners = _signalAuction.Select(batch, slots);
+                    foreach (var w in winners)
                     {
-                        _logger.LogError(
-                            ex,
-                            "[WORKER][SIGNAL] fatal handling {symbol}",
-                            signal.Symbol);
+                        try
+                        {
+                            await HandleStrategySignalAsync(w.Signal, ct).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(
+                                ex,
+                                "[WORKER][SIGNAL] fatal handling {symbol}",
+                                w.Signal.Symbol);
+                        }
                     }
                 }
 

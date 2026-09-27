@@ -678,6 +678,64 @@
             </div>
         </div>
 
+        <div class="st-card st-card-wide">
+            <div class="st-card-head">
+                <div class="st-card-title">Signal Quality &amp; Selection</div>
+                <span class="st-live-pill">● runtime</span>
+            </div>
+            <p class="st-field-hint" style="margin:0 0 12px;line-height:1.45">
+                CompositeScore = Trend + Derivatives + Volume + R:R. При <b>BestScoreAuction</b> бот не берёт «первый попавшийся», а выбирает лучшие сетапы на свободные слоты.
+            </p>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label title="Минимальный CompositeScore 50–95">Min Quality Threshold %</label>
+                    <input class="st-input" type="number" min="50" max="95" step="1"
+                           value="@GetDecimal("SignalQuality:MinQualityThreshold", 70m)"
+                           @onchange="OnSqMinQualityChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Selection Strategy</label>
+                    <select class="st-input" value="@GetStr("SignalQuality:SignalSelectionStrategy", "BestScoreAuction")"
+                            @onchange="OnSqStrategyChanged">
+                        <option value="BestScoreAuction">BestScoreAuction — топ по score</option>
+                        <option value="FirstComeFirstServed">FirstComeFirstServed — FIFO</option>
+                    </select>
+                </div>
+                <div class="st-field">
+                    <label>Auction Window (ms)</label>
+                    <input class="st-input" type="number" min="0" max="2000" step="50"
+                           value="@GetInt("SignalQuality:AuctionWindowMs", 400)"
+                           @onchange="OnSqAuctionMsChanged" />
+                </div>
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Weight Trend</label>
+                    <input class="st-input" type="number" step="0.05" min="0" max="1"
+                           value="@GetDecimal("SignalQuality:WeightTrend", 0.35m)"
+                           @onchange="OnSqWTrendChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Weight Derivatives</label>
+                    <input class="st-input" type="number" step="0.05" min="0" max="1"
+                           value="@GetDecimal("SignalQuality:WeightDerivatives", 0.20m)"
+                           @onchange="OnSqWDerivChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Weight Volume</label>
+                    <input class="st-input" type="number" step="0.05" min="0" max="1"
+                           value="@GetDecimal("SignalQuality:WeightVolume", 0.20m)"
+                           @onchange="OnSqWVolChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Weight R:R</label>
+                    <input class="st-input" type="number" step="0.05" min="0" max="1"
+                           value="@GetDecimal("SignalQuality:WeightRiskReward", 0.25m)"
+                           @onchange="OnSqWRrChanged" />
+                </div>
+            </div>
+        </div>
+
     </div>;
 
     private Task OnLeverageChanged(string profileKey, ChangeEventArgs e) => SetAsync($"{profileKey}:Leverage", ParseIntOr(e.Value, 10));
