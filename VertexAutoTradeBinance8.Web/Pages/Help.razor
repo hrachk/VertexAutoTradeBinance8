@@ -327,6 +327,8 @@ if R > MaxAllowedCorrelation → REJECT HIGH_CORRELATION</pre>
   3. NEARUSDT LONG | 76.0% -> REJECTED (Outperformed in auction)
   4. DOGEUSDT LONG | 54.1% -> REJECTED (Below MinQualityThreshold 70%)</pre>
                     <p>Settings → Risk → <b>Signal Quality &amp; Selection</b>.</p>
+                    <p>Телеметрия: <code>SharedData/signal_auction_logs.jsonl</code> (APPROVED / OUTPERFORMED / BELOW_THRESHOLD / WIDE_SPREAD).</p>
+                    <p><b>Derivatives</b> теперь с live Binance OI + Funding (не proxy). <b>Orderbook Guard</b>: спред &gt; MaxSpread → reject; тонкий стакан → size×.</p>
                 </div>
                 <div class="help-card">
                     <h3>Рекомендации по рынку</h3>

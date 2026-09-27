@@ -680,7 +680,7 @@ namespace VertexAutoTradeBinance8
                     if (maxLive <= 0) maxLive = 5;
                     int slots = Math.Max(0, maxLive - openN);
 
-                    var winners = _signalAuction.Select(batch, slots);
+                    var winners = await _signalAuction.SelectAsync(batch, slots, ct).ConfigureAwait(false);
                     foreach (var w in winners)
                     {
                         try

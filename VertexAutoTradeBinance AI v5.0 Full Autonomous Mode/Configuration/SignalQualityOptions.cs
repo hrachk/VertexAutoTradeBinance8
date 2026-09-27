@@ -21,4 +21,14 @@ public sealed class SignalQualityOptions
 
     /// <summary>Score ≥ this → full size; between Min and this → linear scale to 0.7.</summary>
     public decimal FullSizeScore { get; set; } = 90m;
+
+    /// <summary>Reject / penalize if (ask-bid)/mid &gt; this (e.g. 0.0008 = 0.08%).</summary>
+    public decimal MaxSpreadPct { get; set; } = 0.0008m;
+
+    /// <summary>When true, apply orderbook spread + depth ratio before APPROVED.</summary>
+    public bool OrderbookGuardEnabled { get; set; } = true;
+
+    /// <summary>Depth band as fraction of mid price (0.005 = 0.5%).</summary>
+    public decimal DepthBandPct { get; set; } = 0.005m;
 }
+

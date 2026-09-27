@@ -8,29 +8,31 @@ namespace VertexAutoTradeBinance8.Services.SignalQuality;
 public sealed class SignalAuction
 {
     private readonly SignalQualityEvaluator _eval;
+    private readonly OrderbookImbalanceGuard _ob;
+    private readonly AuctionTelemetry _tel;
     private readonly IOptionsMonitor<SignalQualityOptions> _opt;
     private readonly ILogger<SignalAuction> _log;
 
     public SignalAuction(
         SignalQualityEvaluator eval,
+        OrderbookImbalanceGuard ob,
+        AuctionTelemetry tel,
         IOptionsMonitor<SignalQualityOptions> opt,
         ILogger<SignalAuction> log)
     {
         _eval = eval;
+        _ob = ob;
+        _tel = tel;
         _opt = opt;
         _log = log;
     }
 
     public sealed record Ranked(TradeSignal Signal, SignalQualityBreakdown Quality);
 
-    /// <summary>
-    /// Rank batch by CompositeScore. Apply MinQualityThreshold.
-    /// Return at most <paramref name="availableSlots"/> winners (BestScoreAuction)
-    /// or FIFO survivors above threshold (FirstComeFirstServed).
-    /// </summary>
-    public IReadOnlyList<Ranked> Select(
+    public async Task<IReadOnlyList<Ranked>> SelectAsync(
         IReadOnlyList<TradeSignal> batch,
-        int availableSlots)
+        int availableSlots,
+        CancellationToken ct = default)
     {
         var o = _opt.CurrentValue;
         decimal minQ = o.MinQualityThreshold;
@@ -41,7 +43,7 @@ public sealed class SignalAuction
         foreach (var s in batch)
         {
             if (s == null) continue;
-            var q = _eval.Evaluate(s);
+            var q = await _eval.EvaluateAsync(s, ct).ConfigureAwait(false);
             ranked.Add(new Ranked(s, q));
         }
 
@@ -63,11 +65,26 @@ public sealed class SignalAuction
             var s = r.Signal;
             var q = r.Quality;
             string side = s.Side.ToString();
+
+            void Tel(string result) => _tel.Log(new AuctionTelemetryRecord
+            {
+                TimestampUtc = DateTime.UtcNow,
+                Symbol = s.Symbol,
+                Direction = side,
+                CompositeScore = q.Composite,
+                Trend = q.Trend,
+                Derivatives = q.Derivatives,
+                Volume = q.Volume,
+                RiskReward = q.RiskReward,
+                AuctionResult = result
+            });
+
             if (q.Composite < minQ)
             {
                 _log.LogInformation(
                     "  {rank}. {sym} ({side}) | CompositeScore: {sc:F1}% [{br}] -> REJECTED (Below MinQualityThreshold {min}%)",
                     i, s.Symbol, side, q.Composite, q.Summary, minQ);
+                Tel("BELOW_THRESHOLD");
                 continue;
             }
 
@@ -76,19 +93,36 @@ public sealed class SignalAuction
                 _log.LogInformation(
                     "  {rank}. {sym} ({side}) | CompositeScore: {sc:F1}% [{br}] -> REJECTED (Outperformed in auction)",
                     i, s.Symbol, side, q.Composite, q.Summary);
+                Tel("OUTPERFORMED");
                 continue;
             }
 
-            // Dynamic sizing from score
+            // Orderbook spread / depth guard
+            var ob = await _ob.EvaluateAsync(s, ct).ConfigureAwait(false);
+            if (ob.Reject)
+            {
+                _log.LogInformation(
+                    "  {rank}. {sym} ({side}) | CompositeScore: {sc:F1}% -> REJECTED ({reason})",
+                    i, s.Symbol, side, q.Composite, ob.Reason);
+                Tel($"REJECTED_{ob.Reason}");
+                continue;
+            }
+
             decimal factor = _eval.SizeFactorFromScore(q.Composite);
+            if (ob.SizeMult < 1m) factor *= ob.SizeMult;
             s.SizeMultiplier = Math.Clamp(s.SizeMultiplier * factor, 0.25m, 1.0m);
 
             winners.Add(r);
             _log.LogInformation(
-                "  {rank}. {sym} ({side}) | CompositeScore: {sc:F1}% [{br}] -> APPROVED (Slot {slot}, size×{sf:F2})",
-                i, s.Symbol, side, q.Composite, q.Summary, winners.Count, factor);
+                "  {rank}. {sym} ({side}) | CompositeScore: {sc:F1}% [{br}] -> APPROVED (Slot {slot}, size×{sf:F2}, spread={sp:P3})",
+                i, s.Symbol, side, q.Composite, q.Summary, winners.Count, s.SizeMultiplier, ob.SpreadPct);
+            Tel("APPROVED");
         }
 
         return winners;
     }
+
+    /// <summary>Sync wrapper for older call sites.</summary>
+    public IReadOnlyList<Ranked> Select(IReadOnlyList<TradeSignal> batch, int availableSlots)
+        => SelectAsync(batch, availableSlots).GetAwaiter().GetResult();
 }

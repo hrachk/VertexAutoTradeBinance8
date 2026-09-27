@@ -141,6 +141,9 @@ public class Program
 
                     services.Configure<VertexAutoTradeBinance8.Configuration.SignalQualityOptions>(
                         ctx.Configuration.GetSection("SignalQuality"));
+                    services.AddSingleton<VertexAutoTrade.Execution.OiFundingTracker>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.SignalQuality.AuctionTelemetry>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.SignalQuality.OrderbookImbalanceGuard>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.SignalQuality.SignalQualityEvaluator>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.SignalQuality.SignalAuction>();
                     services.Configure<TradingOptions>(
