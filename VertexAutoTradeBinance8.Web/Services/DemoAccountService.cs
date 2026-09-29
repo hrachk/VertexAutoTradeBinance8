@@ -933,12 +933,66 @@ _state.History.Add(new DemoClosedTrade
             {
                 bool isLong = pos.Side == "LONG";
 
+                // Step-based profit lock (parity with Live ProfitAware):
+                // after TP1 reduced size, ratchet SL as price walks toward TP2/TP3.
+                try
+                {
+                    decimal basis = pos.InitialQty > 0 ? pos.InitialQty : pos.Qty;
+                    bool afterTp1 = basis > 0 && pos.Qty < basis * 0.92m;
+                    decimal risk = pos.InitialRiskPrice > 0
+                        ? pos.InitialRiskPrice
+                        : (pos.StopLoss is > 0 ? Math.Abs(pos.EntryPrice - pos.StopLoss.Value) : 0m);
+                    if (afterTp1 && risk > 0 && pos.EntryPrice > 0)
+                    {
+                        decimal fav = isLong ? (price - pos.EntryPrice) : (pos.EntryPrice - price);
+                        decimal curR = fav / risk;
+                        decimal targetR = 0m;
+                        if (curR >= 2.40m) targetR = 1.70m;
+                        else if (curR >= 2.00m) targetR = 1.40m;
+                        else if (curR >= 1.70m) targetR = 1.00m;
+                        else if (curR >= 1.40m) targetR = 0.85m;
+                        else if (curR >= 1.00m) targetR = 0.50m;
+                        // else keep BE if already set
+
+                        if (targetR > 0)
+                        {
+                            decimal lockSl = isLong
+                                ? pos.EntryPrice + risk * targetR
+                                : pos.EntryPrice - risk * targetR;
+                            decimal curSl = pos.StopLoss ?? 0m;
+                            bool better = isLong ? lockSl > curSl : (curSl <= 0m || lockSl < curSl);
+                            if (better)
+                            {
+                                pos.StopLoss = lockSl;
+                                changed = true;
+                                _logger.LogInformation(
+                                    "[DEMO-STEP-LOCK] {sym} SL → +{r:F2}R @ {sl} (curR={cr:F2})",
+                                    pos.Symbol, targetR, lockSl, curR);
+                            }
+                        }
+                    }
+                }
+                catch { /* never break tick */ }
+
                 if (pos.StopLoss.HasValue && pos.StopLoss.Value > 0)
                 {
                     bool slHit = isLong ? price <= pos.StopLoss.Value : price >= pos.StopLoss.Value;
                     if (slHit)
                     {
-                        (toClose ??= new()).Add((pos, 100m, "SL"));
+                        string slReason = "SL";
+                        decimal risk0 = pos.InitialRiskPrice > 0 ? pos.InitialRiskPrice : 0m;
+                        if (risk0 > 0)
+                        {
+                            decimal locked = isLong
+                                ? (pos.StopLoss.Value - pos.EntryPrice) / risk0
+                                : (pos.EntryPrice - pos.StopLoss.Value) / risk0;
+                            if (locked >= 1.40m) slReason = "SL_LOCK_IN_STEP2";
+                            else if (locked >= 0.70m) slReason = "SL_LOCK_IN_STEP1";
+                            else if (locked >= 0.05m) slReason = "SL_BE_HIT";
+                            else if (locked > -0.15m && locked < 0.35m) slReason = "SL_WHIPSAW";
+                            else slReason = "SL_STRATEGY_FAIL";
+                        }
+                        (toClose ??= new()).Add((pos, 100m, slReason));
                         continue; // SL closes the whole remaining position — no need to also check TPs
                     }
                 }

@@ -11,6 +11,8 @@ public static class CloseReasonCodes
     public const string SlNews = "SL_NEWS_SPIKE";
     public const string SlWhipsaw = "SL_WHIPSAW";
     public const string DlStrategyFail = "SL_STRATEGY_FAIL";
+    public const string SlLockInStep1 = "SL_LOCK_IN_STEP1";
+    public const string SlLockInStep2 = "SL_LOCK_IN_STEP2";
     public const string SlGeneric = "SL";
 }
 
@@ -26,6 +28,7 @@ public static class SlAttribution
             if (r.Contains("NEWS_SPIKE")) return 0.35m;
             if (r.Contains("WHIPSAW")) return 0.50m;
             if (r.Contains("BE_HIT")) return 0.70m;
+            if (r.Contains("LOCK_IN_STEP")) return 0.15m; // locked profit exit — not a strategy fail
             if (r.Contains("STRATEGY_FAIL")) return 1.0m;
             if (r.Contains("SL") && !r.Contains("TP")) return 1.0m; // plain SL
         }
@@ -70,7 +73,8 @@ public static class SlAttribution
             raw.Contains("SL_NEWS_SPIKE", StringComparison.OrdinalIgnoreCase) ||
             raw.Contains("SL_WHIPSAW", StringComparison.OrdinalIgnoreCase) ||
             raw.Contains("SL_STRATEGY_FAIL", StringComparison.OrdinalIgnoreCase) ||
-            raw.Contains("SL_BE_HIT", StringComparison.OrdinalIgnoreCase))
+            raw.Contains("SL_BE_HIT", StringComparison.OrdinalIgnoreCase) ||
+            raw.Contains("SL_LOCK_IN_STEP", StringComparison.OrdinalIgnoreCase))
             return raw;
 
         if (newsSpikeActive)

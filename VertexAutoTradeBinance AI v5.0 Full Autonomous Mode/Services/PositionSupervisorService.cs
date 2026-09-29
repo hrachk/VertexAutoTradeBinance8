@@ -123,6 +123,8 @@ namespace VertexAutoTradeBinance8.Services
             public decimal InitialRisk;
             public int PartialsDone;
             public decimal LockedR;
+            /// <summary>0=none 1=BE 2=mid-TP1-TP2 (~0.85R) 3=post-TP2 (~1.6R) 4=ATR trail.</summary>
+            public int StepLevel;
             public bool GaveBackExitDone;
             public DateTime LastActionUtc;
         }
@@ -663,9 +665,12 @@ namespace VertexAutoTradeBinance8.Services
                     // Ratchet: only move in profit direction, never widen.
                     if (ATR > 0 && mark > 0)
                     {
+                        // After BE: trail tighter (1.2×ATR). If ProfitAware already locked ≥0.85R,
+                        // never widen below that floor (ratchet via currentTrail check below).
+                        decimal atrMult = 1.20m;
                         decimal trailSl = side == PositionSide.Long
-                            ? mark - ATR * 1.5m
-                            : mark + ATR * 1.5m;
+                            ? mark - ATR * atrMult
+                            : mark + ATR * atrMult;
 
                         decimal currentTrail = _lastSl.TryGetValue(keyProbe, out var lt) ? lt : 0m;
                         bool shouldMove = side == PositionSide.Long
@@ -880,10 +885,17 @@ namespace VertexAutoTradeBinance8.Services
                 if ((DateTime.UtcNow - st.LastActionUtc).TotalSeconds < 25)
                     return;
 
+                // Institutional step trail (TZ): protect impulse after TP1 so reversals
+                // do not give back almost all open profit (was locking only 0.15–0.60R).
+                // Peak MFE in R approximates path: TP1≈1.5R, mid→TP2≈1.8–2.0R, TP2≈2.5R+.
                 decimal targetLockR = 0m;
-                if (peak >= 1.5m) targetLockR = 0.60m;
-                else if (peak >= 1.0m) targetLockR = 0.35m;
-                else if (peak >= 0.55m) targetLockR = 0.15m;
+                int step = 0;
+                if (peak >= 2.40m) { targetLockR = 1.70m; step = 3; }      // post-TP2 zone
+                else if (peak >= 2.00m) { targetLockR = 1.40m; step = 3; }
+                else if (peak >= 1.70m) { targetLockR = 1.00m; step = 2; } // ≥50% TP1→TP2
+                else if (peak >= 1.40m) { targetLockR = 0.85m; step = 2; }
+                else if (peak >= 1.00m) { targetLockR = 0.50m; step = 1; }
+                else if (peak >= 0.55m) { targetLockR = 0.15m; step = 1; }
 
                 if (targetLockR > st.LockedR + 0.05m)
                 {
@@ -899,12 +911,13 @@ namespace VertexAutoTradeBinance8.Services
                     if (better)
                     {
                         _logger.LogWarning(
-                            "[PROFIT-AWARE][{symbol}][{side}] LOCK SL → +{lockR:F2}R (peak={peak:F2}R cur={cur:F2}R) sl={sl}",
-                            symbol, side, targetLockR, peak, curR, lockSl);
+                            "[PROFIT-AWARE][{symbol}][{side}] STEP{step} LOCK SL → +{lockR:F2}R (peak={peak:F2}R cur={cur:F2}R) sl={sl}",
+                            symbol, side, step, targetLockR, peak, curR, lockSl);
 
                         await PlaceStopLossAtBeAsync(client, symbol, side, qty, lockSl, pos, ct);
                         _lastSl[key] = lockSl;
                         st.LockedR = targetLockR;
+                        st.StepLevel = Math.Max(st.StepLevel, step);
                         st.LastActionUtc = DateTime.UtcNow;
                         return;
                     }
@@ -1880,8 +1893,20 @@ namespace VertexAutoTradeBinance8.Services
                         try
                         {
                             var paKey = BuildExitKey(symbol, side, prevEntry);
-                            if (_profitAware.TryGetValue(paKey, out var paSt) && paSt.InitialRisk > 0)
-                                riskPx = paSt.InitialRisk;
+                            if (_profitAware.TryGetValue(paKey, out var paSt))
+                            {
+                                if (paSt.InitialRisk > 0) riskPx = paSt.InitialRisk;
+                                // Tag profit-lock exits so journal is not flooded with SL_STRATEGY_FAIL
+                                if (realizedPnl >= 0 || paSt.LockedR >= 0.15m)
+                                {
+                                    if (paSt.LockedR >= 1.40m || paSt.StepLevel >= 3)
+                                        reason = "SL_LOCK_IN_STEP2";
+                                    else if (paSt.LockedR >= 0.70m || paSt.StepLevel >= 2)
+                                        reason = "SL_LOCK_IN_STEP1";
+                                    else if (paSt.LockedR > 0 || paSt.StepLevel >= 1)
+                                        reason = "SL_BE_HIT";
+                                }
+                            }
                             else if (_openInitialRisk.TryGetValue(paKey, out var or0) && or0 > 0)
                                 riskPx = or0;
                             _openInitialRisk.TryRemove(paKey, out _);
