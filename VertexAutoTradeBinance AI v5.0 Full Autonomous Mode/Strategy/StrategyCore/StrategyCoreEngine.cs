@@ -59,9 +59,9 @@ public sealed class StrategyCoreEngine
     private const decimal MinRiskPct = 0.008m;  // CRITICAL: never micro-SL < 0.8% of entry
     private const decimal MaxRiskPct = 0.025m;  // reject if |entry-SL|/entry > 2.5%
     private const decimal StructurePadAtr = 0.50m; // SwingLow/High ± 0.5 ATR
-    private const decimal MaxExtensionAtr = 1.80m; // no FOMO chase past structure
-    private const decimal RsiLongMax = 62m;     // no LONG if RSI15 > 62 (was 65 — still FOMO)
-    private const decimal RsiShortMin = 38m;    // no SHORT if RSI15 < 38
+    private const decimal MaxExtensionAtr = 1.20m; // no FOMO chase — was 1.80 (late entries)
+    private const decimal RsiLongMax = 58m;     // no LONG if RSI15 > 58 (harder FOMO block)
+    private const decimal RsiShortMin = 42m;    // no SHORT if RSI15 < 42
     private const int RsiPeriod = 14;
     private const int EmaFast = 21;
     private const int EmaSlow = 50;
@@ -396,9 +396,12 @@ public sealed class StrategyCoreEngine
             // Late chase: entry too far above protective low → skip
             if ((close - swingLow) > atr * MaxExtensionAtr) return null;
 
+            decimal ext = atr > 0 ? (close - swingLow) / atr : 99m;
+            decimal conf = ScoreCoreConfidence(ext, bodyWithTrend: true, emaAligned: eF > eS);
+            if (conf < 0.58m) return null; // do not emit weak structure longs
             return Make(symbol, SignalSide.Buy, close, sl,
                 BuildTpLadder(isLong: true, entry: close, risk: risk, atr: atr),
-                atr, "CORE_STRUCT_LONG", 0.58m);
+                atr, "CORE_STRUCT_LONG", conf);
         }
 
         // ── SHORT: bearish structure only ─────────────────────────
@@ -415,9 +418,12 @@ public sealed class StrategyCoreEngine
             if (!RiskOk(risk, atr)) return null;
             if ((swingHigh - close) > atr * MaxExtensionAtr) return null;
 
+            decimal extS = atr > 0 ? (swingHigh - close) / atr : 99m;
+            decimal confS = ScoreCoreConfidence(extS, bodyWithTrend: true, emaAligned: eF < eS);
+            if (confS < 0.58m) return null;
             return Make(symbol, SignalSide.Sell, close, sl,
                 BuildTpLadder(isLong: false, entry: close, risk: risk, atr: atr),
-                atr, "CORE_STRUCT_SHORT", 0.58m);
+                atr, "CORE_STRUCT_SHORT", confS);
         }
 
         return null;
@@ -489,7 +495,7 @@ public sealed class StrategyCoreEngine
 
             return Make(symbol, SignalSide.Buy, close, sl,
                 BuildTpLadder(isLong: true, entry: close, risk: risk, atr: atr),
-                atr, "CORE_PULLBACK_LONG", 0.62m);
+                atr, "CORE_PULLBACK_LONG", 0.64m);
         }
 
         if (dnTrend && touchShort && bearReject)
@@ -504,7 +510,7 @@ public sealed class StrategyCoreEngine
 
             return Make(symbol, SignalSide.Sell, close, sl,
                 BuildTpLadder(isLong: false, entry: close, risk: risk, atr: atr),
-                atr, "CORE_PULLBACK_SHORT", 0.62m);
+                atr, "CORE_PULLBACK_SHORT", 0.64m);
         }
         return null;
     }
@@ -537,7 +543,7 @@ public sealed class StrategyCoreEngine
 
             return Make(symbol, SignalSide.Buy, entry, sl,
                 BuildTpLadder(isLong: true, entry: entry, risk: risk, atr: atr),
-                atr, "CORE_BREAKOUT_LONG", 0.56m);
+                atr, "CORE_BREAKOUT_LONG", 0.60m);
         }
 
         if (brokeDn && entry <= chLow + atr * 0.35m && entry >= chLow - atr * 0.80m
@@ -553,7 +559,7 @@ public sealed class StrategyCoreEngine
 
             return Make(symbol, SignalSide.Sell, entry, sl,
                 BuildTpLadder(isLong: false, entry: entry, risk: risk, atr: atr),
-                atr, "CORE_BREAKOUT_SHORT", 0.56m);
+                atr, "CORE_BREAKOUT_SHORT", 0.60m);
         }
         return null;
     }
@@ -725,6 +731,24 @@ public sealed class StrategyCoreEngine
         if (avgGain <= 0) return 0m;
         decimal rs = avgGain / avgLoss;
         return 100m - (100m / (1m + rs));
+    }
+
+    
+    /// <summary>
+    /// Dynamic confidence: base 0.55 + structure quality. Only high scores clear MinExecute 0.58.
+    /// extensionAtr = distance from swing / ATR (smaller = cleaner retest entry).
+    /// </summary>
+    private static decimal ScoreCoreConfidence(decimal extensionAtr, bool bodyWithTrend, bool emaAligned)
+    {
+        decimal conf = 0.55m;
+        if (extensionAtr <= 0.60m) conf += 0.08m;      // tight retest
+        else if (extensionAtr <= 1.00m) conf += 0.04m;
+        else if (extensionAtr > 1.10m) conf -= 0.04m; // near extension cap
+        if (bodyWithTrend) conf += 0.03m;
+        if (emaAligned) conf += 0.03m;
+        if (conf < 0.50m) conf = 0.50m;
+        if (conf > 0.72m) conf = 0.72m;
+        return conf;
     }
 
     private TradeSignal Make(

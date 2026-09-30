@@ -944,7 +944,7 @@ namespace VertexAutoTradeBinance8
             // Signal already written to UI (watch-only signals visible).
             // Now check if confidence is high enough to actually trade.
             // MinDisplay (0.33) was already checked by AI gate above.
-            // MinExecute (0.55) is the execution gate — only trade
+            // MinExecute (0.58) is the execution gate — weak CORE skipped — only trade
             // high-quality signals confirmed by structure/S/R.
             // =====================================================
             {
@@ -952,10 +952,10 @@ namespace VertexAutoTradeBinance8
                 // Signals below MinExecute are written to UI (watch-only) but not traded.
                 var confCfg = _confSettings.CurrentValue;
                 decimal minExec = symbol.StartsWith("BTC", StringComparison.OrdinalIgnoreCase)
-                                    ? (confCfg.BTC?.MinExecute ?? 0.50m)
+                                    ? (confCfg.BTC?.MinExecute ?? 0.55m)
                     : symbol.StartsWith("ETH", StringComparison.OrdinalIgnoreCase)
-                                    ? (confCfg.ETH?.MinExecute ?? 0.50m)
-                                    : confCfg.Default?.MinExecute ?? 0.55m;
+                                    ? (confCfg.ETH?.MinExecute ?? 0.55m)
+                                    : confCfg.Default?.MinExecute ?? 0.58m;
                 double sigConf = (double)(signal.Confidence ?? 0m); /*/ 100.0;*/ // Confidence is decimal? 0-100
                 if (sigConf < (double)minExec)
                 {
