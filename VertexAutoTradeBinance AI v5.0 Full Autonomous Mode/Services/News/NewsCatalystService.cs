@@ -7,7 +7,9 @@ namespace VertexAutoTradeBinance8.Services.News;
 
 /// <summary>
 /// News Filter Alpha Engine: severity matrix, dynamic windows, microstructure overlay.
-/// ShadowMode (default true): never blocks live orders; logs + shadow blocks for ΔPF/ΔDD.
+/// SoftImpactAlways (default true): size× always applied (professional desk behaviour).
+/// ShadowMode: no full pause on medium token noise; MacroHigh still pauses.
+/// HardMode: full pause on high/critical token + macro.
 /// </summary>
 public sealed class NewsCatalystService : INewsCatalystService
 {
@@ -21,8 +23,8 @@ public sealed class NewsCatalystService : INewsCatalystService
     private decimal _atrRatio = 1m; // ATR_1h / ATR_24h avg
     private string? _sharedRoot;
 
-    private const decimal MinCredibility = 0.55m;
-    private const decimal MinImpact = 0.40m;
+    private const decimal MinCredibility = 0.45m;
+    private const decimal MinImpact = 0.30m; // was 0.40 — too many 1/5 stars never created windows
 
     public NewsCatalystService(
         ILogger<NewsCatalystService> log,
@@ -45,6 +47,13 @@ public sealed class NewsCatalystService : INewsCatalystService
     /// </summary>
     public bool EffectiveNewsHard =>
         _cfg.GetValue("Institutional:EnableNewsHardMode", false);
+
+    /// <summary>
+    /// When true (default), news directives reduce position size even if ShadowMode is on.
+    /// MacroHigh (FOMC/CPI/NFP) always pauses entries. Only pure "observe" if SoftImpactAlways=false AND Shadow.
+    /// </summary>
+    public bool SoftImpactAlways =>
+        _cfg.GetValue("News:SoftImpactAlways", true);
 
     public void SetAtrRatio(decimal atr1hOverAvg24h)
     {
@@ -243,22 +252,38 @@ public sealed class NewsCatalystService : INewsCatalystService
 
     public bool IsEntryPaused(string symbol)
     {
-        // Hard mode (Settings Institutional) applies real blocks; pure Shadow does not.
-        if (!EffectiveNewsHard && ShadowMode) return false;
         var d = EvaluateEntry(symbol);
-        return d.WouldBlock;
+        if (!d.WouldBlock && d.SizeMult > 0.01m)
+            return false;
+
+        // MacroHigh (calendar FOMC/CPI/NFP or graded macro): always pause — desk standard
+        var dir = TryGetActiveDirective();
+        bool isMacro = dir != null && dir.Category == NewsEventCategory.MacroHigh;
+        if (isMacro)
+            return true;
+
+        // Hard mode: pause on any WouldBlock
+        if (EffectiveNewsHard)
+            return d.WouldBlock || d.SizeMult <= 0.01m;
+
+        // Soft + Shadow: do not full-pause medium token noise (size cut only)
+        if (ShadowMode && !SoftImpactAlways)
+            return false;
+
+        // SoftImpactAlways without Hard: pause only when sizeMult forced to 0 (macro / critical)
+        return d.SizeMult <= 0.01m;
     }
 
     public decimal GetEntrySizeMult(string symbol, string? side = null)
     {
         var d = EvaluateEntry(symbol, side);
-        if (!EffectiveNewsHard && ShadowMode)
-        {
-            // observe-only: do not change live size
+
+        // Legacy pure observe: SoftImpact off AND Shadow AND not Hard
+        if (!EffectiveNewsHard && ShadowMode && !SoftImpactAlways)
             return 1m;
-        }
+
         if (d.SizeMult <= 0.01m) return 0m;
-        // High/critical token or macro: allow down to 0.25; size 0 already WouldBlock
+        // Always apply desk size cut when directive active (Soft or Hard)
         return Math.Clamp(d.SizeMult, 0.25m, 1m);
     }
 

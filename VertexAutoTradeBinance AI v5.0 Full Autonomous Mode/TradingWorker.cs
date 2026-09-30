@@ -1016,7 +1016,7 @@ namespace VertexAutoTradeBinance8
             {
                 if (_news != null)
                 {
-                    // ShadowMode: IsEntryPaused always false; GetEntrySizeMult logs only
+                    // SoftImpactAlways: size cut even in Shadow. MacroHigh always pauses.
                     if (_news.IsEntryPaused(symbol))
                     {
                         var dir = _news.TryGetActiveDirective();
@@ -1025,15 +1025,18 @@ namespace VertexAutoTradeBinance8
                         return;
                     }
                     var sm = _news.GetEntrySizeMult(symbol, signal.Side.ToString());
-                    if (sm <= 0m && !_news.ShadowMode)
+                    if (sm <= 0m)
                     {
                         await RejectAsync(signal, symbol, tf, "NEWS", "CATALYST_SIZE_ZERO",
                             ct, extra: "news size mult 0");
                         return;
                     }
-                    if (sm > 0m && sm < 1m)
+                    if (sm < 1m)
                     {
                         signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * sm, 0.25m, 1.0m);
+                        _logger.LogInformation(
+                            "[NEWS-SIZE] {sym} size×{sm:F2} (soft/hard impact active)",
+                            symbol, sm);
                     }
                 }
             }

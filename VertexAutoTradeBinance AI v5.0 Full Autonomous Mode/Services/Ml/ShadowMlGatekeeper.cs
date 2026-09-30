@@ -28,7 +28,7 @@ public sealed class ShadowMlGatekeeper
     private readonly object _gate = new();
     private Dictionary<string, double>? _weights;
     private double _bias;
-    private double _threshold = 0.58;
+    private double _threshold = 0.60;
     private DateTime _modelLoadedUtc = DateTime.MinValue;
 
     public ShadowMlGatekeeper(IConfiguration cfg, ILogger<ShadowMlGatekeeper> log, TradeJournalService? journal = null, ShadowMlKpiStore? kpi = null)
