@@ -146,6 +146,9 @@ public class Program
                     services.AddSingleton<VertexAutoTradeBinance8.Services.SignalQuality.OrderbookImbalanceGuard>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.SignalQuality.SignalQualityEvaluator>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.SignalQuality.SignalAuction>();
+                    services.Configure<VertexAutoTradeBinance8.Configuration.DualModeOptions>(
+                        ctx.Configuration.GetSection("DualMode"));
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.DualMode.DualModeTradingPolicy>();
                     services.Configure<TradingOptions>(
                       ctx.Configuration.GetSection("Trading")); // TRUE default
 

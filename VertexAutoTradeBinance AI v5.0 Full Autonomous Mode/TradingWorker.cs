@@ -8,6 +8,7 @@ using System.Threading.Channels;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Services.DualMode;
 using VertexAutoTradeBinance8.Services.SignalQuality;
 using VertexAutoTrade.Core.Risk;
 using VertexAutoTradeBinance8.Services.Entry;
@@ -110,6 +111,7 @@ namespace VertexAutoTradeBinance8
         // Optional: чтобы не писать слишком часто, но можно и без этого
         private DateTime _lastEngineTickUtc = DateTime.MinValue;
         private readonly AiMarketRegimeService _marketRegime;
+        private readonly DualModeTradingPolicy? _dualMode;
 
 
         // ===============================
@@ -198,12 +200,14 @@ namespace VertexAutoTradeBinance8
             VertexAutoTradeBinance8.Services.Learning.TradeJournalService? tradeJournal = null,
             IApprovedEntryPublisher? approvedEntries = null,
             ShadowMlGatekeeper? mlGate = null,
-            InstitutionalEntryPipeline? institutionalPipeline = null)
+            InstitutionalEntryPipeline? institutionalPipeline = null,
+            DualModeTradingPolicy? dualMode = null)
         {
             _tradeJournal = tradeJournal;
             _approvedEntries = approvedEntries;
             _mlGate = mlGate;
             _instPipe = institutionalPipeline;
+            _dualMode = dualMode;
             _logger = logger;
             _options = options.Value;
             _tradingMonitor = tradingMonitor;
@@ -928,6 +932,36 @@ namespace VertexAutoTradeBinance8
                     "[PROC][{symbol}] CORE kept despite AI_BLOCK ({reason})",
                     symbol, ai.Reason);
             }
+
+            // =====================================================
+            // DUAL-MODE foundation: regime × universe × capital flow
+            // TREND → liquid 15-18 + flow | RANGE → non-core spread 3-5x
+            // =====================================================
+            if (_dualMode != null)
+            {
+                try
+                {
+                    await RefreshBtcDualModeAsync(ct).ConfigureAwait(false);
+                    var dual = await _dualMode.EvaluateAsync(signal, lastVolume: null, ct).ConfigureAwait(false);
+                    _logger.LogInformation(
+                        "[DUAL-MODE] {sym} allow={a} mode={m} tier={t} levCap={lev} size×{sz:F2} flow={f} | {r}",
+                        symbol, dual.Allow, dual.Mode, dual.Tier, dual.LeverageCap, dual.SizeMult, dual.FlowConfirmed, dual.Reason);
+                    if (!dual.Allow)
+                    {
+                        await RejectAsync(signal, symbol, tf, "DUAL", dual.Reason, ct, extra: dual.Mode.ToString());
+                        return;
+                    }
+                    signal.Leverage = dual.LeverageCap;
+                    signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * dual.SizeMult, 0.15m, 1.0m);
+                    if (!string.IsNullOrEmpty(signal.Reason) && !signal.Reason.Contains("DUAL_"))
+                        signal.Reason = signal.Reason + "|DUAL_" + dual.Mode;
+                }
+                catch (Exception exDual)
+                {
+                    _logger.LogWarning(exDual, "[DUAL-MODE] evaluate failed — fail-open for {sym}", symbol);
+                }
+            }
+
             // =====================================================
             // 3.1) WRITE TO LIVE SIGNALS (AI confirmed, before pipeline blocks)
             // ─────────────────────────────────────────────────────────────────
@@ -1450,13 +1484,15 @@ namespace VertexAutoTradeBinance8
                 }
             }
 
+            decimal dualLev = (signal.Leverage is decimal dl && dl > 0) ? dl : 0m;
             var qty = _risk.GetPropDeskQtyFinal(
                 signal,
                 sizingBalance,
                 step,
                 minQty,
                 riskMult,
-                trading);
+                trading,
+                dualLev);
 
             if (qty <= 0)
             {
@@ -1472,7 +1508,7 @@ namespace VertexAutoTradeBinance8
             decimal qtyLive = qty;
             if (liveBalance > 0 && demoBalance > 0 && liveBalance < demoBalance * 0.98m)
             {
-                var q2 = _risk.GetPropDeskQtyFinal(signal, liveBalance, step, minQty, riskMult, trading);
+                var q2 = _risk.GetPropDeskQtyFinal(signal, liveBalance, step, minQty, riskMult, trading, dualLev);
                 if (q2 > 0) qtyLive = q2;
             }
             else if (liveBalance <= 0)
@@ -1521,7 +1557,7 @@ namespace VertexAutoTradeBinance8
                 signal.EntryPrice = realtimePrice;
             }
 
-            var leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
+            var leverage = (signal.Leverage is decimal sl && sl > 0) ? sl : (trading.Leverage > 0 ? trading.Leverage : 1m);
             if (_risk.LastAdjustedLeverage is decimal adjLev && adjLev > 0 && adjLev < leverage)
             {
                 _logger.LogWarning(
@@ -2090,6 +2126,41 @@ namespace VertexAutoTradeBinance8
                     await _snapshot.SaveSnapshotAsync(_learn.ExportState(), ct);
             }
             catch { }
+        }
+
+
+        private DateTime _lastDualModeRefreshUtc = DateTime.MinValue;
+
+        private async Task RefreshBtcDualModeAsync(CancellationToken ct)
+        {
+            if (_dualMode == null) return;
+            if ((DateTime.UtcNow - _lastDualModeRefreshUtc).TotalSeconds < 45) return;
+            try
+            {
+                var kl = await _marketDataFacade
+                    .GetKlinesAsync("BTCUSDT", KlineInterval.OneHour, 80, ct)
+                    .ConfigureAwait(false);
+                if (kl == null || kl.Count < 40) return;
+                var closes = kl.Select(k => k.ClosePrice).ToList();
+                var highs = kl.Select(k => k.HighPrice).ToList();
+                var lows = kl.Select(k => k.LowPrice).ToList();
+                decimal? move15 = null;
+                try
+                {
+                    var m15 = await _marketDataFacade
+                        .GetKlinesAsync("BTCUSDT", KlineInterval.FifteenMinutes, 3, ct)
+                        .ConfigureAwait(false);
+                    if (m15 != null && m15.Count >= 2 && m15[0].ClosePrice > 0)
+                        move15 = (m15[^1].ClosePrice - m15[0].ClosePrice) / m15[0].ClosePrice * 100m;
+                }
+                catch { }
+                _dualMode.UpdateBtcRegime(closes, highs, lows, move15);
+                _lastDualModeRefreshUtc = DateTime.UtcNow;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[DUAL-MODE] BTC regime refresh failed");
+            }
         }
 
         private async Task EnableHedgeMode()
