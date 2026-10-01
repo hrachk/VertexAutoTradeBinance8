@@ -942,7 +942,18 @@ namespace VertexAutoTradeBinance8
                 try
                 {
                     await RefreshBtcDualModeAsync(ct).ConfigureAwait(false);
-                    var dual = await _dualMode.EvaluateAsync(signal, lastVolume: null, ct).ConfigureAwait(false);
+                    // Pass real bar volume when possible so flow is not OI-only / null
+                    decimal? lastVol = null;
+                    try
+                    {
+                        var kl = await _marketDataFacade
+                            .GetKlinesAsync(symbol, tf, 30, ct).ConfigureAwait(false);
+                        if (kl != null && kl.Count > 0)
+                            lastVol = kl[^1].Volume;
+                    }
+                    catch { /* ratio on signal still used */ }
+
+                    var dual = await _dualMode.EvaluateAsync(signal, lastVolume: lastVol, ct).ConfigureAwait(false);
                     _logger.LogInformation(
                         "[DUAL-MODE] {sym} allow={a} mode={m} tier={t} levCap={lev} size×{sz:F2} flow={f} | {r}",
                         symbol, dual.Allow, dual.Mode, dual.Tier, dual.LeverageCap, dual.SizeMult, dual.FlowConfirmed, dual.Reason);
@@ -958,7 +969,10 @@ namespace VertexAutoTradeBinance8
                 }
                 catch (Exception exDual)
                 {
-                    _logger.LogWarning(exDual, "[DUAL-MODE] evaluate failed — fail-open for {sym}", symbol);
+                    // Fail-closed: do not execute without dual-mode capital check
+                    _logger.LogWarning(exDual, "[DUAL-MODE] evaluate failed — fail-CLOSED for {sym}", symbol);
+                    await RejectAsync(signal, symbol, tf, "DUAL", "DUAL_EVAL_ERROR", ct);
+                    return;
                 }
             }
 

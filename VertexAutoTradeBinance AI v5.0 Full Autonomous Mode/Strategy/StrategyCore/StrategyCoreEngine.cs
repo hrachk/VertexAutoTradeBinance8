@@ -59,7 +59,8 @@ public sealed class StrategyCoreEngine
     private const decimal MinRiskPct = 0.008m;  // CRITICAL: never micro-SL < 0.8% of entry
     private const decimal MaxRiskPct = 0.025m;  // reject if |entry-SL|/entry > 2.5%
     private const decimal StructurePadAtr = 0.50m; // SwingLow/High ± 0.5 ATR
-    private const decimal MaxExtensionAtr = 1.20m; // no FOMO chase — was 1.80 (late entries)
+    private const decimal MaxExtensionAtr = 1.00m; // hard anti-chase: max 1.0 ATR from structure
+    private const decimal MinVolumeRatioCore = 1.00m; // bar vol >= 20-bar avg (capital present)
     private const decimal RsiLongMax = 58m;     // no LONG if RSI15 > 58 (harder FOMO block)
     private const decimal RsiShortMin = 42m;    // no SHORT if RSI15 < 42
     private const int RsiPeriod = 14;
@@ -291,6 +292,17 @@ public sealed class StrategyCoreEngine
             return (true, false, "rr");
         }
 
+        // Capital-on-volume: do not emit local structure/slope without participation
+        decimal volRatio = ComputeVolumeRatio(slice);
+        signal.VolumeRatio = volRatio;
+        if (volRatio < MinVolumeRatioCore)
+        {
+            _log.LogInformation(
+                "[CORE][{sym}] REJECT NO_VOLUME_FLOW volR={vr:F2} < {min:F2} (blind local trend blocked)",
+                symbol, volRatio, MinVolumeRatioCore);
+            return (true, false, "no_volume_flow");
+        }
+
         _cooldown[symbol] = DateTime.UtcNow;
         {
             var e0 = signal.EntryPrice;
@@ -435,6 +447,18 @@ public sealed class StrategyCoreEngine
         var last20 = k.TakeLast(20).ToList();
         decimal avgQuote = last20.Average(x => x.Volume * ((x.HighPrice + x.LowPrice) / 2m));
         return avgQuote >= MinAvgQuoteVol15m;
+    }
+
+    /// <summary>Last closed bar volume / average of prior 20 bars. &lt;1 = thin participation.</summary>
+    private static decimal ComputeVolumeRatio(List<BinanceFuturesUsdtKline> k)
+    {
+        if (k == null || k.Count < 12) return 0m;
+        decimal last = k[^1].Volume;
+        var prior = k.TakeLast(21).SkipLast(1).ToList();
+        if (prior.Count < 10) return 0m;
+        decimal avg = prior.Average(x => x.Volume);
+        if (avg <= 0) return 0m;
+        return last / avg;
     }
 
     private static long ToMs(DateTime dt)

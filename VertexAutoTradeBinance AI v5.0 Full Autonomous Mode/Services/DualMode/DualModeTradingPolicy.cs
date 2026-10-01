@@ -276,8 +276,12 @@ public sealed class DualModeTradingPolicy
             return Reject(mode, tier, "REGIME_CHAOS: " + _modeDetail);
 
         bool isLong = signal.Side == SignalSide.Buy;
-        var flow = await BuildFlowAsync(symbol, isLong, lastVolume, ct).ConfigureAwait(false);
+        // Prefer live bar volume; fall back to CORE-computed VolumeRatio on the signal
+        decimal? volHint = lastVolume;
+        decimal? ratioHint = signal.VolumeRatio > 0 ? signal.VolumeRatio : null;
+        var flow = await BuildFlowAsync(symbol, isLong, volHint, ratioHint, ct).ConfigureAwait(false);
         bool flowOk = flow.HasCapitalConfirmation(o.MinVolumeRatio, o.MinOiDeltaAbs, o.MinBookAlign);
+        bool volOk = flow.HasVolumeExpansion(o.MinVolumeRatio);
 
         string rankInfo = _rankBySymbol.TryGetValue(Normalize(symbol), out var r)
             ? $"rank={r + 1}"
@@ -287,6 +291,15 @@ public sealed class DualModeTradingPolicy
         {
             if (tier != UniverseTier.CoreMajor && tier != UniverseTier.TrendLiquid)
                 return Reject(mode, tier, $"TREND_TOP_LIQUID_ONLY ({rankInfo})");
+
+            if (o.RequireVolumeOnTrend && !volOk)
+            {
+                _log.LogWarning(
+                    "[DUAL-MODE] REJECT {sym} TREND no volume expansion ({flow}) — blind local slope blocked",
+                    symbol, flow.Summarize());
+                return new DualModeDecision(false, mode, tier, o.TrendLeverageMin, 0m,
+                    "NO_VOLUME_FLOW: " + flow.Summarize(), false);
+            }
 
             if (o.RequireFlowOnTrend && !flowOk)
             {
@@ -299,7 +312,7 @@ public sealed class DualModeTradingPolicy
 
             int lev = ClampLev(o.TrendLeverageMin, o.TrendLeverageMax, preferHigh: true);
             return new DualModeDecision(true, mode, tier, lev, o.TrendSizeMult,
-                $"TREND+FLOW {rankInfo} " + flow.Summarize(), flowOk);
+                $"TREND+FLOW+VOL {rankInfo} " + flow.Summarize(), flowOk);
         }
 
         if (mode == DualMarketMode.Range)
@@ -333,7 +346,7 @@ public sealed class DualModeTradingPolicy
         new(false, mode, tier, 1, 0m, reason, false);
 
     private async Task<CapitalFlowSnapshot> BuildFlowAsync(
-        string symbol, bool isLong, decimal? lastVolume, CancellationToken ct)
+        string symbol, bool isLong, decimal? lastVolume, decimal? volumeRatioHint, CancellationToken ct)
     {
         var snap = new CapitalFlowSnapshot
         {
@@ -350,6 +363,17 @@ public sealed class DualModeTradingPolicy
                 Symbol = symbol,
                 IsLong = isLong,
                 VolumeRatio = ema > 0 ? v / ema : 1m,
+                HasVolume = true
+            };
+        }
+        else if (volumeRatioHint is decimal vr && vr > 0)
+        {
+            // CORE already measured bar volume / 20-bar avg — trust it when live volume not passed
+            snap = new CapitalFlowSnapshot
+            {
+                Symbol = symbol,
+                IsLong = isLong,
+                VolumeRatio = vr,
                 HasVolume = true
             };
         }

@@ -74,7 +74,12 @@ public sealed class DualModeOptions
     public bool RequireFlowOnTrend { get; set; } = true;
     public bool RequireFlowOnRange { get; set; } = false;
 
-    public decimal MinVolumeRatio { get; set; } = 0.85m;
+    /// <summary>
+    /// TREND entries must show bar volume expansion vs recent average (not slope-only).
+    /// </summary>
+    public bool RequireVolumeOnTrend { get; set; } = true;
+
+    public decimal MinVolumeRatio { get; set; } = 1.00m;
     public decimal MinOiDeltaAbs { get; set; } = 0.0015m;
     public decimal MinBookAlign { get; set; } = 0.08m;
     public int RegimeCacheSeconds { get; set; } = 60;
