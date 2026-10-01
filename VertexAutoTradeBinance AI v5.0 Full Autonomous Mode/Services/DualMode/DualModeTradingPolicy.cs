@@ -19,11 +19,11 @@ public enum DualMarketMode
 public enum UniverseTier
 {
     Blocked = 0,
-    /// <summary>Pure major (BTC/ETH/SOL/BNB/XRP) — TREND only, never RANGE spread.</summary>
+    /// <summary>Top-N by 24h volume — TREND only.</summary>
     CoreMajor = 1,
-    /// <summary>Liquid mid in TrendUniverse — TREND ok; RANGE spread ok.</summary>
+    /// <summary>Inside trend top band, outside core — TREND + RANGE spread.</summary>
     TrendLiquid = 2,
-    /// <summary>Explicit liquid spread list or thin alt — RANGE only.</summary>
+    /// <summary>Liquid mid or thin alt above min volume — RANGE only.</summary>
     SpreadAlt = 3
 }
 
@@ -37,8 +37,8 @@ public sealed record DualModeDecision(
     bool FlowConfirmed);
 
 /// <summary>
-/// Foundation policy: regime → universe → capital-flow → leverage/size.
-/// Replaces "blind local trend on every alt" with mode-aware rules.
+/// Regime × dynamic liquidity universe × capital-flow → leverage/size.
+/// Universe ranks come from live Binance 24h quote volume (SymbolLiquidityScanner).
 /// </summary>
 public sealed class DualModeTradingPolicy
 {
@@ -46,10 +46,18 @@ public sealed class DualModeTradingPolicy
     private readonly ILogger<DualModeTradingPolicy> _log;
     private readonly OiFundingTracker? _oi;
     private readonly MarketDataService? _md;
+    private readonly SymbolLiquidityScanner? _scanner;
 
     private DualMarketMode _btcMode = DualMarketMode.Unknown;
     private DateTime _modeUtc = DateTime.MinValue;
     private string _modeDetail = "init";
+
+    // Ranked by 24h quote volume, index 0 = highest volume
+    private List<string> _ranked = new();
+    private Dictionary<string, int> _rankBySymbol = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, decimal> _vol24BySymbol = new(StringComparer.OrdinalIgnoreCase);
+    private DateTime _universeUtc = DateTime.MinValue;
+    private readonly SemaphoreSlim _universeGate = new(1, 1);
 
     private readonly ConcurrentDictionary<string, decimal> _volEma =
         new(StringComparer.OrdinalIgnoreCase);
@@ -58,21 +66,20 @@ public sealed class DualModeTradingPolicy
         IOptionsMonitor<DualModeOptions> opt,
         ILogger<DualModeTradingPolicy> log,
         OiFundingTracker? oi = null,
-        MarketDataService? md = null)
+        MarketDataService? md = null,
+        SymbolLiquidityScanner? scanner = null)
     {
         _opt = opt;
         _log = log;
         _oi = oi;
         _md = md;
+        _scanner = scanner;
     }
 
     public DualMarketMode CurrentBtcMode => _btcMode;
     public string ModeDetail => _modeDetail;
+    public IReadOnlyList<string> RankedUniverse => _ranked;
 
-    /// <summary>
-    /// Update global mode from BTC OHLC (caller supplies recent closes/high/low, newest last).
-    /// Efficiency ratio + ATR expansion → Trend / Range / Chaos.
-    /// </summary>
     public void UpdateBtcRegime(
         IReadOnlyList<decimal> closes,
         IReadOnlyList<decimal> highs,
@@ -119,37 +126,131 @@ public sealed class DualModeTradingPolicy
         _log.LogInformation("[DUAL-MODE] BTC regime → {mode} ({detail})", mode, _modeDetail);
     }
 
+    /// <summary>
+    /// Rebuild core / trend / spread bands from live 24h quote volume ranking.
+    /// </summary>
+    public async Task EnsureUniverseAsync(CancellationToken ct = default)
+    {
+        var o = _opt.CurrentValue;
+        var ttl = Math.Max(60, o.UniverseRefreshSeconds);
+        if (_ranked.Count > 0 && (DateTime.UtcNow - _universeUtc).TotalSeconds < ttl)
+            return;
+
+        if (_scanner == null)
+        {
+            _log.LogWarning("[DUAL-MODE] No SymbolLiquidityScanner — universe empty until available");
+            return;
+        }
+
+        if (!await _universeGate.WaitAsync(0, ct).ConfigureAwait(false))
+            return; // another refresh in flight
+
+        try
+        {
+            if (_ranked.Count > 0 && (DateTime.UtcNow - _universeUtc).TotalSeconds < ttl)
+                return;
+
+            var snaps = await _scanner.LoadSnapshotsAsync(ct).ConfigureAwait(false);
+            if (snaps == null || snaps.Count == 0)
+            {
+                _log.LogWarning("[DUAL-MODE] ticker snapshots empty");
+                return;
+            }
+
+            var bl = new HashSet<string>(
+                (o.Blacklist ?? Array.Empty<string>()).Select(Normalize),
+                StringComparer.OrdinalIgnoreCase);
+
+            var ordered = snaps
+                .Where(s => !string.IsNullOrWhiteSpace(s.Symbol))
+                .Where(s => s.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase))
+                .Where(s => s.QuoteVolume24h > 0 && s.LastPrice > 0)
+                .Where(s => !bl.Contains(Normalize(s.Symbol)))
+                .OrderByDescending(s => s.QuoteVolume24h)
+                .ToList();
+
+            var ranked = ordered.Select(s => Normalize(s.Symbol)).Distinct().ToList();
+            var rankMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var volMap = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                var sym = Normalize(ordered[i].Symbol);
+                if (!rankMap.ContainsKey(sym))
+                    rankMap[sym] = rankMap.Count; // 0-based unique rank
+                volMap[sym] = ordered[i].QuoteVolume24h;
+            }
+
+            _ranked = ranked;
+            _rankBySymbol = rankMap;
+            _vol24BySymbol = volMap;
+            _universeUtc = DateTime.UtcNow;
+
+            int coreN = Math.Max(1, o.CoreMajorCount);
+            int trendN = Math.Max(coreN, o.TrendUniverseCount);
+            var corePreview = ranked.Take(Math.Min(coreN, ranked.Count)).ToList();
+            var trendPreview = ranked.Take(Math.Min(trendN, ranked.Count)).ToList();
+
+            _log.LogInformation(
+                "[DUAL-MODE] Dynamic universe n={n} coreTop={core} trendTop={trend} (by 24h quote vol)",
+                ranked.Count,
+                string.Join(",", corePreview),
+                string.Join(",", trendPreview.Take(12)) + (trendPreview.Count > 12 ? "…" : ""));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "[DUAL-MODE] universe refresh failed");
+        }
+        finally
+        {
+            _universeGate.Release();
+        }
+    }
+
     public UniverseTier ClassifySymbol(string symbol)
     {
         var o = _opt.CurrentValue;
         var u = Normalize(symbol);
 
-        foreach (var b in o.Blacklist)
+        foreach (var b in o.Blacklist ?? Array.Empty<string>())
             if (Normalize(b) == u) return UniverseTier.Blocked;
 
-        foreach (var c in o.CoreMajors)
-            if (Normalize(c) == u) return UniverseTier.CoreMajor;
+        // No market data yet → fail closed for unknown (except never block BTC/ETH soft)
+        if (_rankBySymbol.Count == 0)
+        {
+            // Fail-open only for absolute leaders so system can still trade while warming
+            if (u is "BTCUSDT" or "ETHUSDT")
+                return UniverseTier.CoreMajor;
+            return UniverseTier.Blocked;
+        }
 
-        foreach (var t in o.TrendUniverse)
-            if (Normalize(t) == u) return UniverseTier.TrendLiquid;
+        if (!_rankBySymbol.TryGetValue(u, out int rank))
+        {
+            // Not in ticker set
+            return UniverseTier.Blocked;
+        }
 
-        // Explicit liquid spread names (popular non-core)
-        foreach (var s in o.SpreadLiquidUniverse)
-            if (Normalize(s) == u) return UniverseTier.SpreadAlt;
-        foreach (var s in o.SpreadUniverse)
-            if (Normalize(s) == u) return UniverseTier.SpreadAlt;
+        int coreN = Math.Max(1, o.CoreMajorCount);
+        int trendN = Math.Max(coreN, o.TrendUniverseCount);
+        int spreadBand = coreN + Math.Max(0, o.SpreadLiquidCount);
 
-        // Thin / other alts
-        if (o.AllowThinAltsInRange)
+        if (rank < coreN)
+            return UniverseTier.CoreMajor;
+
+        if (rank < trendN)
+            return UniverseTier.TrendLiquid;
+
+        // Liquid mid preferred for range (still above thin)
+        if (rank < spreadBand)
+            return UniverseTier.SpreadAlt;
+
+        if (o.AllowThinAltsInRange &&
+            _vol24BySymbol.TryGetValue(u, out var vol) &&
+            vol >= o.MinQuoteVolume24hForRange)
             return UniverseTier.SpreadAlt;
 
         return UniverseTier.Blocked;
     }
 
-    
-    /// <summary>
-    /// Main gate before sizing/execution.
-    /// </summary>
     public async Task<DualModeDecision> EvaluateAsync(
         TradeSignal signal,
         decimal? lastVolume = null,
@@ -160,20 +261,16 @@ public sealed class DualModeTradingPolicy
             return new DualModeDecision(true, DualMarketMode.Unknown, UniverseTier.TrendLiquid,
                 o.TrendLeverageMax, 1m, "DualMode disabled — legacy path", true);
 
+        await EnsureUniverseAsync(ct).ConfigureAwait(false);
+
         var symbol = signal.Symbol ?? "";
         var tier = ClassifySymbol(symbol);
         if (tier == UniverseTier.Blocked)
-            return Reject(DualMarketMode.Unknown, tier, "SYMBOL_BLACKLIST");
+            return Reject(DualMarketMode.Unknown, tier, "SYMBOL_BLOCKED_OR_ILLIQUID");
 
-        // Refresh stale unknown
         var mode = _btcMode;
-        if (mode == DualMarketMode.Unknown ||
-            (DateTime.UtcNow - _modeUtc).TotalSeconds > Math.Max(30, o.RegimeCacheSeconds * 3))
-        {
-            // Keep last known; if never set, treat as Range (conservative)
-            if (mode == DualMarketMode.Unknown)
-                mode = DualMarketMode.Range;
-        }
+        if (mode == DualMarketMode.Unknown)
+            mode = DualMarketMode.Range;
 
         if (mode == DualMarketMode.Chaos)
             return Reject(mode, tier, "REGIME_CHAOS: " + _modeDetail);
@@ -182,11 +279,14 @@ public sealed class DualModeTradingPolicy
         var flow = await BuildFlowAsync(symbol, isLong, lastVolume, ct).ConfigureAwait(false);
         bool flowOk = flow.HasCapitalConfirmation(o.MinVolumeRatio, o.MinOiDeltaAbs, o.MinBookAlign);
 
-                // --- TREND: CoreMajors + liquid mid (TrendUniverse), flow required ---
+        string rankInfo = _rankBySymbol.TryGetValue(Normalize(symbol), out var r)
+            ? $"rank={r + 1}"
+            : "rank=?";
+
         if (mode == DualMarketMode.Trend)
         {
             if (tier != UniverseTier.CoreMajor && tier != UniverseTier.TrendLiquid)
-                return Reject(mode, tier, "TREND_LIQUID_ONLY — thin alt deferred to RANGE/spread");
+                return Reject(mode, tier, $"TREND_TOP_LIQUID_ONLY ({rankInfo})");
 
             if (o.RequireFlowOnTrend && !flowOk)
             {
@@ -199,25 +299,23 @@ public sealed class DualModeTradingPolicy
 
             int lev = ClampLev(o.TrendLeverageMin, o.TrendLeverageMax, preferHigh: true);
             return new DualModeDecision(true, mode, tier, lev, o.TrendSizeMult,
-                "TREND+FLOW " + flow.Summarize(), flowOk);
+                $"TREND+FLOW {rankInfo} " + flow.Summarize(), flowOk);
         }
 
-        // --- RANGE: NO core majors; liquid popular + thin alts for spread, small lev ---
         if (mode == DualMarketMode.Range)
         {
             if (tier == UniverseTier.CoreMajor)
                 return Reject(mode, tier,
-                    "RANGE_NO_CORE_MAJORS — BTC/ETH/SOL/BNB/XRP wait for TREND+flow");
+                    $"RANGE_NO_CORE_MAJORS ({rankInfo}) — top volume waits for TREND+flow");
 
             if (tier != UniverseTier.TrendLiquid && tier != UniverseTier.SpreadAlt)
-                return Reject(mode, tier, "RANGE_UNIVERSE_MISS");
+                return Reject(mode, tier, $"RANGE_UNIVERSE_MISS ({rankInfo})");
 
             if (o.RequireFlowOnRange && !flowOk)
                 return new DualModeDecision(false, mode, tier, o.RangeLeverageMin, 0m,
                     "RANGE_NO_FLOW " + flow.Summarize(), false);
 
             int lev = ClampLev(o.RangeLeverageMin, o.RangeLeverageMax, preferHigh: false);
-            // Liquid mid (in TrendUniverse or SpreadLiquid) gets slightly larger range size
             decimal size = tier == UniverseTier.TrendLiquid
                 ? o.RangeLiquidSizeMult
                 : o.RangeSizeMult;
@@ -225,7 +323,7 @@ public sealed class DualModeTradingPolicy
                 size = Math.Min(size, 0.25m);
 
             return new DualModeDecision(true, mode, tier, lev, size,
-                "RANGE_SPREAD " + flow.Summarize(), flowOk);
+                $"RANGE_SPREAD {rankInfo} " + flow.Summarize(), flowOk);
         }
 
         return Reject(mode, tier, "MODE_UNKNOWN");
@@ -244,7 +342,6 @@ public sealed class DualModeTradingPolicy
             VolumeRatio = 1m
         };
 
-        // Volume EMA
         if (lastVolume is decimal v && v > 0)
         {
             var ema = _volEma.AddOrUpdate(symbol, v, (_, prev) => prev * 0.9m + v * 0.1m);
@@ -253,13 +350,7 @@ public sealed class DualModeTradingPolicy
                 Symbol = symbol,
                 IsLong = isLong,
                 VolumeRatio = ema > 0 ? v / ema : 1m,
-                HasVolume = true,
-                OiDeltaPct = snap.OiDeltaPct,
-                FundingRate = snap.FundingRate,
-                BookAlign = snap.BookAlign,
-                SpreadPct = snap.SpreadPct,
-                HasOi = snap.HasOi,
-                HasBook = snap.HasBook
+                HasVolume = true
             };
         }
 
@@ -299,10 +390,7 @@ public sealed class DualModeTradingPolicy
                     }
                 }
             }
-            catch
-            {
-                // fail-soft
-            }
+            catch { }
         }
 
         return new CapitalFlowSnapshot

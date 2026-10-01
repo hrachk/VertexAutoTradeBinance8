@@ -1,85 +1,72 @@
 namespace VertexAutoTradeBinance8.Configuration;
 
 /// <summary>
-/// Dual-mode trading foundation:
-/// TREND  → 15–18 liquid names (not only top majors), flow required, full gear
-/// RANGE  → spread on non-core: liquid mid-tier + thinner alts; NO pure majors; lev 3–5x
-/// CHAOS  → no new entries
+/// Dual-mode foundation. Universe tiers are built dynamically from Binance
+/// 24h quote volume (SymbolLiquidityScanner) — not hardcoded symbol lists.
 /// </summary>
 public sealed class DualModeOptions
 {
     public const string SectionName = "DualMode";
 
-    /// <summary>Master switch. When false, policy is fail-open (legacy CORE path).</summary>
     public bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// Pure majors — NEVER traded in RANGE/spread (avoid chopping BTC/ETH/etc. in sideways).
-    /// Still allowed in TREND with capital-flow confirmation.
+    /// Top-N by 24h quote volume = Core majors (TREND only, never RANGE/spread).
+    /// Typical: BTC/ETH/SOL… as the market ranks them.
     /// </summary>
-    public string[] CoreMajors { get; set; } =
-    {
-        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"
-    };
+    public int CoreMajorCount { get; set; } = 5;
 
     /// <summary>
-    /// Full TREND universe: ~15–18 liquid names (includes CoreMajors + liquid mid).
-    /// Only these may open in TREND mode.
+    /// Top-N by 24h volume allowed in TREND mode (includes core).
     /// </summary>
-    public string[] TrendUniverse { get; set; } =
-    {
-        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-        "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT",
-        "DOTUSDT", "NEARUSDT", "ATOMUSDT", "UNIUSDT", "APTUSDT",
-        "ARBUSDT", "OPUSDT", "SUIUSDT"
-    };
+    public int TrendUniverseCount { get; set; } = 18;
 
     /// <summary>
-    /// Optional explicit list of liquid/popular names preferred for RANGE spread
-    /// (in addition to thinner alts). Empty = any non-CoreMajor is RANGE-eligible.
-    /// When non-empty: RANGE only if symbol is in this list OR treated as thin alt
-    /// (not in TrendUniverse) — see policy.
+    /// Additional liquid names after core, used as preferred RANGE spread size tier
+    /// (rank CoreMajorCount+1 .. CoreMajorCount+SpreadLiquidCount).
+    /// Also any symbol inside TrendUniverse but outside core is "TrendLiquid".
     /// </summary>
-    public string[] SpreadLiquidUniverse { get; set; } =
-    {
-        "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT",
-        "DOTUSDT", "NEARUSDT", "ATOMUSDT", "UNIUSDT", "APTUSDT",
-        "ARBUSDT", "OPUSDT", "SUIUSDT", "FILUSDT", "INJUSDT",
-        "AAVEUSDT", "RENDERUSDT", "FETUSDT"
-    };
+    public int SpreadLiquidCount { get; set; } = 25;
 
     /// <summary>
-    /// Legacy alias: if set non-empty, used as extra RANGE allow-list together with SpreadLiquid.
-    /// Prefer SpreadLiquidUniverse.
+    /// Minimum 24h quote volume (USDT) to allow as thin-alt RANGE candidate.
+    /// Below this → blocked (too illiquid).
     /// </summary>
-    public string[] SpreadUniverse { get; set; } = Array.Empty<string>();
+    public decimal MinQuoteVolume24hForRange { get; set; } = 5_000_000m;
 
-    /// <summary>Hard-exclude from all auto modes (ETFs, junk).</summary>
+    /// <summary>
+    /// When true, symbols ranked below TrendUniverse but above MinQuoteVolume24h
+    /// may trade RANGE (small size). When false, only top (Core+SpreadLiquid) band.
+    /// </summary>
+    public bool AllowThinAltsInRange { get; set; } = true;
+
+    /// <summary>
+    /// Optional exclusions (ETF / equity perps / known junk). Not a trading universe.
+    /// </summary>
     public string[] Blacklist { get; set; } =
     {
         "SOXLUSDT", "SOXSUSDT", "EWYUSDT", "KORUUSDT", "TSLAUSDT", "MSTRUSDT"
     };
 
     /// <summary>
-    /// When true, any non-core / non-blacklist symbol may trade RANGE
-    /// (thin alts + liquid mid). When false, only SpreadLiquidUniverse (+ SpreadUniverse).
+    /// Refresh ranked universe from tickers at most this often (seconds).
+    /// Scanner has its own cache; this is policy-side refresh cadence.
     /// </summary>
-    public bool AllowThinAltsInRange { get; set; } = true;
+    public int UniverseRefreshSeconds { get; set; } = 300;
 
-    // --- Regime thresholds (BTC 1H efficiency / ATR) ---
+    // --- Regime ---
     public decimal TrendEfficiencyMin { get; set; } = 0.28m;
     public decimal ChaosAtrRatioMin { get; set; } = 1.85m;
     public decimal ChaosBtcMove15mPct { get; set; } = 1.8m;
 
-    // --- Leverage by mode ---
+    // --- Leverage ---
     public int RangeLeverageMin { get; set; } = 3;
     public int RangeLeverageMax { get; set; } = 5;
     public int TrendLeverageMin { get; set; } = 5;
     public int TrendLeverageMax { get; set; } = 10;
 
-    // --- Size multipliers ---
+    // --- Size ---
     public decimal RangeSizeMult { get; set; } = 0.35m;
-    /// <summary>Slightly higher size for liquid mid-tier spread vs thin junk.</summary>
     public decimal RangeLiquidSizeMult { get; set; } = 0.45m;
     public decimal TrendSizeMult { get; set; } = 1.0m;
     public decimal TrendNoFlowSizeMult { get; set; } = 0.0m;
