@@ -913,17 +913,15 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
-            // LIVE = DEMO: only CORE_* may execute. Everything else is UI-only noise.
-            bool isCore = signal.Reason != null &&
-                          signal.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase);
-            if (!isCore)
+            // Dual strategy: TREND (CORE_/TREND_*) + RANGE spread (RANGE_*/MEANREV_*) only.
+            if (!ExecutableStrategyPolicy.IsLiveExecutable(signal.Reason))
             {
                 await RejectAsync(
                     signal, symbol, tf,
                     "POLICY",
-                    "NON_CORE_BLOCKED",
+                    "NON_STRATEGY_BLOCKED",
                     ct,
-                    extra: "LIVE executes CORE only (same as Parallel DEMO)");
+                    extra: "LIVE=DEMO executes TREND/CORE or RANGE/SPREAD only");
                 return;
             }
             if (!ai.Allow)

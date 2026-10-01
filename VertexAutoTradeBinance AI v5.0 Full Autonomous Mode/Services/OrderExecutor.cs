@@ -14,6 +14,7 @@ using Polly.Retry;
 using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Strategy;
 using VertexAutoTradeBinance8.Services.Interface;
 
 namespace VertexAutoTradeBinance8.Services
@@ -1239,8 +1240,7 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
             {
                 var (ok1m, score1m, thr1m) = await ConfirmEntryOn1m(
                     signal.Symbol, signal.Side, ct, signal, smart);
-                bool isCoreSig = signal.Reason != null &&
-                    signal.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase);
+                bool isCoreSig = ExecutableStrategyPolicy.IsLiveExecutable(signal.Reason);
 
                 if (!ok1m)
                 {
@@ -2233,7 +2233,7 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                 var (ok1mFb, score1mFb, thr1mFb) = await ConfirmEntryOn1m(
                     signal.Symbol, signal.Side, ct, signal, smart);
                 bool isCoreFb = signal.Reason != null &&
-                    signal.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase);
+                    ExecutableStrategyPolicy.IsLiveExecutable(signal.Reason);
                 if (!ok1mFb)
                 {
                     if (!isCoreFb)
@@ -2406,7 +2406,7 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
         private static bool IsCoreSignal(TradeSignal signal)
         {
             var r = signal?.Reason ?? "";
-            return r.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase);
+            return ExecutableStrategyPolicy.IsLiveExecutable(r);
         }
 
         // =====================================================================

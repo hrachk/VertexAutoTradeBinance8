@@ -5,6 +5,8 @@ using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 
+using VertexAutoTradeBinance8.Strategy;
+
 namespace VertexAutoTradeBinance8.Strategy.MeanReversion
 {
     /// <summary>
@@ -148,6 +150,10 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             if (klines == null || klines.Count < Math.Max(_opt.Window, 60))
                 return null;
 
+            // Majors: no spread / mean-reversion (TREND leg only)
+            if (ExecutableStrategyPolicy.IsCoreMajorSymbol(symbol))
+                return null;
+
             // ── GATE 1: Regime — only trade mean-reversion in Range/Squeeze ──
             var smart = _smartRegimeService.Evaluate(symbol, tf, klines);
             bool rangeLike =
@@ -239,7 +245,7 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             {
                 Symbol = symbol,
                 Side = longSetup ? SignalSide.Buy : SignalSide.Sell,
-                Reason = longSetup ? "MEANREV_ZSCORE_LONG" : "MEANREV_ZSCORE_SHORT",
+                Reason = longSetup ? "RANGE_SPREAD_LONG" : "RANGE_SPREAD_SHORT",
                 Atr = atr,
                 EntryPrice = entry,
                 StopLoss = stopLoss,

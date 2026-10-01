@@ -1,3 +1,4 @@
+using VertexAutoTradeBinance8.Strategy;
 using VertexAutoTradeBinance8.Services.Learning;
 using Microsoft.Extensions.Configuration;
 using Binance.Net.Enums;
@@ -166,7 +167,7 @@ namespace VertexAutoTradeBinance8.Services
                 bool major = symU is "BTCUSDT" or "ETHUSDT" or "BNBUSDT" or "SOLUSDT"
                              || symU.StartsWith("BTC") || symU.StartsWith("ETH");
                 bool isCore = !string.IsNullOrEmpty(signal.Reason)
-                              && signal.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase);
+                              && ExecutableStrategyPolicy.IsLiveExecutable(signal.Reason);
 
                 if (isCore || true)
                 {
