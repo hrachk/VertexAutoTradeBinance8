@@ -1532,8 +1532,8 @@ namespace VertexAutoTradeBinance8
             // =====================================================
             try
             {
-                // Do NOT rewrite CORE SL/TP via optimizer — DEMO uses signal as-is.
-                if (!isCore)
+                // Do NOT rewrite TREND/CORE or RANGE/SPREAD SL/TP — Demo uses signal as-is.
+                if (!ExecutableStrategyPolicy.IsLiveExecutable(signal.Reason))
                 {
                     var klines = await _marketDataFacade
                         .GetKlinesAsync(symbol, tf, 120, ct)
