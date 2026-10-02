@@ -858,7 +858,7 @@ _state.History.Add(new DemoClosedTrade
                 {
                     Symbol = pos.Symbol, Side = pos.Side, EntryPrice = pos.EntryPrice, ExitPrice = exitPrice,
                     Qty = pos.Qty, RealizedPnl = dustPnl, CloseReason = reason,
-            SetupReason = pos.SetupReason ?? "", StrategyLeg = pos.StrategyLeg ?? "" + " (flat residual)",
+            SetupReason = pos.SetupReason ?? "", StrategyLeg = pos.StrategyLeg ?? "",
                     OpenedAtUtc = pos.OpenedAtUtc,
                 });
                 _state.Positions.Remove(pos);
