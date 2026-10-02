@@ -8,7 +8,7 @@ using VertexAutoTradeBinance8.Services.Learning;
 namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
 
 /// <summary>
-/// StrategyCore v1.6 — structure-first SL (HH/HL invalidation). No ATR-only stops.
+/// StrategyCore v2.0 Expert — pullback-first (no SimpleTrend chase), HTF bias, impulse ban, volume flow, structure SL.
 ///
 /// Root cause of day-long silence: MarketDataFacade often returns &lt;70 bars
 /// (snapshot-capped / REST backfill disabled) so EvaluateAsync exited early
@@ -259,14 +259,25 @@ public sealed class StrategyCoreEngine
             return (true, false, "atr_band");
         }
 
+        // Expert production priority (institutional):
+        // 1) Pullback to value (EMA) in structure — primary edge
+        // 2) Breakout+retest on majors only — never naked breakout
+        // 3) SimpleTrend continuation DISABLED — primary source of late-chase SL
         TradeSignal? signal =
             TryPullback(symbol, slice, atr)
-            ?? (IsMajor(symbol) ? TryBreakoutRetest(symbol, slice, atr) : null)
-            ?? TrySimpleTrend(symbol, slice, atr);
+            ?? (IsMajor(symbol) ? TryBreakoutRetest(symbol, slice, atr) : null);
+        // TrySimpleTrend intentionally omitted (ExpertMode PreferPullbackOnly)
 
         _lastSignalBarMs[symbol] = barKey;
 
         if (signal == null) return (true, false, "no_setup");
+
+        // HTF bias on 15m stack: EMA50 slope + price side of EMA50 (proxy for 1H when buffer thin)
+        if (!PassHtfBiasGuard(slice, signal, out var htfReason))
+        {
+            _log.LogInformation("[CORE][{sym}] REJECT {r}", symbol, htfReason);
+            return (true, false, "htf_bias");
+        }
 
         // FOMO / exhaustion guard (15m RSI)
         if (!PassRsiGuard(slice, signal, out var rsiReason))
@@ -462,6 +473,48 @@ public sealed class StrategyCoreEngine
     /// (BZUSDT-style long after vertical spike).
     /// Impulse = bar range ≥ 1.35 ATR and close in extreme 30% of range.
     /// </summary>
+
+    private static bool PassHtfBiasGuard(
+        List<BinanceFuturesUsdtKline> k, TradeSignal signal, out string reason)
+    {
+        reason = "";
+        if (k == null || k.Count < EmaSlow + 5) return true;
+        var closes = k.Select(x => x.ClosePrice).ToList();
+        var emaF = EmaSeries(closes, EmaFast);
+        var emaS = EmaSeries(closes, EmaSlow);
+        int i = closes.Count - 1;
+        decimal c = closes[i], eF = emaF[i], eS = emaS[i];
+        decimal eSPrev = emaS[i - 3];
+        bool isLong = signal.Side == SignalSide.Buy;
+        if (isLong)
+        {
+            if (c < eS * 0.998m)
+            {
+                reason = "HTF_BIAS_LONG close under EMA50";
+                return false;
+            }
+            if (eS < eSPrev * 0.999m && c < eF)
+            {
+                reason = "HTF_BIAS_LONG slow EMA falling + price under fast";
+                return false;
+            }
+        }
+        else
+        {
+            if (c > eS * 1.002m)
+            {
+                reason = "HTF_BIAS_SHORT close over EMA50";
+                return false;
+            }
+            if (eS > eSPrev * 1.001m && c > eF)
+            {
+                reason = "HTF_BIAS_SHORT slow EMA rising + price over fast";
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static bool PassImpulseChaseGuard(
         List<BinanceFuturesUsdtKline> k, TradeSignal signal, decimal atr, out string reason)
     {

@@ -79,7 +79,7 @@ public sealed class DualModeOptions
     /// </summary>
     public bool RequireVolumeOnTrend { get; set; } = true;
 
-    public decimal MinVolumeRatio { get; set; } = 1.00m;
+    public decimal MinVolumeRatio { get; set; } = 1.05m;
     public decimal MinOiDeltaAbs { get; set; } = 0.0015m;
     public decimal MinBookAlign { get; set; } = 0.08m;
     public int RegimeCacheSeconds { get; set; } = 60;

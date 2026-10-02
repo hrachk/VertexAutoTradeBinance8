@@ -154,6 +154,10 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             if (ExecutableStrategyPolicy.IsCoreMajorSymbol(symbol))
                 return null;
 
+            // Do not fade expanding volatility (trend ignition) — primary MR failure mode
+            if (IsAtrExpanding(klines, 14, 20, 1.45m))
+                return null;
+
             // ── GATE 1: Regime — only trade mean-reversion in Range/Squeeze ──
             var smart = _smartRegimeService.Evaluate(symbol, tf, klines);
             bool rangeLike =
@@ -272,6 +276,25 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             decimal blended = zComponent * 0.6m + regimeConfidence * 0.4m;
             return Math.Clamp(blended, 0.1m, 0.95m);
         }
+
+        /// <summary>True when current ATR is expanded vs its recent average (do not fade trend ignition).</summary>
+        private static bool IsAtrExpanding(
+            IReadOnlyList<BinanceFuturesUsdtKline> k, int atrPeriod, int avgBars, decimal mult)
+        {
+            if (k == null || k.Count < atrPeriod + avgBars + 2) return false;
+            decimal atrNow = ZScoreCalculator.Atr(k, atrPeriod, k.Count - 1);
+            if (atrNow <= 0) return false;
+            decimal sum = 0m;
+            int n = 0;
+            for (int i = 2; i <= avgBars + 1; i++)
+            {
+                decimal a = ZScoreCalculator.Atr(k, atrPeriod, k.Count - i);
+                if (a > 0) { sum += a; n++; }
+            }
+            if (n < avgBars / 2) return false;
+            decimal avg = sum / n;
+            return avg > 0 && atrNow >= avg * mult;
+        }
     }
 
     /// <summary>
@@ -281,6 +304,7 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
     /// by StrategyRouter/StrategyModeState, not by hot-reloading these
     /// numeric thresholds mid-flight.
     /// </summary>
+
     public sealed class MeanReversionOptions
     {
         public KlineInterval Timeframe { get; set; } = KlineInterval.FifteenMinutes;
