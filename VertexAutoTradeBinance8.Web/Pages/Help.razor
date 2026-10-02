@@ -1,483 +1,621 @@
 @page "/help"
 @page "/docs"
+@using System.Globalization
 
-<div class="help-root">
-    <aside class="help-nav">
-        <div class="help-brand">
-            <span class="help-logo">?</span>
+<div class="hx-root" data-lang="@_lang">
+    <aside class="hx-nav">
+        <div class="hx-brand">
+            <div class="hx-logo">V</div>
             <div>
-                <div class="help-title">User Manual</div>
-                <div class="help-sub">Vertex AutoTrade</div>
+                <div class="hx-brand-title">VERTEX</div>
+                <div class="hx-brand-sub">@T("help.brand_sub")</div>
             </div>
         </div>
-        <input class="help-search" @bind="_query" @bind:event="oninput" placeholder="Search…" />
-        <nav class="help-toc">
+
+        <div class="hx-lang">
+            <button type="button" class="@(_lang=="ru"?"on":null)" @onclick='() => SetLang("ru")'>RU</button>
+            <button type="button" class="@(_lang=="en"?"on":null)" @onclick='() => SetLang("en")'>EN</button>
+        </div>
+
+        <input class="hx-search" @bind="_query" @bind:event="oninput" placeholder="@T("help.search")" />
+
+        <nav class="hx-toc">
             @foreach (var item in FilteredToc)
             {
-                <button type="button" class="help-toc-item @(_section == item.Id ? "active" : null)"
+                <button type="button" class="hx-toc-item @(_section == item.Id ? "active" : null)"
                         @onclick="() => Go(item.Id)">
-                    <span>@item.Icon</span> <span>@item.Label</span>
+                    <span class="hx-ico">@item.Icon</span>
+                    <span>@item.Label</span>
                 </button>
             }
         </nav>
-        <div class="help-nav-foot">
-            <a href="/market">← Market</a>
-            <a href="/ai-dashboard">AI Dashboard</a>
+
+        <div class="hx-nav-foot">
+            <a href="/market">Market</a>
+            <a href="/settings">Settings</a>
+            <a href="/ai-dashboard">AI</a>
+            <a href="/macro-news">News</a>
         </div>
     </aside>
 
-    <main class="help-main">
-        <header class="help-header">
-            <h1>@CurrentTitle</h1>
-            <p class="help-lead">@CurrentLead</p>
+    <main class="hx-main">
+        <header class="hx-header">
+            <div>
+                <h1>@CurrentTitle</h1>
+                <p class="hx-lead">@CurrentLead</p>
+            </div>
+            <div class="hx-badge">Expert v2.0 · Production</div>
         </header>
 
         @if (_section == "quick")
         {
-            <section class="help-section">
-                <div class="help-card step"><div class="step-n">1</div>
-                    <h3>Config &amp; SharedData</h3>
-                    <p>Engine и Web должны указывать на один корень данных.</p>
-                    <pre class="help-code">C:\Vertex\Engines\
-├── vertex_system.db      ← пользователи / Demo $ (SQLite)
-├── vertex_journal.db     ← журнал сделок
-├── clients.json          ← dual-write (пока)
-└── client_001\           ← SharedData:Root
-    ├── live_signals.json
-    └── approved_entries.json</pre>
-                    <pre class="help-code">"SharedData": { "Root": "C:\\Vertex\\Engines\\client_001" }</pre>
-                    <p>Ключи API — user-secrets / UI, не в git.</p>
+            <section class="hx-section">
+                <div class="hx-grid-3">
+                    <div class="hx-card step">
+                        <div class="hx-step">1</div>
+                        <h3>@T("quick.s1_t")</h3>
+                        <p>@T("quick.s1_p")</p>
+                        <pre class="hx-code">SharedData:Root → same folder for Engine + Web
+vertex_journal.db · vertex_system.db
+client_xxx/approved_entries.json</pre>
+                    </div>
+                    <div class="hx-card step">
+                        <div class="hx-step">2</div>
+                        <h3>@T("quick.s2_t")</h3>
+                        <p>@T("quick.s2_p")</p>
+                        <pre class="hx-code">1) Start Engine (worker)
+2) Start Web → :5101
+Logs: [TIME-SYNC] [DUAL-MODE] [ROUTER]</pre>
+                    </div>
+                    <div class="hx-card step">
+                        <div class="hx-step">3</div>
+                        <h3>@T("quick.s3_t")</h3>
+                        <p>@T("quick.s3_p")</p>
+                        <pre class="hx-code">Demo $10,000 independent of exchange
+Enable Demo AutoTrade → paper only
+Then Live only after 30–50 Demo trades</pre>
+                    </div>
                 </div>
-                <div class="help-card step"><div class="step-n">2</div>
-                    <h3>Binance Futures + запуск</h3>
-                    <ul class="help-list">
-                        <li>USDT-M Futures API (Read + Trade, без Withdraw).</li>
-                        <li>Сначала <b>Engine</b>, потом <b>Web</b> (5101).</li>
+
+                <div class="hx-callout ok">
+                    <strong>@T("quick.defaults_t")</strong>
+                    <p>@T("quick.defaults_p")</p>
+                    <ul class="hx-list">
+                        <li>MaxOpenPositions = <b>4</b></li>
+                        <li>MaxSameSidePositions = <b>2</b> · CorrelationFilter = <b>StaticLimit</b></li>
+                        <li>SignalQuality MinThreshold = <b>78%</b> · Auction BestScore</li>
+                        <li>MaxNotionalPctOfEquity = <b>28%</b> · DualMode MinVolumeRatio = <b>1.05</b></li>
+                        <li>ML Hard Gate / News Hard = <b>OFF</b> (shadow until proven)</li>
                     </ul>
-                    <pre class="help-code">dotnet run   # Engine
-dotnet run   # Web → http://127.0.0.1:5101</pre>
-                    <p>Логи: <code>[TIME-SYNC]</code>, <code>[SYSTEM-DB] Ready</code>, <code>[DEMO-AUTO]</code>.</p>
                 </div>
-                <div class="help-card step"><div class="step-n">3</div>
-                    <h3>Demo $10k (независимо от биржи)</h3>
-                    <p>Баланс в <code>DemoAccounts</code> (<code>vertex_system.db</code>). Parallel DEMO в профиле.</p>
-                    <div class="help-callout ok">Live balance = 0 → Demo всё равно торгует (DEMO-ONLY). Live &gt; 0 → Live sizing отдельно.</div>
+            </section>
+        }
+
+        @if (_section == "pipeline")
+        {
+            <section class="hx-section">
+                <h2>@T("pipe.title")</h2>
+                <p class="hx-p">@T("pipe.intro")</p>
+
+                <div class="hx-flow">
+                    <div class="hx-flow-node">Market Data<br/><span>WS · REST · 15m+</span></div>
+                    <div class="hx-flow-arrow">→</div>
+                    <div class="hx-flow-node accent">CORE / MR<br/><span>signals</span></div>
+                    <div class="hx-flow-arrow">→</div>
+                    <div class="hx-flow-node accent2">Router<br/><span>DualMode</span></div>
+                    <div class="hx-flow-arrow">→</div>
+                    <div class="hx-flow-node">PROC<br/><span>Risk · SQ</span></div>
+                    <div class="hx-flow-arrow">→</div>
+                    <div class="hx-flow-node ok">Live + Demo<br/><span>1:1 entry</span></div>
+                </div>
+
+                <div class="hx-grid-2">
+                    <div class="hx-card">
+                        <h3>@T("pipe.trend_t")</h3>
+                        <ol class="hx-list num">
+                            <li>@T("pipe.trend_1")</li>
+                            <li>@T("pipe.trend_2")</li>
+                            <li>@T("pipe.trend_3")</li>
+                            <li>@T("pipe.trend_4")</li>
+                            <li>@T("pipe.trend_5")</li>
+                        </ol>
+                        <pre class="hx-code">SetupReason example:
+TREND: CORE_PULLBACK_LONG</pre>
+                    </div>
+                    <div class="hx-card">
+                        <h3>@T("pipe.range_t")</h3>
+                        <ol class="hx-list num">
+                            <li>@T("pipe.range_1")</li>
+                            <li>@T("pipe.range_2")</li>
+                            <li>@T("pipe.range_3")</li>
+                            <li>@T("pipe.range_4")</li>
+                        </ol>
+                        <pre class="hx-code">SetupReason example:
+RANGE: RANGE_SPREAD_SHORT</pre>
+                    </div>
+                </div>
+
+                <div class="hx-card">
+                    <h3>@T("pipe.proc_t")</h3>
+                    <div class="hx-table-wrap">
+                        <table class="hx-table">
+                            <thead><tr><th>@T("pipe.col_stage")</th><th>@T("pipe.col_what")</th><th>@T("pipe.col_reject")</th></tr></thead>
+                            <tbody>
+                                <tr><td>Executable</td><td>CORE_ / TREND_ / RANGE_ only</td><td>NON_STRATEGY_BLOCKED</td></tr>
+                                <tr><td>DualMode</td><td>Regime · universe · flow · size/lev</td><td>regime/universe/flow</td></tr>
+                                <tr><td>Risk</td><td>1R · HardCap · notional 28% · max positions</td><td>QTY_ZERO · DIR_MAX</td></tr>
+                                <tr><td>Signal Quality</td><td>Auction score ≥ threshold</td><td>BELOW_QUALITY</td></tr>
+                                <tr><td>OB Guard</td><td>Spread / depth</td><td>SPREAD_WIDE</td></tr>
+                                <tr><td>Exec</td><td>Binance + ApprovedEntry → Demo</td><td>EXECUTION_FAILED</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="hx-callout">
+                    <strong>Demo ≡ Live (decision parity)</strong>
+                    <p>@T("pipe.parity")</p>
+                </div>
+            </section>
+        }
+
+        @if (_section == "strategy")
+        {
+            <section class="hx-section">
+                <h2>@T("st.title")</h2>
+                <div class="hx-grid-2">
+                    <div class="hx-card">
+                        <div class="hx-tag green">TREND</div>
+                        <h3>@T("st.trend_h")</h3>
+                        <ul class="hx-list">
+                            <li>@T("st.trend_1")</li>
+                            <li>@T("st.trend_2")</li>
+                            <li>@T("st.trend_3")</li>
+                            <li>@T("st.trend_4")</li>
+                            <li>@T("st.trend_5")</li>
+                        </ul>
+                    </div>
+                    <div class="hx-card">
+                        <div class="hx-tag blue">RANGE</div>
+                        <h3>@T("st.range_h")</h3>
+                        <ul class="hx-list">
+                            <li>@T("st.range_1")</li>
+                            <li>@T("st.range_2")</li>
+                            <li>@T("st.range_3")</li>
+                            <li>@T("st.range_4")</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="hx-card warn-border">
+                    <h3>@T("st.no_t")</h3>
+                    <p>@T("st.no_p")</p>
                 </div>
             </section>
         }
 
         @if (_section == "settings")
         {
-            <section class="help-section">
-                <div class="help-card">
-                    <h3>RiskManager — 1R</h3>
-                    <pre class="help-code">riskBudget ≈ balance × riskFrac (0.6–0.75%)
-qty ≈ riskBudget / |entry − SL|
-HardCapUsd ограничивает $ риска на сделку</pre>
-                    <table class="help-table">
-                        <tr><th>Параметр</th><th>Смысл</th></tr>
-                        <tr><td>1R / riskFrac</td><td>% equity при срабатывании SL</td></tr>
-                        <tr><td>HardCapUsd</td><td>Потолок $ риска</td></tr>
-                        <tr><td>SizeMult / SoftSkip</td><td>SymbolMemory после серии SL</td></tr>
-                        <tr><td>Leverage</td><td>Профиль × AI floor (~70%)</td></tr>
+            <section class="hx-section">
+                <h2>@T("set.title")</h2>
+                <p class="hx-p">@T("set.intro")</p>
+
+                <h3 class="hx-h3">@T("set.risk_h")</h3>
+                <div class="hx-table-wrap">
+                    <table class="hx-table">
+                        <thead>
+                            <tr>
+                                <th>@T("set.col_param")</th>
+                                <th>@T("set.col_default")</th>
+                                <th>@T("set.col_mean")</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td><code>MaxOpenPositions</code></td><td><b>4</b></td><td>@T("set.mop")</td></tr>
+                            <tr><td><code>MaxSameSidePositions</code></td><td><b>2</b></td><td>@T("set.mss")</td></tr>
+                            <tr><td><code>CorrelationFilterMode</code></td><td><b>StaticLimit</b></td><td>@T("set.cfm")</td></tr>
+                            <tr><td><code>MaxAllowedCorrelation</code></td><td>0.80</td><td>@T("set.mac")</td></tr>
+                            <tr><td><code>DynamicLiquiditySizing</code></td><td>true</td><td>@T("set.dls")</td></tr>
+                            <tr><td><code>MaxNotionalPctOfEquity</code></td><td><b>0.28</b></td><td>@T("set.mnp")</td></tr>
+                            <tr><td><code>HardCapUsdMajor / Alt</code></td><td>80 / 35</td><td>@T("set.hcap")</td></tr>
+                            <tr><td><code>PostCloseCooldownMinutes</code></td><td>45</td><td>@T("set.pcc")</td></tr>
+                        </tbody>
                     </table>
                 </div>
-                <div class="help-card">
-                    <h3>Institutional gates (Hard Risk + Anti-Tilt)</h3>
-                    <p>Шлюз <b>перед</b> ордером. SL не расширяется — только skip или уменьшение размера.</p>
-                    <table class="help-table">
-                        <tr><th>Слой</th><th>Поведение</th></tr>
-                        <tr><td>HardRisk</td><td>Max daily −3R / −3% equity, max 3 позиций → block ~24h</td></tr>
-                        <tr><td>AntiTilt</td><td>3× <code>SL_STRATEGY_FAIL</code> → cool-off 4h; weak avg R → risk ×0.5</td></tr>
-                        <tr><td>Regime / BTC</td><td>Chop → reject; спайк BTC → пауза альтов</td></tr>
-                        <tr><td>Macro calendar</td><td>Окно FOMC/CPI/NFP → пауза новых входов</td></tr>
+
+                <h3 class="hx-h3">@T("set.sq_h")</h3>
+                <div class="hx-table-wrap">
+                    <table class="hx-table">
+                        <thead><tr><th>@T("set.col_param")</th><th>@T("set.col_default")</th><th>@T("set.col_mean")</th></tr></thead>
+                        <tbody>
+                            <tr><td><code>MinQualityThreshold</code></td><td><b>78</b></td><td>@T("set.mqt")</td></tr>
+                            <tr><td><code>SignalSelectionStrategy</code></td><td>BestScoreAuction</td><td>@T("set.sss")</td></tr>
+                            <tr><td><code>AuctionWindowMs</code></td><td>400</td><td>@T("set.awm")</td></tr>
+                            <tr><td><code>WeightTrend / Deriv / Vol / RR</code></td><td>0.35 / 0.20 / 0.20 / 0.25</td><td>@T("set.wts")</td></tr>
+                            <tr><td><code>OrderbookGuardEnabled</code></td><td>true</td><td>@T("set.obg")</td></tr>
+                            <tr><td><code>MaxSpreadPct</code></td><td>0.0008 (0.08%)</td><td>@T("set.msp")</td></tr>
+                        </tbody>
                     </table>
-                    <p class="help-muted">Логи reject: <code>INST_HardRisk</code>, <code>INST_Regime</code>, <code>INST_NewsMacro</code>, <code>INST_MlClassifier</code>…</p>
                 </div>
-                <div class="help-card">
-                    <h3>ML / News Hard — где включать</h3>
-                    <p><b>Settings → Risk → «Institutional gates (ML / News hard mode)»</b></p>
-                    <table class="help-table">
-                        <tr><th>Переключатель</th><th>Ключ</th><th>Default</th></tr>
-                        <tr><td>ML Hard Reject</td><td><code>Institutional:EnableMlHardReject</code></td><td>off</td></tr>
-                        <tr><td>News Hard Mode</td><td><code>Institutional:EnableNewsHardMode</code></td><td>off</td></tr>
-                        <tr><td>ML Skip / Probe</td><td><code>MlSkipThreshold</code> / <code>MlProbeThreshold</code></td><td>0.42 / 0.55</td></tr>
-                        <tr><td>Legacy ML gate</td><td><code>MlGate:EnableMlSkipGate</code></td><td>off</td></tr>
-                        <tr><td>News Shadow</td><td><code>News:ShadowMode</code></td><td>on</td></tr>
+
+                <h3 class="hx-h3">@T("set.dual_h")</h3>
+                <div class="hx-table-wrap">
+                    <table class="hx-table">
+                        <thead><tr><th>@T("set.col_param")</th><th>@T("set.col_default")</th><th>@T("set.col_mean")</th></tr></thead>
+                        <tbody>
+                            <tr><td><code>Enabled</code></td><td>true</td><td>@T("set.d_en")</td></tr>
+                            <tr><td><code>CoreMajorCount / TrendUniverseCount</code></td><td>5 / 18</td><td>@T("set.d_uni")</td></tr>
+                            <tr><td><code>SpreadLiquidCount</code></td><td>25</td><td>@T("set.d_sp")</td></tr>
+                            <tr><td><code>RangeLeverageMin–Max</code></td><td>3–5</td><td>@T("set.d_rl")</td></tr>
+                            <tr><td><code>TrendLeverageMin–Max</code></td><td>5–10</td><td>@T("set.d_tl")</td></tr>
+                            <tr><td><code>RangeSizeMult</code></td><td>0.35</td><td>@T("set.d_rs")</td></tr>
+                            <tr><td><code>RequireFlowOnTrend / Volume</code></td><td>true / true</td><td>@T("set.d_flow")</td></tr>
+                            <tr><td><code>MinVolumeRatio</code></td><td><b>1.05</b></td><td>@T("set.d_vol")</td></tr>
+                        </tbody>
                     </table>
-                    <pre class="help-code">// appsettings.json + appsettings.runtime.json
-"Institutional": {
-  "EnableMlHardReject": false,
-  "EnableNewsHardMode": false,
-  "MlSkipThreshold": 0.42,
-  "MlProbeThreshold": 0.55
-}</pre>
-                    <div class="help-callout warn">
-                        UI пишет в <code>appsettings.runtime.json</code> (SharedData). Engine подхватывает с reload.
-                        Hard включайте только после Shadow KPI (ΔPF / отфильтрованные убытки).
+                </div>
+
+                <h3 class="hx-h3">@T("set.ml_h")</h3>
+                <div class="hx-table-wrap">
+                    <table class="hx-table">
+                        <thead><tr><th>@T("set.col_param")</th><th>@T("set.col_default")</th><th>@T("set.col_mean")</th></tr></thead>
+                        <tbody>
+                            <tr><td><code>EnableMlSkipGate</code></td><td><b>false</b></td><td>@T("set.ml_gate")</td></tr>
+                            <tr><td><code>SkipThreshold</code></td><td>0.55</td><td>@T("set.ml_th")</td></tr>
+                            <tr><td><code>EnableMlHardReject</code></td><td>false</td><td>@T("set.ml_hard")</td></tr>
+                            <tr><td><code>EnableNewsHardMode</code></td><td>false</td><td>@T("set.nw_hard")</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="hx-callout warn">
+                    <strong>@T("set.warn_t")</strong>
+                    <p>@T("set.warn_p")</p>
+                </div>
+            </section>
+        }
+
+        @if (_section == "risk")
+        {
+            <section class="hx-section">
+                <h2>@T("risk.title")</h2>
+                <div class="hx-grid-2">
+                    <div class="hx-card">
+                        <h3>@T("risk.size_h")</h3>
+                        <p>@T("risk.size_p")</p>
+                        <pre class="hx-code">risk$ = equity × riskFrac (~0.6–0.75%)
+qty  = risk$ / |entry − SL|
+then min(HardCapUsd, MaxNotional% × equity / price)</pre>
+                    </div>
+                    <div class="hx-card">
+                        <h3>@T("risk.exit_h")</h3>
+                        <ul class="hx-list">
+                            <li>@T("risk.exit_1")</li>
+                            <li>@T("risk.exit_2")</li>
+                            <li>@T("risk.exit_3")</li>
+                            <li>@T("risk.exit_4")</li>
+                        </ul>
                     </div>
                 </div>
-                <div class="help-card">
-                    <h3>TradeMemory</h3>
-                    <p><code>WindowDays</code> ~30, <code>HalfLifeDays</code> 7, <code>ProbeMinConfidence</code> ~0.72 — probe 0.25× при SoftSkip.</p>
-                </div>
-                <div class="help-card">
-                    <h3>PositionSupervisor</h3>
-                    <p>TP1–3, trailing, breakeven после TP1 (Live+Demo), algo STOP_MARKET; ремонт отсутствующих SL/TP.</p>
-                </div>
             </section>
         }
 
-        @if (_section == "ml")
+        @if (_section == "ui")
         {
-            <section class="help-section">
-                <div class="help-card">
-                    <h3>Фаза A — Shadow (по умолчанию)</h3>
-                    <pre class="help-code">"Institutional": { "EnableMlHardReject": false }
-"MlGate": { "EnableMlSkipGate": false }
-"News": { "ShadowMode": true }</pre>
-                    <p>ML и новости <b>не блокируют</b> входы. Считается P(win), size× probe, логи Shadow KPI / лента новостей.</p>
-                    <p>Смотрите <code>/ai-dashboard</code> — Actual vs Filtered, ΔPF. Цель для hard: ΔPF ≥ +0.15 на достаточной выборке.</p>
-                </div>
-                <div class="help-card">
-                    <h3>Фаза B — Обучение</h3>
-                    <pre class="help-code">python scripts/train_ml_skip_gate.py --input trade-features.jsonl --output SharedData/ml_skip_model.json</pre>
-                    <p>Фичи: conf, regime, ATR%, funding, hour, news impact… Модель подхватывается классификатором при наличии JSON.</p>
-                </div>
-                <div class="help-card">
-                    <h3>Фаза C — Hard gate</h3>
-                    <p><b>Settings → Risk → Institutional gates</b> или runtime JSON:</p>
-                    <pre class="help-code">"Institutional": {
-  "EnableMlHardReject": true,   // P(win) &lt; SkipThreshold → INST_MlClassifier
-  "EnableNewsHardMode": true,   // critical bearish → block (если ShadowMode=false)
-  "MlSkipThreshold": 0.42,
-  "MlProbeThreshold": 0.55
-}
-"News": { "ShadowMode": false }</pre>
-                    <table class="help-table">
-                        <tr><th>P(win)</th><th>Действие</th></tr>
-                        <tr><td>&lt; Skip (0.42)</td><td>Hard: reject / Shadow: только лог</td></tr>
-                        <tr><td>Skip…Probe (0.55)</td><td>Probe size ×0.25</td></tr>
-                        <tr><td>≥ Probe</td><td>Полный размер (после прочих фильтров)</td></tr>
-                    </table>
-                    <div class="help-callout warn">Не включайте hard на «пустой» истории. Сначала 50–100+ сделок в Shadow.</div>
-                </div>
-                <div class="help-card">
-                    <h3>Новости — роль</h3>
-                    <p>Не генератор сигналов. Защита: календарь (pause), high-impact → size↓, hard — только critical + Hard Mode.</p>
-                    <p>Poll ~15с (<code>News:PollSeconds</code>). Лента на <code>/ai-dashboard</code>. Полный хаб — раздел <b>Macro News Hub</b> / будущая страница <code>/macro-news</code>.</p>
+            <section class="hx-section">
+                <h2>@T("ui.title")</h2>
+                <div class="hx-grid-3">
+                    <div class="hx-card">
+                        <h3>/market</h3>
+                        <p>@T("ui.market")</p>
+                    </div>
+                    <div class="hx-card">
+                        <h3>/settings</h3>
+                        <p>@T("ui.settings")</p>
+                    </div>
+                    <div class="hx-card">
+                        <h3>/ai-dashboard</h3>
+                        <p>@T("ui.ai")</p>
+                    </div>
+                    <div class="hx-card">
+                        <h3>/macro-news</h3>
+                        <p>@T("ui.news")</p>
+                    </div>
+                    <div class="hx-card">
+                        <h3>History</h3>
+                        <p>@T("ui.hist")</p>
+                    </div>
+                    <div class="hx-card">
+                        <h3>Telegram / TWA</h3>
+                        <p>@T("ui.tg")</p>
+                    </div>
                 </div>
             </section>
         }
 
-
-        @if (_section == "macro")
+        @if (_section == "ops")
         {
-            <section class="help-section">
-                <div class="help-card">
-                    <h3>Макет страницы /macro-news</h3>
-                    <pre class="help-ascii">┌──────────────────────────────────────────────────────────────────────────┐
-│ VERTEX  /macro-news                          News shield: SHADOW ●       │
-├──────────────────────────────────────────────────────────────────────────┤
-│ TOP BAR                                                                  │
-│  ┌─────────────┐ ┌──────────────┐ ┌─────────────┐ ┌────────────────────┐ │
-│  │ Next: CPI   │ │ Fear&Greed   │ │ 24h Sent.   │ │ AI Macro Bias      │ │
-│  │ 02d 14h 22m │ │ 78 Extreme   │ │ Bull 62%    │ │ HIGH VOL RISK  ⚠   │ │
-│  │             │ │ ▁▂▃▅▇ spark  │ │ Bear 38%    │ │                     │ │
-│  └─────────────┘ └──────────────┘ └─────────────┘ └────────────────────┘ │
-├──────────────────────────────────────────────────────────────────────────┤
-│ FILTERS: [All] [Macro] [Crypto] [Bull] [Bear] [Impact≥4]  Ticker: ____   │
-├───────────────────────────────┬──────────────────────────────────────────┤
-│ LIVE FEED (SignalR push)      │  SHADOW KPI / IMPACT                     │
-│ ┌───────────────────────────┐ │  Actual PF 1.11  │ Filtered 1.11         │
-│ │ 🔴 5/5  BEAR  12:40Z      │ │  ΔPF +0.00 (цель ≥ +0.15 для Hard)      │
-│ │ FOMC hold — USD spike     │ │                                          │
-│ │ BTC ETH  size×0.5 pause?  │ │  Policy: Shadow ON · Hard OFF            │
-│ │ TL;DR: rates unchanged…   │ │                                          │
-│ └───────────────────────────┘ │  Legend:                                 │
-│ ┌───────────────────────────┐ │  🔴 Impact 5 Critical                    │
-│ │ 🟡 3/5  NEUT  12:38Z      │ │  🟡 Impact 3–4 Medium/High               │
-│ │ SOL listing rumor         │ │  ⚪ Impact 1–2 Noise                     │
-│ │ SOLUSDT  tape only        │ │                                          │
-│ └───────────────────────────┘ │                                          │
-│ ┌───────────────────────────┐ │                                          │
-│ │ ⚪ 2/5  BULL  12:35Z      │ │                                          │
-│ │ Fear&Greed 78 (regime)    │ │                                          │
-│ └───────────────────────────┘ │                                          │
-└───────────────────────────────┴──────────────────────────────────────────┘</pre>
+            <section class="hx-section">
+                <h2>@T("ops.title")</h2>
+                <div class="hx-card">
+                    <h3>@T("ops.logs_h")</h3>
+                    <pre class="hx-code">[CORE] SIGNAL / REJECT htf_bias|impulse_chase|no_volume_flow|rsi_fomo
+[ROUTER] CORE → channel | held (regime=RANGE)
+[DUAL-MODE] reject … | size× · lev=
+[RISK] notional-cap …
+[PROC] REJECT stage=… reason=…
+[EXEC] OrderCreated · [SL_ALGO] · [TP…]</pre>
                 </div>
-
-                <div class="help-card">
-                    <h3>Как это работает (поток)</h3>
-                    <pre class="help-ascii">Источники (CryptoCompare, F&amp;G, RSS, календарь)
-        │  poll ~15s
-        ▼
-  Dedup + Score (Impact 1–5, Sentiment, Tickers, TL;DR)
-        │
-        ├─► news_events / news_tape  ──► UI /macro-news + /ai-dashboard
-        │
-        └─► NewsCatalyst + Institutional pipeline
-                 │
-                 ├─ Shadow (default): только KPI / size hint, входы НЕ режутся hard
-                 ├─ Macro calendar: pause новых входов в окне FOMC/CPI/NFP
-                 └─ Hard Mode (Settings): Impact≥4–5 может блокировать НОВЫЕ входы
-        CORE / стратегия по-прежнему единственный генератор сигналов</pre>
-                </div>
-
-                <div class="help-card">
-                    <h3>Связь с торговлей</h3>
-                    <table class="help-table">
-                        <tr><th>Impact</th><th>Shadow (сейчас)</th><th>Hard (Settings)</th></tr>
-                        <tr><td>1–2</td><td>Лента</td><td>Лента</td></tr>
-                        <tr><td>3</td><td>size× hint</td><td>size×</td></tr>
-                        <tr><td>4</td><td>KPI «would pause»</td><td>Pause новых входов</td></tr>
-                        <tr><td>5</td><td>KPI</td><td>Pause + opt-in BE (если включите)</td></tr>
-                    </table>
-                    <p class="help-muted">Включать Hard: <b>Settings → Risk → Institutional gates</b>. Пока ΔPF≈0 и мало макро-событий — оставить Shadow.</p>
-                </div>
-
-                <div class="help-card">
-                    <div class="help-callout">UI страницы: переключатель <b>EN / RU</b>, заголовки ленты с лёгким RU-переводом типичных шаблонов (Fear&amp;Greed, FOMC, CPI…); остальной оригинал с источника.</div>
-                <h3>Где смотреть</h3>
-                    <ul>
-                        <li><code>/macro-news</code> — <b>живая страница</b> (EN/RU, лента, макро-бар, KPI, фильтры)</li>
-                        <li><code>/ai-dashboard</code> — компактная лента и фильтр PF</li>
-                        <li><code>/help</code> → этот раздел</li>
-                    </ul>
+                <div class="hx-card">
+                    <h3>@T("ops.check_h")</h3>
+                    <ol class="hx-list num">
+                        <li>@T("ops.c1")</li>
+                        <li>@T("ops.c2")</li>
+                        <li>@T("ops.c3")</li>
+                        <li>@T("ops.c4")</li>
+                    </ol>
                 </div>
             </section>
         }
 
-        @if (_section == "arch")
-        {
-            <section class="help-section">
-                <div class="help-card">
-                    <h3>Поток</h3>
-                                        <pre class="help-ascii">CORE signal
-  → Institutional pipeline
-      HardRisk → AntiTilt → Macro → News → Regime → BTC → OI/Funding → ML → Sizer
-  → RiskManager 1R / Demo=Live exec
-  → Supervisor TP/SL / Journal / Memory
-</pre>
-                </div>
-                <div class="help-grid">
-                    <div class="help-card mock"><h4>/market</h4><div class="mock-ui"><div class="mock-bar">Chart · TP/SL</div><div class="mock-chart">Candles</div></div></div>
-                    <div class="help-card mock"><h4>/ai-dashboard</h4><div class="mock-ui"><div class="mock-bar">Shadow KPI</div><div class="mock-chart">Neurons</div></div></div>
-                    <div class="help-card mock"><h4>/missed-trades</h4><div class="mock-ui"><div class="mock-bar">Signals</div><div class="mock-chart">Thesis</div></div></div>
-                    <div class="help-card mock"><h4>Journal</h4><div class="mock-ui"><div class="mock-bar">SQLite</div><div class="mock-chart">Trades · R</div></div></div>
-                </div>
-            </section>
-        }
-
-
-        @if (_section == "risk-engine")
-        {
-            <section class="help-section">
-                <div class="help-card">
-                    <h3>Correlation Filter Mode</h3>
-                    <p>Хардкод «макс. 2 LONG/SHORT» <b>удалён</b>. Лимиты задаются только в Settings → Risk.</p>
-                    <table class="help-table">
-                        <tr><th>Режим</th><th>Поведение</th></tr>
-                        <tr><td><code>Disabled</code></td><td>Только <b>MaxOpenPositions</b>. Можно 5 LONG подряд при лимите 5.</td></tr>
-                        <tr><td><code>StaticLimit</code></td><td>Не больше <b>MaxSameSidePositions</b> в одну сторону (0 = без лимита).</td></tr>
-                        <tr><td><code>DynamicCorrelation</code></td><td>Pearson R по 1H log-return с каждой открытой позицией той же стороны. Если R &gt; <b>MaxAllowedCorrelation</b> (default 0.85) → REJECT.</td></tr>
-                    </table>
-                </div>
-                <div class="help-card">
-                    <h3>Pearson R (DynamicCorrelation)</h3>
-                    <pre class="help-code">R = corr( log-returns(X 1H), log-returns(Y 1H) )  // окно ~48 баров
-if R > MaxAllowedCorrelation → REJECT HIGH_CORRELATION</pre>
-                    <p>Смысл: не набирать портфель из почти одинаковых альтов «как один BTC».</p>
-                </div>
-                <div class="help-card">
-                    <h3>LiquidityGuard → Dynamic Sizing</h3>
-                    <p>При <b>DynamicLiquiditySizing</b> soft low volume не всегда блокирует — режет size:</p>
-                    <table class="help-table">
-                        <tr><th>Volume Score</th><th>Действие</th></tr>
-                        <tr><td>0.2–0.3</td><td>size × 0.7</td></tr>
-                        <tr><td>0.1–0.2</td><td>size × 0.5</td></tr>
-                        <tr><td>&lt; 0.1</td><td>REJECT EXTREME_LOW_LIQUIDITY</td></tr>
-                    </table>
-                </div>
-            </section>
-        }
-
-        @if (_section == "signal-quality")
-        {
-            <section class="help-section">
-                <div class="help-card">
-                    <h3>CompositeScore</h3>
-                    <pre class="help-code">Score = wT×Trend + wD×Derivatives + wV×Volume + wR×RiskReward
-(веса нормализуются; default 0.35 / 0.20 / 0.20 / 0.25)</pre>
-                    <ul class="help-list">
-                        <li><b>Trend</b> — confidence CORE/AI, super-signal, reason tags</li>
-                        <li><b>Derivatives</b> — proxy через LiquidityScore (OI feed — roadmap)</li>
-                        <li><b>Volume</b> — SmartFlow / LiquidityGuard score</li>
-                        <li><b>R:R</b> — TP1 distance / SL distance (≥1.5R лучше)</li>
-                    </ul>
-                    <p>Если Score &lt; <b>MinQualityThreshold</b> (default 70) → сделка не идёт на слот.</p>
-                </div>
-                <div class="help-card">
-                    <h3>Signal Auction</h3>
-                    <p><b>BestScoreAuction</b> (рекомендуется): окно ~400 ms, ранг по score, на N свободных слотов — только N лучших.</p>
-                    <p><b>FirstComeFirstServed</b>: FIFO среди тех, кто прошёл MinQuality.</p>
-                    <pre class="help-code">[SignalAuction] Received 5 candidate signals for 2 available slots.
-  1. SOLUSDT LONG | 89.2% -> APPROVED (Slot 1)
-  2. AVAXUSDT LONG | 81.5% -> APPROVED (Slot 2)
-  3. NEARUSDT LONG | 76.0% -> REJECTED (Outperformed in auction)
-  4. DOGEUSDT LONG | 54.1% -> REJECTED (Below MinQualityThreshold 70%)</pre>
-                    <p>Settings → Risk → <b>Signal Quality &amp; Selection</b>.</p>
-                    <p>Телеметрия: <code>SharedData/signal_auction_logs.jsonl</code> (APPROVED / OUTPERFORMED / BELOW_THRESHOLD / WIDE_SPREAD).</p>
-                    <p><b>Derivatives</b> теперь с live Binance OI + Funding (не proxy). <b>Orderbook Guard</b>: спред &gt; MaxSpread → reject; тонкий стакан → size×.</p>
-                </div>
-                <div class="help-card">
-                    <h3>Рекомендации по рынку</h3>
-                    <table class="help-table">
-                        <tr><th>Режим</th><th>MinQuality</th><th>Веса</th></tr>
-                        <tr><td>Тренд</td><td>65–70</td><td>↑ Trend, ↑ R:R</td></tr>
-                        <tr><td>Флэт / chop</td><td>75–80</td><td>↑ Volume, ↑ Derivatives</td></tr>
-                    </table>
-                </div>
-            </section>
-        }
-
-        @if (_section == "logs")
-        {
-            <section class="help-section">
-                <div class="help-card">
-                    <h3>Справочник REJECT (актуально)</h3>
-                    <table class="help-table">
-                        <tr><th>Код</th><th>Смысл</th><th>Что делать</th></tr>
-                        <tr><td><code>HIGH_CORRELATION</code></td><td>Pearson R к открытой позиции той же стороны выше лимита</td><td>Поднять MaxAllowedCorrelation или закрыть дубль / Disabled</td></tr>
-                        <tr><td><code>DIR_MAX_SAME_SIDE_REACHED</code></td><td>StaticLimit: слишком много LONG или SHORT</td><td>Увеличить MaxSameSidePositions или Disabled</td></tr>
-                        <tr><td><code>EXTREME_LOW_LIQUIDITY</code></td><td>Volume score &lt; 0.1</td><td>Ждать объём / другой символ</td></tr>
-                        <tr><td><code>BELOW_QUALITY_THRESHOLD</code> / auction log</td><td>CompositeScore &lt; MinQuality</td><td>Снизить порог или улучшить сетап (R:R, conf)</td></tr>
-                        <tr><td><code>Outperformed in auction</code></td><td>Свободных слотов мало, score ниже конкурентов</td><td>Норма; поднять MaxOpen или качество</td></tr>
-                        <tr><td><code>MAX_POSITIONS</code></td><td>Достигнут MaxOpenPositions</td><td>Закрыть позицию или поднять лимит</td></tr>
-                        <tr><td><code>MICRO_SL</code> / risk_geo</td><td>Стоп слишком узкий/широкий</td><td>CORE geometry; не руками</td></tr>
-                        <tr><td><code>RSI FOMO</code></td><td>Вход на перекупленности/перепроданности</td><td>Ждать откат</td></tr>
-                    </table>
-                </div>
-
-                <div class="help-card">
-                    <table class="help-table">
-                        <tr><th>Причина</th><th>Действие</th></tr>
-                        <tr><td><code>QTY_ZERO / budget=0</code></td><td>Demo equity / Live margin</td></tr>
-                        <tr><td><code>BAD_1M_TIMING</code></td><td>Ждать лучший 1m</td></tr>
-                        <tr><td><code>429 / -1003</code></td><td>Cooldown algo API (уже в коде)</td></tr>
-                        <tr><td><code>-2019 margin</code></td><td>Пополнить Futures</td></tr>
-                        <tr><td><code>DEMO-ONLY</code></td><td>Норма без Live balance</td></tr>
-                    </table>
-                </div>
-            </section>
-        }
-
-        @if (_section == "twa")
-        {
-            <section class="help-section">
-                <div class="help-card">
-                    <h3>Telegram Mini App</h3>
-                    <pre class="help-code">"Telegram": {
-  "BotToken": "...", "ChatId": "...",
-  "MiniAppUrl": "https://TUNNEL/twa/dashboard"
-}</pre>
-                    <p>Команды: <code>/status</code> <code>/kill</code> <code>/resume</code> <code>/pause</code> <code>/dashboard</code>. См. <code>TELEGRAM_MINIAPP.md</code>.</p>
-                </div>
-            </section>
-        }
-
-        @if (_section == "db")
-        {
-            <section class="help-section">
-                <div class="help-card">
-                    <h3>vertex_system.db</h3>
-                    <p>Путь: <code>C:\Vertex\Engines\vertex_system.db</code></p>
-                    <ul class="help-list">
-                        <li><b>Users</b> — аккаунты</li>
-                        <li><b>UserSettings</b> — API keys (AES), risk</li>
-                        <li><b>DemoAccounts</b> — баланс Demo</li>
-                        <li><b>UserSessions</b> — refresh (заготовка)</li>
-                    </ul>
-                    <p>После Register в логе: <code>[SYSTEM-DB] Upsert user …</code></p>
-                    <pre class="help-code">SELECT * FROM Users;
-SELECT * FROM DemoAccounts;</pre>
-                </div>
-            </section>
-        }
+        <footer class="hx-footer">
+            Vertex AutoTrade · Dual Mode Expert · @_lang.ToUpperInvariant()
+        </footer>
     </main>
 </div>
 
 <style>
-.help-root{display:grid;grid-template-columns:250px 1fr;min-height:calc(100vh - 56px);background:#0b0f14;color:#e6edf3;font-family:Inter,system-ui,sans-serif}
-.help-nav{border-right:1px solid rgba(255,255,255,.08);background:#0d1219;padding:14px 10px;display:flex;flex-direction:column;gap:10px;position:sticky;top:0;height:calc(100vh - 56px);overflow:auto}
-.help-brand{display:flex;gap:10px;align-items:center;padding:4px 6px 10px}
-.help-logo{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#00d4ff33,#00ff9c22);border:1px solid rgba(0,212,255,.35);display:grid;place-items:center;font-weight:700;color:#00d4ff}
-.help-title{font-weight:700;font-size:14px}.help-sub{font-size:11px;color:#8b9bb0}
-.help-search{width:100%;box-sizing:border-box;background:#121a24;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:8px 10px;color:#e6edf3;font-size:13px}
-.help-toc{display:flex;flex-direction:column;gap:4px;flex:1}
-.help-toc-item{display:flex;gap:8px;align-items:center;background:transparent;border:1px solid transparent;color:#b6c2d0;border-radius:8px;padding:9px 10px;text-align:left;cursor:pointer;font-size:13px}
-.help-toc-item:hover{background:rgba(255,255,255,.04);color:#fff}
-.help-toc-item.active{background:rgba(0,212,255,.1);border-color:rgba(0,212,255,.35);color:#7fe9ff}
-.help-nav-foot{display:flex;gap:12px;font-size:12px;padding:8px 4px}
-.help-nav-foot a{color:#3b9eff;text-decoration:none}
-.help-main{padding:20px 28px 48px;max-width:920px;overflow:auto}
-.help-header h1{margin:0 0 6px;font-size:22px}.help-lead{margin:0 0 18px;color:#8b9bb0;font-size:14px;line-height:1.45}
-.help-section{display:flex;flex-direction:column;gap:14px}
-.help-card{background:rgba(18,26,36,.9);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:16px 18px}
-.help-card h3,.help-card h4{margin:0 0 10px;font-size:15px;color:#f0f6fc}
-.help-card p{margin:0 0 10px;font-size:13.5px;line-height:1.55;color:#c5d0dc}
-.help-card.step{position:relative;padding-left:52px}
-.step-n{position:absolute;left:14px;top:16px;width:28px;height:28px;border-radius:50%;background:#00d4ff22;border:1px solid #00d4ff66;color:#7fe9ff;display:grid;place-items:center;font-weight:700;font-size:13px}
-.help-code,.help-ascii{background:#0a0e14;border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:12px 14px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45;color:#9fefc0;margin:8px 0 12px}
-.help-list{margin:0 0 10px;padding-left:18px;color:#c5d0dc;font-size:13.5px;line-height:1.55}
-.help-table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0}
-.help-table th,.help-table td{border-bottom:1px solid rgba(255,255,255,.07);padding:8px 10px;text-align:left}
-.help-table th{color:#8b9bb0;font-size:11px;text-transform:uppercase}
-.help-callout{border-radius:8px;padding:10px 12px;font-size:13px;margin-top:8px}
-.help-callout.ok{background:rgba(0,255,156,.08);border:1px solid rgba(0,255,156,.25);color:#b6f5d4}
-.help-callout.warn{background:rgba(255,180,0,.08);border:1px solid rgba(255,180,0,.28);color:#ffe2a8}
-.help-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
-.mock-ui{border:1px solid rgba(0,212,255,.25);border-radius:8px;overflow:hidden;margin-bottom:8px;background:#070b10}
-.mock-bar{padding:6px 10px;font-size:11px;background:#121a24;color:#7fe9ff}
-.mock-chart{height:56px;display:grid;place-items:center;font-size:11px;color:#5a6a7e}
-code{background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px;font-size:12px}
-a{color:#3b9eff}
-@@media (max-width:900px){.help-root{grid-template-columns:1fr}.help-nav{position:relative;height:auto}}
-.help-muted{opacity:.75;font-size:13px;margin-top:8px}
+    .hx-root { display:flex; min-height:100vh; background:#0b0f14; color:#e8eef7; font-family:Inter,system-ui,sans-serif; }
+    .hx-nav { width:280px; flex-shrink:0; background:linear-gradient(180deg,#0f1520,#0b0f14); border-right:1px solid #1e2a3a; padding:16px 12px; display:flex; flex-direction:column; gap:12px; position:sticky; top:0; height:100vh; overflow:auto; }
+    .hx-brand { display:flex; gap:10px; align-items:center; padding:4px 6px 12px; }
+    .hx-logo { width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#22d3ee,#3b82f6); display:grid; place-items:center; font-weight:800; color:#041018; }
+    .hx-brand-title { font-weight:800; letter-spacing:.08em; font-size:13px; }
+    .hx-brand-sub { font-size:11px; color:#8b9bb4; }
+    .hx-lang { display:flex; gap:6px; }
+    .hx-lang button { flex:1; border:1px solid #243246; background:#121a26; color:#9fb0c9; border-radius:8px; padding:6px; cursor:pointer; font-weight:700; font-size:12px; }
+    .hx-lang button.on { background:#12304a; border-color:#22d3ee; color:#7dd3fc; }
+    .hx-search { width:100%; background:#121a26; border:1px solid #243246; border-radius:10px; padding:8px 10px; color:#e8eef7; font-size:13px; }
+    .hx-toc { display:flex; flex-direction:column; gap:4px; flex:1; }
+    .hx-toc-item { display:flex; gap:8px; align-items:center; text-align:left; border:0; background:transparent; color:#9fb0c9; padding:9px 10px; border-radius:10px; cursor:pointer; font-size:13px; }
+    .hx-toc-item:hover { background:#151e2c; color:#e8eef7; }
+    .hx-toc-item.active { background:#132536; color:#7dd3fc; box-shadow:inset 2px 0 0 #22d3ee; }
+    .hx-ico { width:18px; opacity:.9; }
+    .hx-nav-foot { display:flex; flex-wrap:wrap; gap:8px; padding-top:8px; border-top:1px solid #1e2a3a; }
+    .hx-nav-foot a { color:#7dd3fc; font-size:12px; text-decoration:none; }
+    .hx-main { flex:1; padding:28px 32px 48px; max-width:1100px; }
+    .hx-header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:22px; }
+    .hx-header h1 { margin:0 0 6px; font-size:26px; font-weight:800; letter-spacing:-.02em; }
+    .hx-lead { margin:0; color:#8b9bb4; font-size:14px; max-width:640px; line-height:1.5; }
+    .hx-badge { font-size:11px; font-weight:700; color:#7dd3fc; border:1px solid #1e4a5f; background:#0d2230; padding:6px 10px; border-radius:999px; white-space:nowrap; }
+    .hx-section { display:flex; flex-direction:column; gap:16px; }
+    .hx-h3 { margin:8px 0 0; font-size:15px; color:#cbd5e1; }
+    .hx-p { color:#a8b6c9; line-height:1.55; margin:0; }
+    .hx-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .hx-grid-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+    .hx-card { background:#121a26; border:1px solid #1e2a3a; border-radius:14px; padding:16px 16px 14px; box-shadow:0 8px 24px rgba(0,0,0,.25); }
+    .hx-card.step { position:relative; padding-top:18px; }
+    .hx-card.warn-border { border-color:#7c3a1d; background:#1a1410; }
+    .hx-step { position:absolute; top:-10px; left:14px; width:26px; height:26px; border-radius:8px; background:linear-gradient(135deg,#22d3ee,#3b82f6); color:#041018; font-weight:800; display:grid; place-items:center; font-size:13px; }
+    .hx-card h3 { margin:0 0 8px; font-size:15px; }
+    .hx-card p { margin:0; color:#9fb0c9; font-size:13px; line-height:1.5; }
+    .hx-code { margin:10px 0 0; background:#0a1018; border:1px solid #1a2535; border-radius:10px; padding:10px 12px; font-size:12px; color:#a5f3fc; overflow:auto; white-space:pre-wrap; }
+    .hx-list { margin:8px 0 0; padding-left:18px; color:#b6c4d8; font-size:13px; line-height:1.55; }
+    .hx-list.num { list-style:decimal; }
+    .hx-callout { border-radius:12px; padding:14px 16px; border:1px solid #1e3a4a; background:#0e1a24; color:#b6c4d8; font-size:13px; line-height:1.5; }
+    .hx-callout.ok { border-color:#14532d; background:#0c1a12; }
+    .hx-callout.warn { border-color:#854d0e; background:#1a1508; }
+    .hx-callout strong { color:#e8eef7; display:block; margin-bottom:4px; }
+    .hx-flow { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:8px 0 12px; }
+    .hx-flow-node { background:#121a26; border:1px solid #2a3a50; border-radius:12px; padding:10px 12px; font-size:12px; font-weight:700; text-align:center; min-width:100px; }
+    .hx-flow-node span { display:block; font-weight:500; color:#8b9bb4; font-size:11px; margin-top:2px; }
+    .hx-flow-node.accent { border-color:#22d3ee55; box-shadow:0 0 20px #22d3ee22; }
+    .hx-flow-node.accent2 { border-color:#a78bfa55; }
+    .hx-flow-node.ok { border-color:#22c55e55; }
+    .hx-flow-arrow { color:#3b82f6; font-weight:800; }
+    .hx-table-wrap { overflow:auto; border-radius:12px; border:1px solid #1e2a3a; }
+    .hx-table { width:100%; border-collapse:collapse; font-size:13px; }
+    .hx-table th { text-align:left; background:#0f1722; color:#8b9bb4; padding:10px 12px; border-bottom:1px solid #1e2a3a; font-weight:600; }
+    .hx-table td { padding:10px 12px; border-bottom:1px solid #152033; color:#c5d0e0; vertical-align:top; }
+    .hx-table code { color:#7dd3fc; font-size:12px; }
+    .hx-tag { display:inline-block; font-size:10px; font-weight:800; letter-spacing:.06em; padding:3px 8px; border-radius:999px; margin-bottom:8px; }
+    .hx-tag.green { background:#052e16; color:#4ade80; border:1px solid #166534; }
+    .hx-tag.blue { background:#0c1e36; color:#60a5fa; border:1px solid #1e40af; }
+    .hx-footer { margin-top:28px; color:#5b6b82; font-size:11px; }
+    @@media (max-width: 960px) {
+        .hx-root { flex-direction:column; }
+        .hx-nav { width:100%; height:auto; position:relative; }
+        .hx-grid-2, .hx-grid-3 { grid-template-columns:1fr; }
+        .hx-main { padding:16px; }
+    }
 </style>
 
 @code {
+    private string _lang = "ru";
     private string _section = "quick";
     private string _query = "";
 
-    private sealed record TocItem(string Id, string Label, string Icon, string Title, string Lead, string[] Keywords);
-
-    private static readonly TocItem[] Toc =
+    private record TocItem(string Id, string Icon, string LabelRu, string LabelEn)
     {
-        new("quick", "Quick Start", "🚀", "Быстрый старт", "SharedData, Futures, Demo $10k.", new[]{"start","demo","shareddata","binance"}),
-        new("settings", "Settings & Risk", "⚙️", "Настройки и риск", "1R, Institutional, Signal Quality.", new[]{"risk","1r","hardcap","institutional","signal quality","settings"}),
-        new("risk-engine", "Risk Engine", "🛡️", "Risk Engine", "Pearson, same-side, Liquidity sizing.", new[]{"correlation","pearson","same side","liquidity","dir_max"}),
-        new("signal-quality", "Signal Quality", "🎯", "Отбор сигналов", "CompositeScore, Auction, EV.", new[]{"auction","quality","score","composite","threshold"}),
-        new("ml", "ML Gate & News", "🧠", "ML & News", "Shadow → train → Institutional hard.", new[]{"ml","shadow","gate","news","institutional","hard reject"}),
-        new("macro", "Macro News Hub", "📰", "Macro & Live News", "Лента, Impact, Shadow/Hard, KPI.", new[]{"macro","news","fomc","cpi","fear","greed","impact","/macro-news"}),
-        new("arch", "Architecture & UI", "🗺️", "Архитектура", "CORE → Demo/Live и экраны.", new[]{"architecture","market","ui"}),
-        new("logs", "Logs & Rejects", "📋", "Логи", "REJECT, INST_*, 429, margin.", new[]{"reject","inst","log","429"}),
-        new("db", "Users & SQLite", "🗄️", "Пользователи и БД", "vertex_system.db таблицы.", new[]{"sqlite","users","demoaccounts"}),
-        new("twa", "Telegram Mini App", "📱", "Telegram", "TWA, tunnel, /kill.", new[]{"telegram","twa","mini"}),
-    };
+        public string Label => LabelRu; // bound via property on instance in FilteredToc
+    }
 
-    private IEnumerable<TocItem> FilteredToc
+    private IEnumerable<(string Id, string Icon, string Label)> FilteredToc
     {
         get
         {
-            var q = (_query ?? "").Trim().ToLowerInvariant();
-            if (string.IsNullOrEmpty(q)) return Toc;
-            return Toc.Where(t => t.Label.Contains(q, StringComparison.OrdinalIgnoreCase)
-                || t.Keywords.Any(k => k.Contains(q, StringComparison.OrdinalIgnoreCase)));
+            IEnumerable<(string Id, string Icon, string Label)> all = new[]
+            {
+                ("quick", "⚡", _lang=="en" ? "Quick start" : "Быстрый старт"),
+                ("pipeline", "🔗", _lang=="en" ? "Pipeline" : "Пайплайн"),
+                ("strategy", "📈", _lang=="en" ? "Expert strategy" : "Стратегия Expert"),
+                ("settings", "⚙️", _lang=="en" ? "UI settings" : "Настройки UI"),
+                ("risk", "🛡", _lang=="en" ? "Risk & exits" : "Риск и выходы"),
+                ("ui", "🖥", _lang=="en" ? "UI map" : "Карта интерфейса"),
+                ("ops", "📋", _lang=="en" ? "Ops & logs" : "Операции и логи"),
+            };
+            if (string.IsNullOrWhiteSpace(_query)) return all;
+            var q = _query.Trim();
+            return all.Where(t => t.Label.Contains(q, StringComparison.OrdinalIgnoreCase) || t.Id.Contains(q, StringComparison.OrdinalIgnoreCase));
         }
     }
 
-    private string CurrentTitle => Toc.FirstOrDefault(t => t.Id == _section)?.Title ?? "Help";
-    private string CurrentLead => Toc.FirstOrDefault(t => t.Id == _section)?.Lead ?? "";
+    private string CurrentTitle => _section switch
+    {
+        "quick" => T("title.quick"),
+        "pipeline" => T("title.pipeline"),
+        "strategy" => T("title.strategy"),
+        "settings" => T("title.settings"),
+        "risk" => T("title.risk"),
+        "ui" => T("title.ui"),
+        "ops" => T("title.ops"),
+        _ => "Help"
+    };
+
+    private string CurrentLead => _section switch
+    {
+        "quick" => T("lead.quick"),
+        "pipeline" => T("lead.pipeline"),
+        "strategy" => T("lead.strategy"),
+        "settings" => T("lead.settings"),
+        "risk" => T("lead.risk"),
+        "ui" => T("lead.ui"),
+        "ops" => T("lead.ops"),
+        _ => ""
+    };
+
     private void Go(string id) => _section = id;
+    private void SetLang(string lang) => _lang = lang is "en" ? "en" : "ru";
+
+    private string T(string key)
+    {
+        var ru = _lang != "en";
+        return key switch
+        {
+            "help.brand_sub" => ru ? "Справка · Production" : "Help · Production",
+            "help.search" => ru ? "Поиск раздела…" : "Search sections…",
+
+            "title.quick" => ru ? "Быстрый старт" : "Quick start",
+            "title.pipeline" => ru ? "Пайплайн системы" : "System pipeline",
+            "title.strategy" => ru ? "Стратегия Expert v2.0" : "Expert strategy v2.0",
+            "title.settings" => ru ? "Настройки UI — справочник" : "UI settings reference",
+            "title.risk" => ru ? "Риск и управление позицией" : "Risk & position management",
+            "title.ui" => ru ? "Карта интерфейса" : "UI map",
+            "title.ops" => ru ? "Операции, логи, чек-лист" : "Ops, logs, checklist",
+
+            "lead.quick" => ru ? "Запуск с нуля, общие папки данных и профессиональные дефолты из коробки." : "From zero: shared data folders and professional defaults out of the box.",
+            "lead.pipeline" => ru ? "От свечей до ордера: CORE/MR → Router → Risk → Live и Demo одной логикой." : "From candles to orders: CORE/MR → Router → Risk → Live & Demo same logic.",
+            "lead.strategy" => ru ? "TREND = pullback + flow. RANGE = спред/mean-reversion без мажоров." : "TREND = pullback + flow. RANGE = spread/mean-reversion excluding majors.",
+            "lead.settings" => ru ? "Каждый параметр Settings с дефолтом и смыслом. Меняется без пересборки (runtime)." : "Every Settings parameter with default and meaning. Hot-reloadable at runtime.",
+            "lead.risk" => ru ? "1R sizing, notional cap, частичные TP и перенос стопа." : "1R sizing, notional cap, partial TPs and stop trail/lock.",
+            "lead.ui" => ru ? "Где смотреть позиции, историю, новости и AI-метрики." : "Where to watch positions, history, news and AI metrics.",
+            "lead.ops" => ru ? "Ключевые теги логов и порядок проверки перед Live." : "Key log tags and pre-Live checklist.",
+
+            "quick.s1_t" => ru ? "Конфиг и SharedData" : "Config & SharedData",
+            "quick.s1_p" => ru ? "Engine и Web обязаны смотреть в один Root. Журнал — SQLite, сигналы — JSON/каналы." : "Engine and Web must share one Root. Journal is SQLite; signals via JSON/channels.",
+            "quick.s2_t" => ru ? "Binance + запуск" : "Binance + launch",
+            "quick.s2_p" => ru ? "USDT-M API (Trade, без Withdraw). Сначала Engine, затем Web." : "USDT-M API (Trade, no Withdraw). Start Engine first, then Web.",
+            "quick.s3_t" => ru ? "Demo → Live" : "Demo → Live",
+            "quick.s3_p" => ru ? "Демо-счёт независим от биржи. Сначала бумага, потом реальные ордера." : "Demo balance is independent of the exchange. Paper first, then live orders.",
+            "quick.defaults_t" => ru ? "Профессиональные дефолты (уже в appsettings)" : "Professional defaults (already in appsettings)",
+            "quick.defaults_p" => ru ? "После pull эти значения — стартовая безопасная конфигурация. Тонкая настройка — в /settings." : "After pull these values are the safe starting config. Fine-tune in /settings.",
+
+            "pipe.title" => ru ? "Сквозной поток" : "End-to-end flow",
+            "pipe.intro" => ru ? "Сигнал рождается в стратегии, проходит институциональные фильтры и только потом становится ордером на бирже и записью Demo." : "A signal is born in strategy, passes institutional filters, then becomes an exchange order and a Demo fill.",
+            "pipe.trend_t" => ru ? "Нога TREND (CORE)" : "TREND leg (CORE)",
+            "pipe.trend_1" => ru ? "Pullback к EMA в структуре HH/HL (приоритет)." : "Pullback to EMA inside HH/HL structure (priority).",
+            "pipe.trend_2" => ru ? "На majors — только breakout + retest (без naked breakout)." : "On majors — breakout + retest only (no naked breakout).",
+            "pipe.trend_3" => ru ? "HTF bias (EMA50), RSI FOMO, impulse-chase ban, volume ≥ 1.05×." : "HTF bias (EMA50), RSI FOMO, impulse-chase ban, volume ≥ 1.05×.",
+            "pipe.trend_4" => ru ? "R:R до TP1 ≥ 1.5, structure SL + min 0.8%." : "R:R to TP1 ≥ 1.5, structure SL + min 0.8%.",
+            "pipe.trend_5" => ru ? "SimpleTrend continuation отключён (источник late-chase)." : "SimpleTrend continuation disabled (late-chase source).",
+            "pipe.range_t" => ru ? "Нога RANGE (Mean-Reversion)" : "RANGE leg (Mean-Reversion)",
+            "pipe.range_1" => ru ? "Только режим DualMode = RANGE (не CHAOS/TREND)." : "Only DualMode = RANGE (not CHAOS/TREND).",
+            "pipe.range_2" => ru ? "Z-score экстремум + volume surge + разворотная свеча." : "Z-score extreme + volume surge + reversal bar.",
+            "pipe.range_3" => ru ? "Нет BTC/ETH/BNB/SOL/XRP; ATR не расширяется (не fade тренд)." : "No BTC/ETH/BNB/SOL/XRP; ATR not expanding (don’t fade trends).",
+            "pipe.range_4" => ru ? "Плечо 3–5×, size mult ~0.35." : "Leverage 3–5×, size mult ~0.35.",
+            "pipe.proc_t" => ru ? "Слои PROC (после сигнала)" : "PROC layers (after signal)",
+            "pipe.col_stage" => ru ? "Стадия" : "Stage",
+            "pipe.col_what" => ru ? "Что делает" : "What it does",
+            "pipe.col_reject" => ru ? "Типичный reject" : "Typical reject",
+            "pipe.parity" => ru ? "Один и тот же ApprovedEntry после Risk. Demo не имеет отдельной «лёгкой» стратегии входа." : "Same ApprovedEntry after Risk. Demo has no separate lightweight entry strategy.",
+
+            "st.title" => ru ? "Логика эксперта" : "Expert logic",
+            "st.trend_h" => ru ? "Тренд = капитал в объёме" : "Trend = capital in volume",
+            "st.trend_1" => ru ? "Не гнать локальный импульс без объёма/flow." : "Don’t chase local impulse without volume/flow.",
+            "st.trend_2" => ru ? "Вселенная: динамический топ по 24h quote volume (не хардкод списка)." : "Universe: dynamic 24h quote-volume ranking (no hardcoded lists).",
+            "st.trend_3" => ru ? "15–18 ликвидных + core majors по рангу." : "Top 15–18 liquid + core majors by rank.",
+            "st.trend_4" => ru ? "Плечо выше (5–10×), size ×1.0 при подтверждённом flow." : "Higher lev (5–10×), size ×1.0 with confirmed flow.",
+            "st.trend_5" => ru ? "History Setup: TREND: CORE_*." : "History Setup: TREND: CORE_*.",
+            "st.range_h" => ru ? "Боковик = спред / mean-reversion" : "Range = spread / mean-reversion",
+            "st.range_1" => ru ? "Не мажоры — mid/liquid alts (динамический universe)." : "Non-majors — mid/liquid alts (dynamic universe).",
+            "st.range_2" => ru ? "Малое плечо и размер — переживать шум диапазона." : "Small lev & size — survive range noise.",
+            "st.range_3" => ru ? "Отдельная причина RANGE_SPREAD_* (не тот же CORE)." : "Separate RANGE_SPREAD_* reason (not the same CORE).",
+            "st.range_4" => ru ? "Router держит CORE в RANGE и SPREAD в TREND." : "Router holds CORE in RANGE and SPREAD in TREND.",
+            "st.no_t" => ru ? "Чего система сознательно не делает" : "What the system deliberately does not do",
+            "st.no_p" => ru ? "Не обещает win rate 80%. Не торгует «все сигналы». Не включает ML/News hard-gate, пока shadow KPI не покажет стабильный ΔPF." : "No promised 80% win rate. Doesn’t take every signal. ML/News hard-gates stay off until shadow KPI shows stable ΔPF.",
+
+            "set.title" => ru ? "Справочник параметров Settings" : "Settings parameter reference",
+            "set.intro" => ru ? "Путь: страница /settings. Значения пишутся в runtime JSON и читаются Engine через IOptionsMonitor." : "Path: /settings page. Values write to runtime JSON and are read by Engine via IOptionsMonitor.",
+            "set.risk_h" => ru ? "Risk / Institutional" : "Risk / Institutional",
+            "set.sq_h" => ru ? "Signal Quality / Auction" : "Signal Quality / Auction",
+            "set.dual_h" => ru ? "DualMode (режим рынка)" : "DualMode (market regime)",
+            "set.ml_h" => ru ? "ML Gate & News" : "ML Gate & News",
+            "set.col_param" => ru ? "Параметр" : "Parameter",
+            "set.col_default" => ru ? "Дефолт" : "Default",
+            "set.col_mean" => ru ? "Смысл" : "Meaning",
+            "set.mop" => ru ? "Макс. одновременных позиций (все стороны)." : "Max concurrent positions (all sides).",
+            "set.mss" => ru ? "Макс. позиций в одну сторону (LONG или SHORT). 0 = без лимита стороны." : "Max same-direction positions. 0 = no side limit.",
+            "set.cfm" => ru ? "Disabled = только MaxOpen. StaticLimit = + MaxSameSide. DynamicCorrelation = корреляция к открытым." : "Disabled = MaxOpen only. StaticLimit = + MaxSameSide. DynamicCorrelation = vs open names.",
+            "set.mac" => ru ? "Порог корреляции в режиме DynamicCorrelation." : "Correlation threshold in DynamicCorrelation mode.",
+            "set.dls" => ru ? "При низкой ликвидности режет qty (не всегда полный reject)." : "On low liquidity, reduces qty (not always full reject).",
+            "set.mnp" => ru ? "Жёсткий потолок notional позиции = 28% equity (после 1R)." : "Hard position notional ceiling = 28% of equity (after 1R).",
+            "set.hcap" => ru ? "Доп. USD-потолок риска на сделку major/alt." : "Extra USD risk ceiling per trade major/alt.",
+            "set.pcc" => ru ? "Пауза повторного входа в символ после закрытия." : "Cooldown before re-entry on same symbol after close.",
+            "set.mqt" => ru ? "Минимальный composite score аукциона (0–100)." : "Minimum auction composite score (0–100).",
+            "set.sss" => ru ? "Отбор лучших сигналов в окне, а не «первый пришёл»." : "Pick best signals in the window, not first-come.",
+            "set.awm" => ru ? "Окно сбора кандидатов перед выбором слотов." : "Candidate collection window before slot selection.",
+            "set.wts" => ru ? "Веса факторов скоринга (сумма ≈ 1)." : "Scoring factor weights (sum ≈ 1).",
+            "set.obg" => ru ? "Блок/штраф при широком спреде стакана." : "Block/penalize wide orderbook spread.",
+            "set.msp" => ru ? "Макс. (ask−bid)/mid для входа." : "Max (ask−bid)/mid allowed for entry.",
+            "set.d_en" => ru ? "Включает разделение TREND/RANGE/CHAOS." : "Enables TREND/RANGE/CHAOS split.",
+            "set.d_uni" => ru ? "Сколько топ-символов по объёму в core и trend universe." : "How many top-volume symbols in core & trend universe.",
+            "set.d_sp" => ru ? "Размер пула для спред/RANGE (не majors)." : "Pool size for spread/RANGE (non-majors).",
+            "set.d_rl" => ru ? "Плечо в боковике (спред)." : "Leverage in range (spread).",
+            "set.d_tl" => ru ? "Плечо в тренде при flow." : "Leverage in trend with flow.",
+            "set.d_rs" => ru ? "Множитель размера в RANGE относительно 1R." : "Size multiplier in RANGE vs full 1R.",
+            "set.d_flow" => ru ? "На TREND без объёма/flow — reject." : "On TREND without volume/flow — reject.",
+            "set.d_vol" => ru ? "Объём сигнальной свечи ≥ 1.05× средней." : "Signal bar volume ≥ 1.05× average.",
+            "set.ml_gate" => ru ? "false = только shadow-метрики, входы не режет." : "false = shadow metrics only, does not cut entries.",
+            "set.ml_th" => ru ? "Порог P(win) если hard gate включён." : "P(win) threshold when hard gate is on.",
+            "set.ml_hard" => ru ? "Жёсткий SKIP по ML — только после валидного ΔPF." : "Hard ML SKIP — only after valid ΔPF.",
+            "set.nw_hard" => ru ? "Жёсткая пауза по новостям — осторожно, лучше shadow." : "Hard news pause — use carefully; prefer shadow.",
+            "set.warn_t" => ru ? "Не крутите всё на максимум сразу" : "Don’t max every toggle at once",
+            "set.warn_p" => ru ? "Correlation Disabled + MaxSameSide 0 + Quality 50 = портфель из 7 однонаправленных шортов. Держите StaticLimit + Quality ≥ 75." : "Correlation Disabled + MaxSameSide 0 + Quality 50 = seven same-side shorts. Keep StaticLimit + Quality ≥ 75.",
+
+            "risk.title" => ru ? "Риск и сопровождение" : "Risk and management",
+            "risk.size_h" => ru ? "Размер позиции (1R)" : "Position size (1R)",
+            "risk.size_p" => ru ? "Объём считается от дистанции до SL, затем режется HardCap и MaxNotional%." : "Qty is derived from SL distance, then clamped by HardCap and MaxNotional%.",
+            "risk.exit_h" => ru ? "Выходы" : "Exits",
+            "risk.exit_1" => ru ? "TP1 partial → стоп к BE / lock-in step." : "TP1 partial → stop to BE / lock-in step.",
+            "risk.exit_2" => ru ? "TP2/TP3 — остаток + дальнейший lock." : "TP2/TP3 — remainder + further lock.",
+            "risk.exit_3" => ru ? "SL_STRATEGY_FAIL — первичный стоп по структуре." : "SL_STRATEGY_FAIL — primary structure stop.",
+            "risk.exit_4" => ru ? "Kill / Daily DD / BTC vol — аварийные контуры." : "Kill / Daily DD / BTC vol — emergency circuits.",
+
+            "ui.title" => ru ? "Где что смотреть" : "Where to look",
+            "ui.market" => ru ? "График, позиции, History (Setup / R / PnL Demo+Live)." : "Chart, positions, History (Setup / R / PnL Demo+Live).",
+            "ui.settings" => ru ? "Risk, Signal Quality, DualMode, ML/News тумблеры." : "Risk, Signal Quality, DualMode, ML/News toggles.",
+            "ui.ai" => ru ? "Shadow KPI, neurons, news impact (не hard-gate сам по себе)." : "Shadow KPI, neurons, news impact (not a hard-gate by itself).",
+            "ui.news" => ru ? "Лента новостей RU/EN, impact, контекст." : "News tape RU/EN, impact, context.",
+            "ui.hist" => ru ? "Колонка Setup: TREND vs RANGE — аудит ноги стратегии." : "Setup column: TREND vs RANGE — strategy leg audit.",
+            "ui.tg" => ru ? "/status /kill /resume и Mini App dashboard." : "/status /kill /resume and Mini App dashboard.",
+
+            "ops.title" => ru ? "Операции" : "Operations",
+            "ops.logs_h" => ru ? "Ключевые теги логов" : "Key log tags",
+            "ops.check_h" => ru ? "Чек-лист перед Live" : "Pre-Live checklist",
+            "ops.c1" => ru ? "git pull · rebuild Engine + Web." : "git pull · rebuild Engine + Web.",
+            "ops.c2" => ru ? "Проверить /settings: MaxOpen 4, SameSide 2, Quality ≥ 78." : "Verify /settings: MaxOpen 4, SameSide 2, Quality ≥ 78.",
+            "ops.c3" => ru ? "Demo 30–50 сделок, смотреть Setup и долю SL vs TP." : "Demo 30–50 trades, review Setup and SL vs TP mix.",
+            "ops.c4" => ru ? "Live с малым HardCap; Kill и Telegram настроены." : "Live with small HardCap; Kill and Telegram configured.",
+
+            _ => key
+        };
+    }
 }
