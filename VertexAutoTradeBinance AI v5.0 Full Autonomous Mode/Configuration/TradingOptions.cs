@@ -48,6 +48,12 @@ public class TradingOptions
     public int MaxOpenPositions { get; set; } = 4;
 
     /// <summary>
+    /// Max notional per position as fraction of equity (0.28 = 28%).
+    /// Independent of leverage so 10x cannot put 100% equity into one symbol.
+    /// </summary>
+    public decimal MaxNotionalPctOfEquity { get; set; } = 0.28m;
+
+    /// <summary>
     /// Max concurrent positions in the same direction (LONG or SHORT).
     /// 0 = unlimited (only MaxOpenPositions applies). Configurable from UI.
     /// </summary>

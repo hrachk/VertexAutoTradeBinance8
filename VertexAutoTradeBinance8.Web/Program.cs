@@ -302,6 +302,11 @@ try
             RealizedR = Math.Round(r, 4),
             InitialRiskPrice = riskPx,
             CloseReason = reason,
+            SetupReason = pos.SetupReason ?? "",
+            StrategyLeg = string.IsNullOrEmpty(pos.StrategyLeg)
+                ? (pos.SetupReason ?? "").StartsWith("RANGE", StringComparison.OrdinalIgnoreCase) ? "RANGE"
+                  : (pos.SetupReason ?? "").StartsWith("CORE", StringComparison.OrdinalIgnoreCase) ? "TREND" : ""
+                : pos.StrategyLeg,
             OpenedAtUtc = pos.OpenedAtUtc,
             ClosedAtUtc = DateTime.UtcNow
         });

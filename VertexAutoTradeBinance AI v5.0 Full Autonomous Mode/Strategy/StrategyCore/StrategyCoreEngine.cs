@@ -59,7 +59,7 @@ public sealed class StrategyCoreEngine
     private const decimal MinRiskPct = 0.008m;  // CRITICAL: never micro-SL < 0.8% of entry
     private const decimal MaxRiskPct = 0.025m;  // reject if |entry-SL|/entry > 2.5%
     private const decimal StructurePadAtr = 0.50m; // SwingLow/High ± 0.5 ATR
-    private const decimal MaxExtensionAtr = 1.00m; // hard anti-chase: max 1.0 ATR from structure
+    private const decimal MaxExtensionAtr = 0.90m; // hard anti-chase: max 0.9 ATR from structure
     private const decimal MinVolumeRatioCore = 1.00m; // bar vol >= 20-bar avg (capital present)
     private const decimal RsiLongMax = 58m;     // no LONG if RSI15 > 58 (harder FOMO block)
     private const decimal RsiShortMin = 42m;    // no SHORT if RSI15 < 42
@@ -303,6 +303,13 @@ public sealed class StrategyCoreEngine
             return (true, false, "no_volume_flow");
         }
 
+        // Anti late-chase: no LONG after bullish impulse bar / no SHORT after bearish impulse
+        if (!PassImpulseChaseGuard(slice, signal, atr, out var impulseReason))
+        {
+            _log.LogInformation("[CORE][{sym}] REJECT {r}", symbol, impulseReason);
+            return (true, false, "impulse_chase");
+        }
+
         _cooldown[symbol] = DateTime.UtcNow;
         {
             var e0 = signal.EntryPrice;
@@ -447,6 +454,57 @@ public sealed class StrategyCoreEngine
         var last20 = k.TakeLast(20).ToList();
         decimal avgQuote = last20.Average(x => x.Volume * ((x.HighPrice + x.LowPrice) / 2m));
         return avgQuote >= MinAvgQuoteVol15m;
+    }
+
+
+    /// <summary>
+    /// Reject entries that chase an already-extended impulse candle
+    /// (BZUSDT-style long after vertical spike).
+    /// Impulse = bar range ≥ 1.35 ATR and close in extreme 30% of range.
+    /// </summary>
+    private static bool PassImpulseChaseGuard(
+        List<BinanceFuturesUsdtKline> k, TradeSignal signal, decimal atr, out string reason)
+    {
+        reason = "";
+        if (k == null || k.Count < 3 || atr <= 0) return true;
+        var bar = k[^1];
+        decimal range = bar.HighPrice - bar.LowPrice;
+        if (range <= 0) return true;
+        bool impulse = range >= atr * 1.35m;
+        if (!impulse)
+        {
+            var prev = k[^2];
+            decimal pr = prev.HighPrice - prev.LowPrice;
+            if (pr >= atr * 1.35m)
+            {
+                bar = prev;
+                range = pr;
+                impulse = true;
+            }
+        }
+        if (!impulse) return true;
+
+        decimal closePos = (bar.ClosePrice - bar.LowPrice) / range;
+        bool isLong = signal.Side == SignalSide.Buy;
+        if (isLong && closePos >= 0.70m)
+        {
+            decimal extFromOpen = bar.ClosePrice - bar.OpenPrice;
+            if (extFromOpen >= atr * 0.85m || closePos >= 0.85m)
+            {
+                reason = $"IMPULSE_CHASE_LONG range={range / atr:F2}ATR closePos={closePos:F2}";
+                return false;
+            }
+        }
+        if (!isLong && closePos <= 0.30m)
+        {
+            decimal extFromOpen = bar.OpenPrice - bar.ClosePrice;
+            if (extFromOpen >= atr * 0.85m || closePos <= 0.15m)
+            {
+                reason = $"IMPULSE_CHASE_SHORT range={range / atr:F2}ATR closePos={closePos:F2}";
+                return false;
+            }
+        }
+        return true;
     }
 
     /// <summary>Last closed bar volume / average of prior 20 bars. &lt;1 = thin participation.</summary>

@@ -45,4 +45,20 @@ public static class ExecutableStrategyPolicy
         return s.StartsWith("BTC") || s.StartsWith("ETH") || s.StartsWith("BNB")
             || s.StartsWith("SOL") || s.StartsWith("XRP");
     }
+
+    public static string NormalizeLeg(string? reason)
+    {
+        if (IsTrendLeg(reason)) return "TREND";
+        if (IsRangeLeg(reason)) return "RANGE";
+        return "OTHER";
+    }
+
+    public static string CleanSetupReason(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason)) return "";
+        var r = reason.Trim();
+        int pipe = r.IndexOf('|');
+        if (pipe > 0) r = r.Substring(0, pipe);
+        return r;
+    }
 }

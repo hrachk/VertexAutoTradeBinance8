@@ -211,9 +211,26 @@ namespace VertexAutoTradeBinance8.Services
 
                     decimal marginFrac = major ? 0.12m : 0.10m;
                     decimal maxNotional = balance * marginFrac * leverage;
+                    // Hard equity notional ceiling — prevents 10x × 10% margin = 100% equity in one name
+                    // (BZUSDT-style ~68% notional). Default 28% of equity; configurable.
+                    decimal maxNotionalPct = 0.28m;
+                    try
+                    {
+                        var cfgPct = _config?.GetValue<decimal?>("Trading:MaxNotionalPctOfEquity");
+                        if (cfgPct.HasValue && cfgPct.Value > 0.05m && cfgPct.Value <= 1m)
+                            maxNotionalPct = cfgPct.Value;
+                    }
+                    catch { }
+                    decimal equityNotionalCap = balance * maxNotionalPct;
+                    if (maxNotional > equityNotionalCap)
+                        maxNotional = equityNotionalCap;
+
                     decimal notional = qty1R * entry;
                     if (notional > maxNotional && entry > 0)
                     {
+                        _logger.LogInformation(
+                            "[RISK] notional-cap {sym} {n:F0} → {cap:F0} (max {pct:P0} equity, lev={lev}x)",
+                            signal.Symbol, notional, maxNotional, maxNotionalPct, leverage);
                         qty1R = maxNotional / entry;
                         notional = qty1R * entry;
                     }

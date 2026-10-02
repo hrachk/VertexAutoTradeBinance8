@@ -20,6 +20,9 @@ public sealed class DemoPosition
     public List<DemoTpLevel> TakeProfits { get; set; } = new();
     /// <summary>|Entry−SL| at open — fixed for R-multiple even after BE trail.</summary>
     public decimal InitialRiskPrice { get; set; }
+    /// <summary>Signal reason at open (CORE_* / RANGE_SPREAD_*).</summary>
+    public string SetupReason { get; set; } = "";
+    public string StrategyLeg { get; set; } = "";
 
     public decimal Notional(decimal markPrice) => Qty * markPrice;
 
@@ -88,6 +91,8 @@ public sealed class DemoClosedTrade
     public decimal RealizedR { get; set; }
     public decimal InitialRiskPrice { get; set; }
     public string CloseReason { get; set; } = ""; // "SL" / "TP1" / "Manual" / etc
+    public string SetupReason { get; set; } = "";
+    public string StrategyLeg { get; set; } = "";
     public DateTime OpenedAtUtc { get; set; }
     public DateTime ClosedAtUtc { get; set; } = DateTime.UtcNow;
 }

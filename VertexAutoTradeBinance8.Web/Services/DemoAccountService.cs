@@ -629,13 +629,31 @@ public sealed class DemoAccountService
                     {
                         if (initialRiskPrice > 0) pos.InitialRiskPrice = initialRiskPrice;
                         else if (stopLoss > 0) pos.InitialRiskPrice = Math.Abs(fill - stopLoss);
+                        // Strategy leg for History (CORE vs RANGE)
+                        if (!string.IsNullOrWhiteSpace(reason))
+                        {
+                            var clean = reason.Trim();
+                            int pipe = clean.IndexOf('|');
+                            if (pipe > 0) clean = clean.Substring(0, pipe);
+                            pos.SetupReason = clean;
+                            if (clean.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase)
+                                || clean.StartsWith("TREND_", StringComparison.OrdinalIgnoreCase))
+                                pos.StrategyLeg = "TREND";
+                            else if (clean.StartsWith("RANGE_", StringComparison.OrdinalIgnoreCase)
+                                     || clean.StartsWith("MEANREV_", StringComparison.OrdinalIgnoreCase))
+                                pos.StrategyLeg = "RANGE";
+                            else
+                                pos.StrategyLeg = "OTHER";
+                        }
                     }
                     Save();
                 }
             }
             _logger.LogInformation(
-                "[DEMO] approved open {sym} {side} fill={f} fee={fee:F4} ({reason})",
-                symbol, side, fill, fee, reason);
+                "[DEMO] approved open {sym} {side} fill={f} fee={fee:F4} leg={leg} ({reason})",
+                symbol, side, fill, fee,
+                _state.Positions.LastOrDefault(p => p.Symbol == symbol)?.StrategyLeg ?? "?",
+                reason);
         }
         return (ok, err);
     }
@@ -805,7 +823,9 @@ decimal riskPxH = pos.InitialRiskPrice > 0 ? pos.InitialRiskPrice
         {
             Symbol = pos.Symbol, Side = pos.Side, EntryPrice = pos.EntryPrice, ExitPrice = exitPrice,
             Qty = closeQty, RealizedPnl = realizedPnl, RealizedR = Math.Round(rH, 4),
-            InitialRiskPrice = riskPxH, CloseReason = reason, OpenedAtUtc = pos.OpenedAtUtc,
+            InitialRiskPrice = riskPxH, CloseReason = reason,
+            SetupReason = pos.SetupReason ?? "", StrategyLeg = pos.StrategyLeg ?? "",
+            OpenedAtUtc = pos.OpenedAtUtc,
         });
 
         if (pctToClose >= 100m || closeQty >= pos.Qty * 0.999m)
@@ -837,7 +857,8 @@ decimal riskPxH = pos.InitialRiskPrice > 0 ? pos.InitialRiskPrice
 _state.History.Add(new DemoClosedTrade
                 {
                     Symbol = pos.Symbol, Side = pos.Side, EntryPrice = pos.EntryPrice, ExitPrice = exitPrice,
-                    Qty = pos.Qty, RealizedPnl = dustPnl, CloseReason = reason + " (flat residual)",
+                    Qty = pos.Qty, RealizedPnl = dustPnl, CloseReason = reason,
+            SetupReason = pos.SetupReason ?? "", StrategyLeg = pos.StrategyLeg ?? "" + " (flat residual)",
                     OpenedAtUtc = pos.OpenedAtUtc,
                 });
                 _state.Positions.Remove(pos);

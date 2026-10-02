@@ -18,6 +18,10 @@ public sealed class TradeJournalEntry
     /// <summary>|Entry−SL| in price units at open (1R distance).</summary>
     public decimal InitialRiskPrice { get; set; }
     public string CloseReason { get; set; } = "";
+    /// <summary>Entry strategy tag at open: CORE_*/RANGE_SPREAD_* (TREND vs RANGE leg).</summary>
+    public string SetupReason { get; set; } = "";
+    /// <summary>Normalized leg: TREND | RANGE | OTHER</summary>
+    public string StrategyLeg { get; set; } = "";
     /// <summary>Normalized SL tag: SL_STRATEGY_FAIL / SL_MARKET_CORRELATION / …</summary>
     public string SlAttributionCode { get; set; } = "";
     public decimal BtcDeltaPctAtClose { get; set; }
