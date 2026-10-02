@@ -102,7 +102,7 @@ public sealed class DecisionMarkersFileService
     // ================= SAVE =================
     public async Task SaveAsync(CancellationToken ct)
     {
-        _logger.LogWarning("SAVE CALLED at {time}", DateTime.UtcNow);
+        _logger.LogDebug("SAVE CALLED at {time}", DateTime.UtcNow);
         await _lock.WaitAsync(ct);
         try
         {

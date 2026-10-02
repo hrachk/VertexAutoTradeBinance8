@@ -212,6 +212,14 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (!ReactiveTf.Contains(tf))
                     return;
 
+                // Only process CLOSE on the strategy decision TF for this symbol.
+                // Otherwise 1m+5m+15m closes each fire full analysis → log storm + duplicate work.
+                var decisionTf = _htfSymbols.Contains(symbol)
+                    ? KlineInterval.FifteenMinutes
+                    : KlineInterval.FiveMinutes;
+                if (tf != decisionTf)
+                    return;
+
                 SafeFireAndForget(() => RunReactive(symbol, tf, "CLOSE"));
             };
 

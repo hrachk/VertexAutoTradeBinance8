@@ -148,7 +148,8 @@ public sealed class StrategyCoreEngine
                 .Take(15)
                 .ToList();
 
-            int evaluated = 0, emitted = 0, thin = 0;
+            int evaluated = 0, emitted = 0, thin = 0, sameBar = 0, cooldown = 0, noSetup = 0;
+            var reasonBag = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (var sym in batch)
             {
                 try
@@ -157,6 +158,14 @@ public sealed class StrategyCoreEngine
                     if (ev) evaluated++;
                     if (em) emitted++;
                     if (reason == "thin_klines") thin++;
+                    else if (reason == "same_bar") sameBar++;
+                    else if (reason == "cooldown") cooldown++;
+                    else if (reason == "no_setup") noSetup++;
+                    if (!string.IsNullOrEmpty(reason))
+                    {
+                        reasonBag.TryGetValue(reason, out var c);
+                        reasonBag[reason] = c + 1;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -165,13 +174,17 @@ public sealed class StrategyCoreEngine
                 await Task.Delay(50).ConfigureAwait(false);
             }
 
-            if (emitted == 0) _zeroEmitStreak++;
-            else _zeroEmitStreak = 0;
+            // same_bar means reactive path already evaluated this closed bar — not a pipeline death
+            int freshAttempts = batch.Count - sameBar - cooldown;
+            if (emitted == 0 && freshAttempts > 0) _zeroEmitStreak++;
+            else if (emitted > 0) _zeroEmitStreak = 0;
 
-            var level = _zeroEmitStreak >= 10 ? LogLevel.Warning : LogLevel.Information;
+            var topReasons = string.Join(",",
+                reasonBag.OrderByDescending(kv => kv.Value).Take(5).Select(kv => $"{kv.Key}:{kv.Value}"));
+            var level = _zeroEmitStreak >= 10 && freshAttempts > 0 ? LogLevel.Warning : LogLevel.Information;
             _log.Log(level,
-                "[CORE][SCAN] universe={u} batch={b} evaluated={e} emitted={sig} thin={t} zeroStreak={z}",
-                _qualitySymbols.Count, batch.Count, evaluated, emitted, thin, _zeroEmitStreak);
+                "[CORE][SCAN] universe={u} batch={b} evaluated={e} emitted={sig} thin={t} sameBar={sb} cooldown={cd} noSetup={ns} fresh={f} zeroStreak={z} reasons=[{r}]",
+                _qualitySymbols.Count, batch.Count, evaluated, emitted, thin, sameBar, cooldown, noSetup, freshAttempts, _zeroEmitStreak, topReasons);
         }
         finally { Interlocked.Exchange(ref _scanBusy, 0); }
     }

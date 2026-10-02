@@ -366,14 +366,16 @@ namespace VertexAutoTradeBinance8.Services
 
         private static bool TryParseTimeframe(string label, out KlineInterval tf)
         {
-            // Binance USDT-M Futures perpetuals do NOT support 3D, 1W, 1M, 1Y klines.
-            // These will fail with "Invalid interval" — skip them silently.
-            if (label.Equals("3D", StringComparison.OrdinalIgnoreCase) ||
-                label.Equals("1W", StringComparison.OrdinalIgnoreCase) ||
-                label.Equals("1M", StringComparison.OrdinalIgnoreCase) ||
-                label.Equals("1Y", StringComparison.OrdinalIgnoreCase))
+            // Binance USDT-M Futures: no native 3D / 1W / monthly 1M / 1Y REST klines
+            // (those are synthesised from 1D). CRITICAL: do NOT use OrdinalIgnoreCase
+            // on "1M" — that also matches minute "1m" and killed 1m loading entirely.
+            var raw = (label ?? "").Trim();
+            if (raw.Equals("3D", StringComparison.Ordinal) ||
+                raw.Equals("1W", StringComparison.Ordinal) ||
+                raw.Equals("1M", StringComparison.Ordinal) ||  // monthly only (capital M)
+                raw.Equals("1Y", StringComparison.OrdinalIgnoreCase))
             { tf = default; return false; }
-            switch (label.Trim().ToLowerInvariant())
+            switch (raw.ToLowerInvariant())
             {
                 case "1m": tf = KlineInterval.OneMinute; return true;
                 case "3m": tf = KlineInterval.ThreeMinutes; return true;
