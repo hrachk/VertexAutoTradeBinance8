@@ -202,7 +202,7 @@ public static class InstitutionalTrendSetup
         Confidence = conf,
         Reason = reason,
         Timeframe = "FifteenMinutes",
-        Timestamp = DateTime.UtcNow
+        Time = DateTime.UtcNow
     };
 
     private static decimal[] Tps(bool isLong, decimal entry, decimal risk) => isLong
