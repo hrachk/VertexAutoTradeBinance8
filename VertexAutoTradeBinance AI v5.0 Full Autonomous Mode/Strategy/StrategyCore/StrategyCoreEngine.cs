@@ -524,6 +524,67 @@ public sealed class StrategyCoreEngine
         return true;
     }
 
+
+    /// <summary>
+    /// Blocks vertical pump/dump chase (e.g. MUBARAK long at parabolic top).
+    /// </summary>
+    private static (bool ok, string reason) PassParabolicGuard(
+        List<BinanceFuturesUsdtKline> h1, bool isLong, decimal close)
+    {
+        if (h1 == null || h1.Count < 16)
+            return (true, "");
+
+        int n = h1.Count;
+        var win = h1.Skip(Math.Max(0, n - 24)).ToList();
+        decimal hi = win.Max(x => x.HighPrice);
+        decimal lo = win.Min(x => x.LowPrice);
+        decimal span = hi - lo;
+        if (span <= 0) return (true, "");
+
+        decimal pos = (close - lo) / span;
+        if (isLong && pos >= 0.82m)
+            return (false, $"PARABOLIC_TOP pos={pos:F2} in 1H range (chase)");
+        if (!isLong && pos <= 0.18m)
+            return (false, $"PARABOLIC_BOTTOM pos={pos:F2} in 1H range (chase)");
+
+        var w12 = h1.Skip(Math.Max(0, n - 12)).ToList();
+        decimal c0 = w12[0].OpenPrice;
+        decimal c1 = w12[^1].ClosePrice;
+        if (c0 > 0)
+        {
+            decimal move = (c1 - c0) / c0;
+            if (isLong && move >= 0.12m)
+            {
+                decimal impulseHigh = w12.Max(x => x.HighPrice);
+                decimal retrace = impulseHigh > c0 ? (impulseHigh - close) / (impulseHigh - c0) : 0m;
+                if (retrace < 0.25m)
+                    return (false, $"PARABOLIC_LONG move={move:P1} retrace={retrace:F2}");
+            }
+            if (!isLong && move <= -0.12m)
+            {
+                decimal impulseLow = w12.Min(x => x.LowPrice);
+                decimal retrace = c0 > impulseLow ? (close - impulseLow) / (c0 - impulseLow) : 0m;
+                if (retrace < 0.25m)
+                    return (false, $"PARABOLIC_SHORT move={move:P1} retrace={retrace:F2}");
+            }
+        }
+
+        int sameDir = 0;
+        for (int i = n - 3; i < n; i++)
+        {
+            if (i < 1) continue;
+            var b = h1[i];
+            if (isLong && b.ClosePrice > b.OpenPrice) sameDir++;
+            if (!isLong && b.ClosePrice < b.OpenPrice) sameDir++;
+        }
+        if (sameDir >= 3 && pos >= 0.70m && isLong)
+            return (false, "PARABOLIC_3GREEN_TOP");
+        if (sameDir >= 3 && pos <= 0.30m && !isLong)
+            return (false, "PARABOLIC_3RED_BOTTOM");
+
+        return (true, "");
+    }
+
     private static bool PassImpulseChaseGuard(
         List<BinanceFuturesUsdtKline> k, TradeSignal signal, decimal atr, out string reason)
     {
