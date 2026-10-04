@@ -113,7 +113,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
         private readonly ConcurrentDictionary<string, DateTime> _lastSignalUtc = new();
         private static readonly TimeSpan SignalCooldown = TimeSpan.FromSeconds(10);
-        private static readonly long RealtimeThrottleTicks = (long)(Stopwatch.Frequency * 0.250); // 250 ms
+        private static readonly long RealtimeThrottleTicks = (long)(Stopwatch.Frequency * 2.0); // 2s — CPU relief
       
 
         public StrategyEngine(
@@ -225,11 +225,14 @@ namespace VertexAutoTradeBinance8.Strategy
 
             _onRealtimeHandler = (symbol, price) =>
             {
+                // CPU: realtime path only for core majors; alts on CLOSE only
+                if (!_htfSymbols.Contains(symbol))
+                    return;
                 if (!ShouldRunRealtime(symbol))
                     return;
 
                 SafeFireAndForget(() =>
-                    RunReactive(symbol, KlineInterval.FiveMinutes, "REALTIME"));
+                    RunReactive(symbol, KlineInterval.FifteenMinutes, "REALTIME"));
             };
 
             marketData.OnWarm += _onWarmHandler;

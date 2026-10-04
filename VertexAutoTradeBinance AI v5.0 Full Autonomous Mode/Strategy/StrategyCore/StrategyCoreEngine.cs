@@ -54,10 +54,10 @@ public sealed class StrategyCoreEngine
     private const decimal MinAtrPct = 0.0015m;
     private const decimal MaxAtrPct = 0.060m;
     // Structure SL: swing ± pad; hard caps prevent 4%+ "lottery" stops
-    private const decimal MinRiskAtr = 1.20m;   // ATR floor
-    private const decimal MaxRiskAtr = 2.80m;   // reject if SL farther than ~2.8 ATR
-    private const decimal MinRiskPct = 0.008m;  // CRITICAL: never micro-SL < 0.8% of entry
-    private const decimal MaxRiskPct = 0.025m;  // reject if |entry-SL|/entry > 2.5%
+    private const decimal MinRiskAtr = 1.35m;   // ATR floor (majors); alts use higher in EnforceMinRiskSl
+    private const decimal MaxRiskAtr = 3.50m;   // allow wider structural stops on volatile alts
+    private const decimal MinRiskPct = 0.010m;  // never micro-SL < 1.0% of entry
+    private const decimal MaxRiskPct = 0.040m;  // alts need room for 1.5–2×ATR stops
     private const decimal StructurePadAtr = 0.50m; // SwingLow/High ± 0.5 ATR
     private const decimal MaxExtensionAtr = 0.90m; // hard anti-chase: max 0.9 ATR from structure
     private const decimal MinVolumeRatioCore = 1.00m; // bar vol >= 20-bar avg (capital present)
@@ -94,7 +94,7 @@ public sealed class StrategyCoreEngine
         _md = marketData;
         _md.WsClosedKline += OnWsClosed;
         _scanTimer = new Timer(_ => { _ = ScanQualitySafeAsync(); },
-            null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30));
+            null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(60));
         _log.LogInformation(
             "[CORE] v1.6 bound TF={tf} REST-fallback=ON structure-SL=ON (no ATR-only stop) scan=30s",
             Tf);
@@ -285,11 +285,18 @@ public sealed class StrategyCoreEngine
 
         if (signal == null) return (true, false, "no_setup");
 
-        // HTF bias on 15m stack: EMA50 slope + price side of EMA50 (proxy for 1H when buffer thin)
-        if (!PassHtfBiasGuard(slice, signal, out var htfReason))
+        // Real HTF align: 1H EMA stack (optional soft 4H). Blocks shorts into 1H bull like ADA screenshot.
+        var (htfOk, htfReason) = await PassHtfAlignAsync(symbol, signal).ConfigureAwait(false);
+        if (!htfOk)
         {
             _log.LogInformation("[CORE][{sym}] REJECT {r}", symbol, htfReason);
-            return (true, false, "htf_bias");
+            return (true, false, "htf_align");
+        }
+        // Secondary: 15m EMA stack still applies as micro bias
+        if (!PassHtfBiasGuard(slice, signal, out var htf15Reason))
+        {
+            _log.LogInformation("[CORE][{sym}] REJECT {r}", symbol, htf15Reason);
+            return (true, false, "htf_bias_15m");
         }
 
         // FOMO / exhaustion guard (15m RSI)
@@ -486,6 +493,114 @@ public sealed class StrategyCoreEngine
     /// (BZUSDT-style long after vertical spike).
     /// Impulse = bar range ≥ 1.35 ATR and close in extreme 30% of range.
     /// </summary>
+
+
+    /// <summary>Load klines for an arbitrary TF (facade then REST).</summary>
+    private async Task<List<BinanceFuturesUsdtKline>?> LoadKlinesTfAsync(
+        string symbol, KlineInterval interval, int need)
+    {
+        try
+        {
+            if (_md != null)
+            {
+                var fromMd = await _md.GetKlinesAsync(symbol, interval, need: need).ConfigureAwait(false);
+                if (fromMd != null && fromMd.Count >= 40)
+                    return fromMd.OrderBy(k => k.OpenTime).ToList();
+            }
+        }
+        catch { /* fall through */ }
+
+        try
+        {
+            using var client = _factory.CreateRestClient();
+            var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+                symbol: symbol, interval: interval, limit: Math.Min(need, 150)).ConfigureAwait(false);
+            if (!res.Success || res.Data == null) return null;
+            var list = new List<BinanceFuturesUsdtKline>();
+            foreach (var k in res.Data)
+            {
+                if (k is BinanceFuturesUsdtKline concrete)
+                    list.Add(concrete);
+            }
+            return list.Count >= 40 ? list.OrderBy(x => x.OpenTime).ToList() : null;
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "[CORE][{sym}] HTF load failed {tf}", symbol, interval);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 1H trend alignment (hard). LONG blocked in clear 1H down-stack; SHORT blocked in clear 1H up-stack.
+    /// Soft 4H: if data exists and strongly opposite, also reject.
+    /// </summary>
+    private async Task<(bool ok, string reason)> PassHtfAlignAsync(string symbol, TradeSignal signal)
+    {
+        var h1 = await LoadKlinesTfAsync(symbol, KlineInterval.OneHour, 80).ConfigureAwait(false);
+        if (h1 == null || h1.Count < 55)
+        {
+            if (!IsMajor(symbol))
+                return (false, "HTF_1H_NO_DATA");
+            return (true, "");
+        }
+
+        int idx = h1.Count - 1;
+        var openT = h1[idx].OpenTime;
+        if (openT.Kind == DateTimeKind.Unspecified)
+            openT = DateTime.SpecifyKind(openT, DateTimeKind.Utc);
+        if ((DateTime.UtcNow - openT.ToUniversalTime()).TotalMinutes < 50 && h1.Count >= 2)
+            idx = h1.Count - 2;
+
+        var closes = h1.Take(idx + 1).Select(x => x.ClosePrice).ToList();
+        if (closes.Count < 55)
+            return (false, "HTF_1H_THIN");
+
+        var ema21 = EmaSeries(closes, 21);
+        var ema50 = EmaSeries(closes, 50);
+        int i = closes.Count - 1;
+        decimal c = closes[i], e21 = ema21[i], e50 = ema50[i];
+        decimal e50Prev = ema50[Math.Max(0, i - 3)];
+        bool isLong = signal.Side == SignalSide.Buy;
+
+        if (isLong)
+        {
+            if (c < e21 && c < e50)
+                return (false, $"HTF_1H_LONG under EMAs c={c:F6} e21={e21:F6} e50={e50:F6}");
+            if (e50 < e50Prev * 0.998m && c < e50)
+                return (false, "HTF_1H_LONG against falling EMA50");
+            if (e21 < e50 * 0.997m && c < e50 * 0.999m)
+                return (false, "HTF_1H_LONG bearish EMA stack");
+        }
+        else
+        {
+            if (c > e21 && c > e50)
+                return (false, $"HTF_1H_SHORT over EMAs c={c:F6} e21={e21:F6} e50={e50:F6}");
+            if (e50 > e50Prev * 1.002m && c > e50)
+                return (false, "HTF_1H_SHORT against rising EMA50");
+            if (e21 > e50 * 1.003m && c > e50 * 1.001m)
+                return (false, "HTF_1H_SHORT bullish EMA stack");
+        }
+
+        try
+        {
+            var h4 = await LoadKlinesTfAsync(symbol, KlineInterval.FourHour, 60).ConfigureAwait(false);
+            if (h4 != null && h4.Count >= 50)
+            {
+                int j = h4.Count - 1;
+                var c4 = h4.Select(x => x.ClosePrice).ToList();
+                var e4 = EmaSeries(c4, 50);
+                decimal px = c4[j], ema = e4[j];
+                if (isLong && px < ema * 0.985m)
+                    return (false, "HTF_4H_LONG deep under EMA50");
+                if (!isLong && px > ema * 1.015m)
+                    return (false, "HTF_4H_SHORT extended over EMA50");
+            }
+        }
+        catch { /* optional */ }
+
+        return (true, "");
+    }
 
     private static bool PassHtfBiasGuard(
         List<BinanceFuturesUsdtKline> k, TradeSignal signal, out string reason)
@@ -775,17 +890,19 @@ public sealed class StrategyCoreEngine
     }
 
 
-    private static decimal EnforceMinRiskSl(bool isLong, decimal entry, decimal sl, decimal atr)
+    private static decimal EnforceMinRiskSl(bool isLong, decimal entry, decimal sl, decimal atr, bool major = false)
     {
         if (entry <= 0) return sl;
         decimal risk = Math.Abs(entry - sl);
-        // Floor: max(ATR×MinRiskAtr, entry×MinRiskPct) — kills 0.23% micro-stops on BTC
-        decimal minByAtr = atr > 0 ? atr * MinRiskAtr : 0m;
-        decimal minByPct = entry * MinRiskPct;
+        // Alts: wider ATR floor (1.55×) and min 1.2% — stops 0.8% get noise-hunted on 1H
+        decimal atrMult = major ? MinRiskAtr : 1.55m;
+        decimal pctFloor = major ? MinRiskPct : 0.012m;
+        decimal minByAtr = atr > 0 ? atr * atrMult : 0m;
+        decimal minByPct = entry * pctFloor;
         decimal minRisk = Math.Max(minByAtr, minByPct);
         decimal maxRisk = entry * MaxRiskPct;
         if (maxRisk > 0 && minRisk > maxRisk)
-            minRisk = maxRisk; // if conflict, prefer not exploding size; PassRiskGeometry may reject
+            minRisk = maxRisk;
         if (risk >= minRisk) return sl;
         return isLong ? entry - minRisk : entry + minRisk;
     }
@@ -906,7 +1023,7 @@ public sealed class StrategyCoreEngine
         var tpList = tps.ToList();
 
         bool isLongSide = side == SignalSide.Buy;
-        sl = EnforceMinRiskSl(isLongSide, entry, sl, atr);
+        sl = EnforceMinRiskSl(isLongSide, entry, sl, atr, IsMajor(symbol));
         {
             decimal fr = Math.Abs(entry - sl);
             if (fr > 0 && atr > 0)

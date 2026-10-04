@@ -3332,7 +3332,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     DateTime _lastDemoPnlRender = DateTime.MinValue;
     bool _onTickBusy;
     static readonly TimeSpan LiveRenderThrottle  = TimeSpan.FromMilliseconds(400); // chart JS ~2.5fps
-    static readonly TimeSpan StateHasChangedThrottle = TimeSpan.FromMilliseconds(800); // Blazor full-tree diff is expensive on /market
+    static readonly TimeSpan StateHasChangedThrottle = TimeSpan.FromMilliseconds(1200); // CPU: less Blazor churn on /market
 
     int _liveTickCount = 0;
     int _liveKlineCount = 0;
