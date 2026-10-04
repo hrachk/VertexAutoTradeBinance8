@@ -133,6 +133,16 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
                 symbol, signal.Reason, bandsForLog.ZScore, bandsForLog.Mean,
                 signal.EntryPrice, signal.StopLoss, signal.TakeProfits.FirstOrDefault());
 
+            // Universal parabolic/impulse sanity (shared with CORE path)
+            try
+            {
+                if (!VertexAutoTradeBinance8.Strategy.EntrySanityGate.Allow(signal, klines, null, out var san))
+                {
+                    _logger.LogInformation("[MEANREV][{symbol}] SANITY BLOCK {r}", symbol, san);
+                    return;
+                }
+            }
+            catch { /* never break MR loop */ }
             OnSignalGenerated?.Invoke(signal);
         }
 

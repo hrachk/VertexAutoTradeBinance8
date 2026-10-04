@@ -924,6 +924,37 @@ namespace VertexAutoTradeBinance8
                     extra: "LIVE=DEMO executes TREND/CORE or RANGE/SPREAD only");
                 return;
             }
+
+            // ── Universal entry sanity (parabolic / impulse / micro-SL) — all strategies ──
+            try
+            {
+                IReadOnlyList<Binance.Net.Objects.Models.Futures.BinanceFuturesUsdtKline>? m15 = null;
+                IReadOnlyList<Binance.Net.Objects.Models.Futures.BinanceFuturesUsdtKline>? h1 = null;
+                try
+                {
+                    m15 = await _marketDataFacade
+                        .GetKlinesAsync(symbol, Binance.Net.Enums.KlineInterval.FifteenMinutes, 40, ct)
+                        .ConfigureAwait(false);
+                }
+                catch { /* optional */ }
+                try
+                {
+                    h1 = await _marketDataFacade
+                        .GetKlinesAsync(symbol, Binance.Net.Enums.KlineInterval.OneHour, 40, ct)
+                        .ConfigureAwait(false);
+                }
+                catch { /* optional */ }
+
+                if (!VertexAutoTradeBinance8.Strategy.EntrySanityGate.Allow(signal, m15, h1, out var sanityReason))
+                {
+                    await RejectAsync(signal, symbol, tf, "SANITY", sanityReason, ct).ConfigureAwait(false);
+                    return;
+                }
+            }
+            catch (Exception exSan)
+            {
+                _logger.LogWarning(exSan, "[PROC][{symbol}] EntrySanityGate error — soft pass", symbol);
+            }
             if (!ai.Allow)
             {
                 _logger.LogInformation(

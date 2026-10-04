@@ -85,6 +85,27 @@ namespace VertexAutoTradeBinance8.Strategy
         private void Forward(TradeSignal signal, string source)
         {
             if (signal == null) return;
+
+            // Best-effort universal gate using cached bars (Worker re-checks hard)
+            try
+            {
+                var m15 = _marketData.GetCachedKlines(signal.Symbol, Binance.Net.Enums.KlineInterval.FifteenMinutes)
+                          ?? _marketData.GetBufferedKlines(signal.Symbol, Binance.Net.Enums.KlineInterval.FifteenMinutes);
+                var h1 = _marketData.GetCachedKlines(signal.Symbol, Binance.Net.Enums.KlineInterval.OneHour)
+                         ?? _marketData.GetBufferedKlines(signal.Symbol, Binance.Net.Enums.KlineInterval.OneHour);
+                if (!EntrySanityGate.Allow(signal, m15, h1, out var sanity))
+                {
+                    _logger.LogWarning(
+                        "[ROUTER] SANITY BLOCK {src} {sym} {side}: {reason}",
+                        source, signal.Symbol, signal.Side, sanity);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[ROUTER] sanity skip (cache) {sym}", signal.Symbol);
+            }
+
             try { _ = _liveSig.AppendAsync(signal, CancellationToken.None); }
             catch (Exception ex)
             {
