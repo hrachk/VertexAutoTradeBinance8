@@ -528,16 +528,40 @@ public sealed class StrategyCoreEngine
         List<BinanceFuturesUsdtKline> k, TradeSignal signal, decimal atr, out string reason)
     {
         reason = "";
-        if (k == null || k.Count < 3 || atr <= 0) return true;
+        if (k == null || k.Count < 5 || atr <= 0) return true;
+        bool isLong = signal.Side == SignalSide.Buy;
+        decimal px = k[^1].ClosePrice;
+
+        // Window high/low of last 8×15m — no long in top 12% after impulse
+        var win = k.TakeLast(8).ToList();
+        decimal wHi = win.Max(x => x.HighPrice);
+        decimal wLo = win.Min(x => x.LowPrice);
+        decimal wSpan = wHi - wLo;
+        if (wSpan > 0)
+        {
+            decimal wPos = (px - wLo) / wSpan;
+            bool anyImpulse = win.Any(b => (b.HighPrice - b.LowPrice) >= atr * 1.25m);
+            if (isLong && anyImpulse && wPos >= 0.88m)
+            {
+                reason = $"IMPULSE_CHASE_LONG windowTop pos={wPos:F2}";
+                return false;
+            }
+            if (!isLong && anyImpulse && wPos <= 0.12m)
+            {
+                reason = $"IMPULSE_CHASE_SHORT windowBot pos={wPos:F2}";
+                return false;
+            }
+        }
+
         var bar = k[^1];
         decimal range = bar.HighPrice - bar.LowPrice;
         if (range <= 0) return true;
-        bool impulse = range >= atr * 1.35m;
+        bool impulse = range >= atr * 1.25m;
         if (!impulse)
         {
             var prev = k[^2];
             decimal pr = prev.HighPrice - prev.LowPrice;
-            if (pr >= atr * 1.35m)
+            if (pr >= atr * 1.25m)
             {
                 bar = prev;
                 range = pr;
@@ -547,20 +571,19 @@ public sealed class StrategyCoreEngine
         if (!impulse) return true;
 
         decimal closePos = (bar.ClosePrice - bar.LowPrice) / range;
-        bool isLong = signal.Side == SignalSide.Buy;
-        if (isLong && closePos >= 0.70m)
+        if (isLong && closePos >= 0.65m)
         {
             decimal extFromOpen = bar.ClosePrice - bar.OpenPrice;
-            if (extFromOpen >= atr * 0.85m || closePos >= 0.85m)
+            if (extFromOpen >= atr * 0.70m || closePos >= 0.80m)
             {
                 reason = $"IMPULSE_CHASE_LONG range={range / atr:F2}ATR closePos={closePos:F2}";
                 return false;
             }
         }
-        if (!isLong && closePos <= 0.30m)
+        if (!isLong && closePos <= 0.35m)
         {
             decimal extFromOpen = bar.OpenPrice - bar.ClosePrice;
-            if (extFromOpen >= atr * 0.85m || closePos <= 0.15m)
+            if (extFromOpen >= atr * 0.70m || closePos <= 0.20m)
             {
                 reason = $"IMPULSE_CHASE_SHORT range={range / atr:F2}ATR closePos={closePos:F2}";
                 return false;
@@ -675,10 +698,21 @@ public sealed class StrategyCoreEngine
         if (htfBear && close > eS * 1.003m)
             return (null, "m15_above_value_in_bear_htf");
 
-        if (htfBull && (close - st.LastSwingLow) > atr15 * 4.5m)
-            return (null, "extended_from_1h_swing_long");
-        if (htfBear && (st.LastSwingHigh - close) > atr15 * 4.5m)
-            return (null, "extended_from_1h_swing_short");
+        // Anti-parabolic: ATR inflates during pumps — also use % and location in 1H range
+        if (htfBull)
+        {
+            var para = PassParabolicGuard(h1Closed, isLong: true, close);
+            if (!para.ok) return (null, para.reason);
+            if ((close - st.LastSwingLow) > atr15 * 2.8m)
+                return (null, "extended_from_1h_swing_long");
+        }
+        if (htfBear)
+        {
+            var para = PassParabolicGuard(h1Closed, isLong: false, close);
+            if (!para.ok) return (null, para.reason);
+            if ((st.LastSwingHigh - close) > atr15 * 2.8m)
+                return (null, "extended_from_1h_swing_short");
+        }
 
         if (htfBull && touchLong && bullReject)
         {
