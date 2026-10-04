@@ -5,6 +5,8 @@ using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Learning;
 
+using VertexAutoTradeBinance8.Strategy;
+
 namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
 
 /// <summary>
@@ -274,60 +276,32 @@ public sealed class StrategyCoreEngine
             return (true, false, "atr_band");
         }
 
-        // v3: 1H structure owns direction + SL; 15m only triggers entry (no local trend chase).
-        var (signal, setupReason) = await TryHtfAnchoredEntryAsync(symbol, slice, atr).ConfigureAwait(false);
-
+        // ═══ INSTITUTIONAL TREND (from zero) — only InstitutionalTrendSetup ═══
         _lastSignalBarMs[symbol] = barKey;
 
-        if (signal == null)
-            return (true, false, string.IsNullOrEmpty(setupReason) ? "no_setup" : setupReason);
+        var h1 = await LoadKlinesTfAsync(symbol, KlineInterval.OneHour, 90).ConfigureAwait(false);
+        if (h1 == null || h1.Count < 55)
+            return (true, false, "htf_1h_thin");
 
-        // Secondary 15m micro-bias still logged (non-blocking if HTF already approved)
-        if (!PassHtfBiasGuard(slice, signal, out var htf15Reason))
+        decimal? btcBias = null;
+        try { btcBias = await GetBtcH1BiasAsync().ConfigureAwait(false); }
+        catch { /* neutral */ }
+
+        var built = InstitutionalTrendSetup.TryBuild(symbol, h1, slice, btcBias);
+        if (!built.Ok || built.Signal == null)
         {
-            _log.LogDebug("[CORE][{sym}] soft 15m bias note {r}", symbol, htf15Reason);
+            _log.LogDebug("[CORE][{sym}] no setup: {r}", symbol, built.Reason);
+            return (true, false, built.Reason ?? "no_setup");
         }
 
-        // FOMO / exhaustion guard (15m RSI)
-        if (!PassRsiGuard(slice, signal, out var rsiReason))
-        {
-            _log.LogInformation("[CORE][{sym}] REJECT {r}", symbol, rsiReason);
-            return (true, false, "rsi_fomo");
-        }
+        var signal = built.Signal;
+        signal.VolumeRatio = ComputeVolumeRatio(slice);
 
-        if (!PassRiskGeometry(signal, atr, out var geoReason))
+        // EntrySanityGate (shared last line) — defense in depth
+        if (!EntrySanityGate.Allow(signal, slice, h1, out var sanity))
         {
-            _log.LogInformation("[CORE][{sym}] REJECT {r}", symbol, geoReason);
-            return (true, false, "risk_geo");
-        }
-
-        if (!EnforceMinRr(signal))
-        {
-            decimal risk = Math.Abs(signal.EntryPrice - signal.StopLoss);
-            decimal tp1 = signal.TakeProfits is { Count: > 0 } ? signal.TakeProfits[0] : 0;
-            decimal rr = risk > 0 ? Math.Abs(tp1 - signal.EntryPrice) / risk : 0;
-            _log.LogInformation(
-                "[CORE][{sym}] REJECT R:R too low rr={rr:F2} < {min:F2} (TP1 geometry)",
-                symbol, rr, MinRr);
-            return (true, false, "rr");
-        }
-
-        // Capital-on-volume: do not emit local structure/slope without participation
-        decimal volRatio = ComputeVolumeRatio(slice);
-        signal.VolumeRatio = volRatio;
-        if (volRatio < MinVolumeRatioCore)
-        {
-            _log.LogInformation(
-                "[CORE][{sym}] REJECT NO_VOLUME_FLOW volR={vr:F2} < {min:F2} (blind local trend blocked)",
-                symbol, volRatio, MinVolumeRatioCore);
-            return (true, false, "no_volume_flow");
-        }
-
-        // Anti late-chase: no LONG after bullish impulse bar / no SHORT after bearish impulse
-        if (!PassImpulseChaseGuard(slice, signal, atr, out var impulseReason))
-        {
-            _log.LogInformation("[CORE][{sym}] REJECT {r}", symbol, impulseReason);
-            return (true, false, "impulse_chase");
+            _log.LogInformation("[CORE][{sym}] REJECT SANITY {r}", symbol, sanity);
+            return (true, false, "sanity:" + sanity);
         }
 
         _cooldown[symbol] = DateTime.UtcNow;
