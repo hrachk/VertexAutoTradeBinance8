@@ -471,6 +471,20 @@
 
     void SelectSymbol(string s) => SelectedSymbol = SelectedSymbol == s ? null : s;
 
+    static string SimplifyRegime(string? r)
+    {
+        if (string.IsNullOrWhiteSpace(r)) return "Unknown";
+        var s = r.Trim();
+        if (s.Contains("Up", StringComparison.OrdinalIgnoreCase) || s.Contains("Bull", StringComparison.OrdinalIgnoreCase))
+            return "UpTrend";
+        if (s.Contains("Down", StringComparison.OrdinalIgnoreCase) || s.Contains("Bear", StringComparison.OrdinalIgnoreCase))
+            return "DownTrend";
+        if (s.Contains("Range", StringComparison.OrdinalIgnoreCase) || s.Contains("Side", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("Flat", StringComparison.OrdinalIgnoreCase) || s.Contains("Chop", StringComparison.OrdinalIgnoreCase))
+            return "Range";
+        return s.Length > 12 ? s[..12] : s;
+    }
+
     static string ShortSym(string s) =>
         string.IsNullOrEmpty(s) ? "—" : s.Replace("USDT", "", StringComparison.OrdinalIgnoreCase);
 
