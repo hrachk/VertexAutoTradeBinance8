@@ -1,28 +1,26 @@
-# Institutional strategy (rebuild from zero)
+# Institutional TREND v2 — professional geometry
 
-## What was deleted from the live path
-- 15m-only pullback / structure chase (`TryPullback` as emit source)
-- SimpleTrend continuation
-- Breakout-retest as primary emit
-- HTF-anchored “v3” hybrid that still entered parabolic alts
+## Hierarchy
+| TF | Role |
+|----|------|
+| **4H** | Permission: long blocked if price under 4H EMA50 / bearish structure |
+| **1H** | Bias (HH/HL) + swing invalidation + ATR for stop width |
+| **15m** | Trigger only (reject into EMA21) |
 
-Legacy methods may remain in `StrategyCoreEngine.cs` for reference but **EvaluateAsync does not call them**.
+## Stop-Loss (not noise)
+```
+slPad = max(0.35 * ATR(1H), 0.90 * ATR(15m))
+SL long  = min(swingLow - pad, entry - 0.9%)  then clamp risk ≤ 2.8%
+SL short = max(swingHigh + pad, entry + 0.9%) then clamp risk ≤ 2.8%
+```
+- **Min risk distance 0.9%** — kills micro-stops (~0.2%) that always stop out.
+- **Max 2.8%** — keeps 1R sizing sane.
+- TP ladder: **1.6R / 2.8R / 4.5R**.
 
-## Live TREND path (only)
-`InstitutionalTrendSetup.TryBuild` → `StrategyCoreEngine.EvaluateAsync` → Router → Worker → Sanity/DualMode/Risk → order
+## Location
+- Long only if price in **lower 42%** of last 1H swing range.
+- Short only in **upper 42%**.
 
-| Rule | Detail |
-|------|--------|
-| Bias | 1H HH/HL or LH/LL + EMA21/50 |
-| Location | LONG only **discount** (≤ equilibrium of last 1H swing); SHORT only **premium** |
-| Trigger | 15m reject at EMA21 in bias direction |
-| SL | 1H swing invalidation (± pad), risk capped 0.7–3.2% |
-| TP | 1.5R / 2.5R / 4.0R |
-| Ban | Parabolic top/bot, vertical 12h without retrace, 15m impulse window, dead 1H volume, BTC against alts |
-| Reason codes | `CORE_INST_LONG` / `CORE_INST_SHORT` |
-
-## Live RANGE path
-Unchanged channel: `MeanReversionEngine` → `RANGE_SPREAD_*` when DualMode = Range (non-majors, low leverage). Still passes `EntrySanityGate`.
-
-## Not “edge”
-Sizing, DualMode universe, journal, Demo parity — infrastructure only. Edge is only the rules above.
+## Reasons
+`CORE_INST_LONG` / `CORE_INST_SHORT`  
+Rejects: `h4_blocks_long`, `long_not_in_discount`, `parabolic_top`, …

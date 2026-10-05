@@ -283,11 +283,13 @@ public sealed class StrategyCoreEngine
         if (h1 == null || h1.Count < 55)
             return (true, false, "htf_1h_thin");
 
+        var h4 = await LoadKlinesTfAsync(symbol, KlineInterval.FourHour, 60).ConfigureAwait(false);
+
         decimal? btcBias = null;
         try { btcBias = await GetBtcH1BiasAsync().ConfigureAwait(false); }
         catch { /* neutral */ }
 
-        var built = InstitutionalTrendSetup.TryBuild(symbol, h1, slice, btcBias);
+        var built = InstitutionalTrendSetup.TryBuild(symbol, h1, slice, h4, btcBias);
         if (!built.Ok || built.Signal == null)
         {
             _log.LogDebug("[CORE][{sym}] no setup: {r}", symbol, built.Reason);
