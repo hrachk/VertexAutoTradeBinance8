@@ -24,3 +24,17 @@ SL short = max(swingHigh + pad, entry + 0.9%) then clamp risk ≤ 2.8%
 ## Reasons
 `CORE_INST_LONG` / `CORE_INST_SHORT`  
 Rejects: `h4_blocks_long`, `long_not_in_discount`, `parabolic_top`, …
+
+
+## Dual mode (TREND vs RANGE) — how the system marks regime
+
+BTC **1H** Kaufman Efficiency Ratio + ATR ratio + 15m spike:
+
+| Mode | Condition | Live leg |
+|------|-----------|----------|
+| **TREND** | ER ≥ TrendEfficiencyMin (default 0.32) | CORE_INST_* only |
+| **RANGE** | ER below threshold, not chaos | RANGE_SPREAD_* only |
+| **CHAOS** | ATR expand + low ER, or BTC ±1.8%/15m | no new entries |
+
+Log: `[DUAL-MODE] BTC regime → Range/Trend`.
+News: TREND full impact; RANGE only hard macro pause.

@@ -1093,27 +1093,49 @@ namespace VertexAutoTradeBinance8
             {
                 if (_news != null)
                 {
-                    // SoftImpactAlways: size cut even in Shadow. MacroHigh always pauses.
-                    if (_news.IsEntryPaused(symbol))
-                    {
-                        var dir = _news.TryGetActiveDirective();
-                        await RejectAsync(signal, symbol, tf, "NEWS", "CATALYST_PAUSE",
-                            ct, extra: dir?.Reason ?? "active news directive");
-                        return;
-                    }
+                    bool isTrendLeg = VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy.IsTrendLeg(signal.Reason);
+                    bool isRangeLeg = VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy.IsRangeLeg(signal.Reason);
                     var sm = _news.GetEntrySizeMult(symbol, signal.Side.ToString());
-                    if (sm <= 0m)
+
+                    // TREND (CORE_INST): full news impact — pause + size cut (macro / crypto catalysts)
+                    // RANGE (SPREAD): only hard block when size forced to 0 (FOMC/CPI window); no soft size cuts
+                    if (isTrendLeg)
                     {
-                        await RejectAsync(signal, symbol, tf, "NEWS", "CATALYST_SIZE_ZERO",
-                            ct, extra: "news size mult 0");
-                        return;
+                        if (_news.IsEntryPaused(symbol) || sm <= 0m)
+                        {
+                            var dir = _news.TryGetActiveDirective();
+                            await RejectAsync(signal, symbol, tf, "NEWS",
+                                sm <= 0m ? "CATALYST_SIZE_ZERO" : "CATALYST_PAUSE",
+                                ct, extra: dir?.Reason ?? "news blocks TREND entry");
+                            return;
+                        }
+                        if (sm < 1m)
+                        {
+                            signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * sm, 0.25m, 1.0m);
+                            _logger.LogInformation(
+                                "[NEWS-SIZE] TREND {sym} size×{sm:F2} (macro/crypto impact)",
+                                symbol, sm);
+                        }
                     }
-                    if (sm < 1m)
+                    else if (isRangeLeg)
                     {
-                        signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * sm, 0.25m, 1.0m);
-                        _logger.LogInformation(
-                            "[NEWS-SIZE] {sym} size×{sm:F2} (soft/hard impact active)",
-                            symbol, sm);
+                        // Spread/scalp stays independent of soft news noise; only kill-switch on critical
+                        if (sm <= 0.01m && _news.IsEntryPaused(symbol))
+                        {
+                            var dir = _news.TryGetActiveDirective();
+                            await RejectAsync(signal, symbol, tf, "NEWS", "MACRO_HARD_PAUSE",
+                                ct, extra: dir?.Reason ?? "macro hard pause (all legs)");
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        // Unknown reason: conservative TREND-like
+                        if (_news.IsEntryPaused(symbol) || sm <= 0m)
+                        {
+                            await RejectAsync(signal, symbol, tf, "NEWS", "CATALYST_PAUSE", ct);
+                            return;
+                        }
                     }
                 }
             }

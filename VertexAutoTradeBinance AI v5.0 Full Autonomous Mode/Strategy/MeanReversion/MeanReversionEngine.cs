@@ -6,6 +6,7 @@ using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 
 using VertexAutoTradeBinance8.Strategy;
+using VertexAutoTradeBinance8.Services.DualMode;
 
 namespace VertexAutoTradeBinance8.Strategy.MeanReversion
 {
@@ -40,6 +41,7 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
         private readonly SmartRegimeService _smartRegimeService;
         private readonly AiCorrelationService _correlationService;
         private readonly IOptionsMonitor<MeanReversionOptions> _optMonitor;
+        private readonly DualModeTradingPolicy? _dualMode;
         private MeanReversionOptions _opt => _optMonitor.CurrentValue;
 
         public event Action<TradeSignal>? OnSignalGenerated;
@@ -55,12 +57,14 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             ILogger<MeanReversionEngine> logger,
             SmartRegimeService smartRegimeService,
             AiCorrelationService correlationService,
-            IOptionsMonitor<MeanReversionOptions> optMonitor)
+            IOptionsMonitor<MeanReversionOptions> optMonitor,
+            DualModeTradingPolicy? dualMode = null)
         {
             _logger = logger;
             _smartRegimeService = smartRegimeService;
             _correlationService = correlationService;
             _optMonitor = optMonitor;
+            _dualMode = dualMode;
         }
 
         /// <summary>
@@ -164,19 +168,38 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             if (ExecutableStrategyPolicy.IsCoreMajorSymbol(symbol))
                 return null;
 
+            // DualMode BTC regime: TREND/CHAOS → no RANGE leg (mutual exclusion)
+            var btcMode = _dualMode?.CurrentBtcMode ?? DualMarketMode.Unknown;
+            if (btcMode == DualMarketMode.Trend || btcMode == DualMarketMode.Chaos)
+            {
+                _logger.LogDebug("[MEANREV] skip {sym} — BTC dual={mode}", symbol, btcMode);
+                return null;
+            }
+
             // Do not fade expanding volatility (trend ignition) — primary MR failure mode
             if (IsAtrExpanding(klines, 14, 20, 1.45m))
                 return null;
 
-            // ── GATE 1: Regime — only trade mean-reversion in Range/Squeeze ──
+            // ── GATE 1: Regime — BTC DualMode RANGE OR symbol Range/Squeeze ──
             var smart = _smartRegimeService.Evaluate(symbol, tf, klines);
             bool rangeLike =
                 smart.BaseRegime == MarketRegime.Range ||
                 smart.SmartType == SmartRegimeType.SmartRange ||
                 smart.SmartType == SmartRegimeType.SmartSqueeze;
+            bool btcRange = btcMode == DualMarketMode.Range || btcMode == DualMarketMode.Unknown;
 
-            if (_opt.RequireRangeRegime && !rangeLike)
-                return null;
+            if (_opt.RequireRangeRegime)
+            {
+                // Production: if BTC is in RANGE, allow MR on liquid alts even when
+                // local 15m "smart" still labels a mild directional slope.
+                if (_opt.AllowWhenBtcRange && btcRange)
+                {
+                    if (!rangeLike && !btcRange)
+                        return null;
+                }
+                else if (!rangeLike)
+                    return null;
+            }
 
             // ── GATE 2: Z-Score extreme ──
             var bands = ZScoreCalculator.ComputeBands(klines, _opt.Window, _opt.EntrySigma);
@@ -333,8 +356,15 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
 
         public bool RequireRangeRegime { get; set; } = true;
 
+        /// <summary>
+        /// When BTC DualMode = Range, allow MR even if symbol smart-regime is not pure Range.
+        /// Prevents zero spread trades when BTC is flat but alts still have mild slope labels.
+        /// </summary>
+        public bool AllowWhenBtcRange { get; set; } = true;
+
         public bool UseBtcCorrelationGuard { get; set; } = true;
-        public decimal BtcCorrelationThreshold { get; set; } = 0.6m;
+        /// <summary>Only block high-corr fades when |corr| exceeds this (0.75+ = lockstep with BTC).</summary>
+        public decimal BtcCorrelationThreshold { get; set; } = 0.75m;
 
         /// <summary>Extra ATR padding beyond the entry band for the stop-loss.</summary>
         public decimal StopAtrPad { get; set; } = 0.3m;

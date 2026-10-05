@@ -32,6 +32,9 @@ public static class EntrySanityGate
             return false;
         }
 
+        // RANGE / mean-reversion trades AT extremes by design — do not apply TREND chase bans
+        bool rangeLeg = ExecutableStrategyPolicy.IsRangeLeg(signal.Reason);
+
         // Geometry: micro SL / absurd SL
         if (signal.StopLoss > 0)
         {
@@ -60,50 +63,51 @@ public static class EntrySanityGate
             }
         }
 
-        // 1H parabolic / vertical move
-        if (h1 != null && h1.Count >= 16)
+        // TREND-only chase bans (RANGE leg intentionally fades extremes)
+        if (!rangeLeg)
         {
-            var list = h1.OrderBy(x => x.OpenTime).ToList();
-            var para = PassParabolic(list, isLong, entry);
-            if (!para.ok)
+            if (h1 != null && h1.Count >= 16)
             {
-                reason = para.reason;
-                return false;
-            }
-        }
-
-        // 15m impulse window chase
-        if (m15 != null && m15.Count >= 8)
-        {
-            var list = m15.OrderBy(x => x.OpenTime).ToList();
-            decimal atr = Atr(list, 14);
-            if (atr > 0 && !PassImpulseWindow(list, isLong, atr, out var imp))
-            {
-                reason = imp;
-                return false;
-            }
-        }
-
-        // Extreme session move on any TF available
-        var refBars = (h1 != null && h1.Count >= 12) ? h1.OrderBy(x => x.OpenTime).ToList()
-            : (m15 != null && m15.Count >= 20) ? m15.OrderBy(x => x.OpenTime).ToList()
-            : null;
-        if (refBars != null)
-        {
-            var w = refBars.TakeLast(Math.Min(refBars.Count, 24)).ToList();
-            decimal open0 = w[0].OpenPrice;
-            if (open0 > 0)
-            {
-                decimal move = (entry - open0) / open0;
-                if (isLong && move >= 0.18m)
+                var list = h1.OrderBy(x => x.OpenTime).ToList();
+                var para = PassParabolic(list, isLong, entry);
+                if (!para.ok)
                 {
-                    reason = $"SANITY_SESSION_PUMP move={move:P1}";
+                    reason = para.reason;
                     return false;
                 }
-                if (!isLong && move <= -0.18m)
+            }
+
+            if (m15 != null && m15.Count >= 8)
+            {
+                var list = m15.OrderBy(x => x.OpenTime).ToList();
+                decimal atr = Atr(list, 14);
+                if (atr > 0 && !PassImpulseWindow(list, isLong, atr, out var imp))
                 {
-                    reason = $"SANITY_SESSION_DUMP move={move:P1}";
+                    reason = imp;
                     return false;
+                }
+            }
+
+            var refBars = (h1 != null && h1.Count >= 12) ? h1.OrderBy(x => x.OpenTime).ToList()
+                : (m15 != null && m15.Count >= 20) ? m15.OrderBy(x => x.OpenTime).ToList()
+                : null;
+            if (refBars != null)
+            {
+                var w = refBars.TakeLast(Math.Min(refBars.Count, 24)).ToList();
+                decimal open0 = w[0].OpenPrice;
+                if (open0 > 0)
+                {
+                    decimal move = (entry - open0) / open0;
+                    if (isLong && move >= 0.18m)
+                    {
+                        reason = $"SANITY_SESSION_PUMP move={move:P1}";
+                        return false;
+                    }
+                    if (!isLong && move <= -0.18m)
+                    {
+                        reason = $"SANITY_SESSION_DUMP move={move:P1}";
+                        return false;
+                    }
                 }
             }
         }
