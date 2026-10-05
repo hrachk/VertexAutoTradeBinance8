@@ -675,7 +675,59 @@ public sealed class DemoAccountService
     // mutate a position's protective levels, rather than relying on
     // GetSnapshot's returned objects happening to share references
     // with the internal state.
-    public bool UpdatePositionProtectiveLevel(string positionId, bool isStopLoss, decimal price, int? tpIndex, decimal? newTpQty = null)
+    /// <summary>
+    /// After engine/UI upgrade: widen micro Demo SLs to minRiskPct from entry; seed TP1 if empty.
+    /// Call once after load / service start. Does not tighten wide stops.
+    /// </summary>
+    public int ReconcileOpenProtectiveLevels(decimal minRiskPct = 0.009m, decimal tp1R = 1.6m)
+    {
+        int n = 0;
+        lock (_lock)
+        {
+            foreach (var pos in _state.Positions.Where(p => p.Qty != 0).ToList())
+            {
+                bool isLong = string.Equals(pos.Side, "LONG", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(pos.Side, "Buy", StringComparison.OrdinalIgnoreCase);
+                decimal entry = pos.EntryPrice;
+                if (entry <= 0) continue;
+
+                decimal targetRisk = entry * minRiskPct;
+                decimal targetSl = isLong ? entry - targetRisk : entry + targetRisk;
+
+                decimal curSl = pos.StopLoss ?? 0m;
+                bool needWiden = curSl <= 0;
+                if (curSl > 0)
+                {
+                    decimal riskPct = Math.Abs(entry - curSl) / entry;
+                    if (riskPct + 0.0005m < minRiskPct)
+                        needWiden = true;
+                }
+
+                if (needWiden)
+                {
+                    pos.StopLoss = targetSl;
+                    if (pos.InitialRiskPrice <= 0)
+                        pos.InitialRiskPrice = targetRisk;
+                    n++;
+                }
+
+                if (pos.TakeProfits == null || pos.TakeProfits.Count == 0)
+                {
+                    decimal r = (pos.StopLoss is > 0) ? Math.Abs(entry - pos.StopLoss.Value) : targetRisk;
+                    decimal tp1 = isLong ? entry + tp1R * r : entry - tp1R * r;
+                    pos.TakeProfits = new List<DemoTpLevel>
+                    {
+                        new DemoTpLevel { Price = tp1, Pct = 0.5m }
+                    };
+                    n++;
+                }
+            }
+            if (n > 0) Save();
+        }
+        return n;
+    }
+
+        public bool UpdatePositionProtectiveLevel(string positionId, bool isStopLoss, decimal price, int? tpIndex, decimal? newTpQty = null)
     {
         lock (_lock)
         {

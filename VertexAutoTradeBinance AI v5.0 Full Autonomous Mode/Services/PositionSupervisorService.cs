@@ -2009,6 +2009,137 @@ namespace VertexAutoTradeBinance8.Services
                 symbol, side, qty, entryPrice);
 
             await EnsureEmergencyProtectionAsync(symbol, side, qty, entryPrice, ct);
+
+            // Upgrade path: positions opened under old micro-SL logic keep working after restart
+            // but protective geometry is reconciled to current institutional min risk / TPs.
+            try
+            {
+                var to = _tradingOptions.CurrentValue;
+                if (to.ReconcileProtectiveOnStart)
+                    await ReconcileProtectiveGeometryAsync(symbol, side, qty, entryPrice, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[SUPERVISOR][RECONCILE] failed {symbol} {side}", symbol, side);
+            }
+        }
+
+
+        /// <summary>
+        /// After service restart: widen micro-stops on already-open positions to MinProtectiveRiskPct
+        /// from entry; seed TP1 if none. Never tightens an already-wide SL.
+        /// </summary>
+        private async Task ReconcileProtectiveGeometryAsync(
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            decimal entryPrice,
+            CancellationToken ct)
+        {
+            qty = Math.Abs(qty);
+            if (qty <= 0 || entryPrice <= 0) return;
+
+            var to = _tradingOptions.CurrentValue;
+            decimal minRisk = to.MinProtectiveRiskPct > 0 ? to.MinProtectiveRiskPct : 0.009m;
+            decimal tp1R = to.ReconcileTp1R > 0 ? to.ReconcileTp1R : 1.6m;
+
+            var algos = await _algoRaw.GetOpenAlgoOrdersAsync(symbol, ct).ConfigureAwait(false);
+            var stops = algos.Where(o => o.IsStop && o.PositionSide == side).ToList();
+            var tps = algos.Where(o => o.IsTakeProfit && o.PositionSide == side).ToList();
+
+            decimal? existingSl = null;
+            foreach (var s in stops)
+            {
+                if (s.TriggerPrice > 0)
+                {
+                    existingSl = s.TriggerPrice;
+                    break;
+                }
+            }
+
+            decimal targetRisk = entryPrice * minRisk;
+            decimal targetSl = side == PositionSide.Long
+                ? entryPrice - targetRisk
+                : entryPrice + targetRisk;
+
+            bool needWiden = false;
+            if (existingSl == null || existingSl <= 0)
+            {
+                needWiden = true;
+            }
+            else
+            {
+                decimal riskPct = Math.Abs(entryPrice - existingSl.Value) / entryPrice;
+                if (riskPct + 0.0005m < minRisk)
+                {
+                    needWiden = true;
+                    _logger.LogWarning(
+                        "[SUPERVISOR][RECONCILE] micro-SL {symbol} {side} risk={rp:P2} < min={min:P2} → widen to {sl}",
+                        symbol, side, riskPct, minRisk, targetSl);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "[SUPERVISOR][RECONCILE] SL OK {symbol} {side} risk={rp:P2}",
+                        symbol, side, riskPct);
+                }
+            }
+
+            if (needWiden)
+            {
+                foreach (var s in stops)
+                {
+                    try { await _algoRaw.CancelAlgoOrderAsync(s.AlgoId, ct).ConfigureAwait(false); }
+                    catch { }
+                }
+
+                var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+                var ok = await _algoRaw.PlaceConditionalAsync(
+                    symbol: symbol,
+                    side: orderSide,
+                    positionSide: side,
+                    type: "STOP_MARKET",
+                    quantity: qty,
+                    triggerPrice: targetSl,
+                    workingType: "MARK_PRICE",
+                    reduceOnly: true,
+                    ct: ct,
+                    clientAlgoId: $"{SL_PREFIX}REC_{symbol}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}").ConfigureAwait(false);
+
+                _logger.LogWarning(
+                    "[SUPERVISOR][RECONCILE] SL placed {symbol} {side} sl={sl} ok={ok}",
+                    symbol, side, targetSl, ok);
+            }
+
+            if (tps.Count == 0)
+            {
+                decimal rDist = targetRisk;
+                if (existingSl is > 0 && !needWiden)
+                    rDist = Math.Abs(entryPrice - existingSl.Value);
+                if (rDist <= 0) rDist = targetRisk;
+
+                decimal tp1 = side == PositionSide.Long
+                    ? entryPrice + tp1R * rDist
+                    : entryPrice - tp1R * rDist;
+
+                var tpSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+                decimal tpQty = Math.Max(qty * 0.5m, 0m);
+                var okTp = await _algoRaw.PlaceConditionalAsync(
+                    symbol: symbol,
+                    side: tpSide,
+                    positionSide: side,
+                    type: "TAKE_PROFIT_MARKET",
+                    quantity: tpQty,
+                    triggerPrice: tp1,
+                    workingType: "MARK_PRICE",
+                    reduceOnly: true,
+                    ct: ct,
+                    clientAlgoId: $"{TP_PREFIX}REC1_{symbol}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}").ConfigureAwait(false);
+
+                _logger.LogWarning(
+                    "[SUPERVISOR][RECONCILE] TP1 seeded {symbol} {side} tp={tp} ok={ok}",
+                    symbol, side, tp1, okTp);
+            }
         }
 
         private async Task EnsureEmergencyProtectionAsync(

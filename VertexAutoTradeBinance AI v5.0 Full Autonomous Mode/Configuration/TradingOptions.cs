@@ -42,6 +42,20 @@ public class TradingOptions
     public bool EnableExecution { get; set; } = true;
 
     /// <summary>
+    /// After restart/attach: if open position SL risk from entry is thinner than
+    /// MinProtectiveRiskPct, replace SL (and seed missing TPs) with institutional geometry.
+    /// Does not tighten already-wide stops. Default true for upgrade safety.
+    /// </summary>
+    public bool ReconcileProtectiveOnStart { get; set; } = true;
+
+    /// <summary>Minimum SL distance from entry when reconciling (0.009 = 0.9%).</summary>
+    public decimal MinProtectiveRiskPct { get; set; } = 0.009m;
+
+    /// <summary>TP1 multiple of R when seeding missing TPs on attach.</summary>
+    public decimal ReconcileTp1R { get; set; } = 1.6m;
+
+
+    /// <summary>
     /// Max concurrent open positions (LIVE TradingWorker + Demo auto).
     /// From Trading:MaxOpenPositions. Default 5. Values <= 0 fall back to 5.
     /// </summary>

@@ -46,6 +46,16 @@ public sealed class DemoAutoTradeService : BackgroundService
     {
         _startedUtc = DateTime.UtcNow;
         LoadSeenKeys();
+        try
+        {
+            int rec = _demo.ReconcileOpenProtectiveLevels();
+            if (rec > 0)
+                _log.LogWarning("[DEMO-AUTO][RECONCILE] adjusted protective levels on {n} open Demo position(s)", rec);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "[DEMO-AUTO][RECONCILE] skipped");
+        }
         _log.LogInformation(
             "[DEMO-AUTO] started (approved + live_signals fallback) at {t:o} shared={root}",
             _startedUtc, _sharedRoot);
