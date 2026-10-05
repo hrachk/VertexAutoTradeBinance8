@@ -5,7 +5,19 @@
 <div class="hx-root" data-lang="@_lang">
     <aside class="hx-nav">
         <div class="hx-brand">
-            <div class="hx-logo">V</div>
+            <div class="hx-logo">
+                <svg viewBox="0 0 40 40" width="36" height="36" aria-hidden="true">
+                    <defs>
+                        <linearGradient id="vg" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="#22d3ee"/>
+                            <stop offset="100%" stop-color="#a78bfa"/>
+                        </linearGradient>
+                    </defs>
+                    <rect width="40" height="40" rx="10" fill="url(#vg)" opacity="0.2"/>
+                    <path d="M8 28 L20 8 L32 28 Z" fill="none" stroke="url(#vg)" stroke-width="2.5"/>
+                    <circle cx="20" cy="22" r="3" fill="#22d3ee"/>
+                </svg>
+            </div>
             <div>
                 <div class="hx-brand-title">VERTEX</div>
                 <div class="hx-brand-sub">@T("help.brand_sub")</div>
@@ -31,401 +43,479 @@
         </nav>
 
         <div class="hx-nav-foot">
-            <a href="/market">Market</a>
-            <a href="/settings">Settings</a>
-            <a href="/ai-dashboard">AI</a>
-            <a href="/macro-news">News</a>
+            <a href="/market" class="hx-link-pill">📈 Market</a>
+            <a href="/settings" class="hx-link-pill">⚙️ Settings</a>
+            <a href="/ai-dashboard" class="hx-link-pill">🧠 AI</a>
+            <a href="/macro-news" class="hx-link-pill">📰 News</a>
+            <a href="/twa/dashboard" class="hx-link-pill">📱 TWA</a>
         </div>
     </aside>
 
     <main class="hx-main">
-        <header class="hx-header">
-            <div>
+        <header class="hx-hero">
+            <div class="hx-hero-glow"></div>
+            <div class="hx-hero-text">
+                <div class="hx-kicker">VERTEX AutoTrade · Production</div>
                 <h1>@CurrentTitle</h1>
                 <p class="hx-lead">@CurrentLead</p>
+                <div class="hx-hero-actions">
+                    <a class="hx-btn primary" href="/settings">@T("hero.settings")</a>
+                    <a class="hx-btn ghost" href="/market">@T("hero.market")</a>
+                    <a class="hx-btn ghost" href="/ai-dashboard">@T("hero.ai")</a>
+                </div>
             </div>
-            <div class="hx-badge">Expert v2.0 · Production</div>
+            <div class="hx-hero-art" aria-hidden="true">
+                <svg viewBox="0 0 280 160" class="hx-chart-svg">
+                    <defs>
+                        <linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.45"/>
+                            <stop offset="100%" stop-color="#22d3ee" stop-opacity="0"/>
+                        </linearGradient>
+                    </defs>
+                    <polyline fill="none" stroke="#334155" stroke-width="1" points="10,120 40,110 70,115 100,90 130,95 160,70 190,75 220,50 250,55 270,40"/>
+                    <polyline fill="none" stroke="#22d3ee" stroke-width="2.2" points="10,130 40,125 70,128 100,105 130,108 160,85 190,88 220,62 250,68 270,52"/>
+                    <polygon fill="url(#cg)" points="10,140 10,130 40,125 70,128 100,105 130,108 160,85 190,88 220,62 250,68 270,52 270,140"/>
+                    <line x1="160" y1="20" x2="160" y2="140" stroke="#22c55e" stroke-dasharray="4 3" opacity="0.7"/>
+                    <line x1="10" y1="100" x2="270" y2="100" stroke="#ef4444" stroke-dasharray="4 3" opacity="0.55"/>
+                    <text x="164" y="18" fill="#22c55e" font-size="10">TP</text>
+                    <text x="12" y="96" fill="#ef4444" font-size="10">SL</text>
+                    <circle cx="160" cy="85" r="5" fill="#a78bfa"/>
+                    <text x="168" y="82" fill="#e2e8f0" font-size="10">Entry</text>
+                </svg>
+            </div>
         </header>
 
+        @* ── QUICK ── *@
         @if (_section == "quick")
         {
             <section class="hx-section">
                 <div class="hx-grid-3">
-                    <div class="hx-card step">
+                    <article class="hx-card step">
                         <div class="hx-step">1</div>
                         <h3>@T("quick.s1_t")</h3>
                         <p>@T("quick.s1_p")</p>
-                        <pre class="hx-code">SharedData:Root → same folder for Engine + Web
+                        <pre class="hx-code">SharedData:Root  (Engine + Web = same path)
 vertex_journal.db · vertex_system.db
-client_xxx/approved_entries.json</pre>
-                    </div>
-                    <div class="hx-card step">
+appsettings.json + runtime.json</pre>
+                    </article>
+                    <article class="hx-card step">
                         <div class="hx-step">2</div>
                         <h3>@T("quick.s2_t")</h3>
                         <p>@T("quick.s2_p")</p>
                         <pre class="hx-code">1) Start Engine (worker)
 2) Start Web → :5101
-Logs: [TIME-SYNC] [DUAL-MODE] [ROUTER]</pre>
-                    </div>
-                    <div class="hx-card step">
+Logs: [TIME-SYNC] [DUAL-MODE] [CORE]</pre>
+                    </article>
+                    <article class="hx-card step">
                         <div class="hx-step">3</div>
                         <h3>@T("quick.s3_t")</h3>
                         <p>@T("quick.s3_p")</p>
-                        <pre class="hx-code">Demo $10,000 independent of exchange
-Enable Demo AutoTrade → paper only
-Then Live only after 30–50 Demo trades</pre>
+                        <pre class="hx-code">Demo ON → independent $10k
+Live OFF until Demo edge is OK
+AutoTrade + DualMode Enabled</pre>
+                    </article>
+                </div>
+
+                <div class="hx-banner">
+                    <div class="hx-banner-icon">✓</div>
+                    <div>
+                        <strong>@T("quick.ok_t")</strong>
+                        <p>@T("quick.ok_p")</p>
                     </div>
                 </div>
 
-                <div class="hx-callout ok">
-                    <strong>@T("quick.defaults_t")</strong>
-                    <p>@T("quick.defaults_p")</p>
-                    <ul class="hx-list">
-                        <li>MaxOpenPositions = <b>4</b></li>
-                        <li>MaxSameSidePositions = <b>2</b> · CorrelationFilter = <b>StaticLimit</b></li>
-                        <li>SignalQuality MinThreshold = <b>78%</b> · Auction BestScore</li>
-                        <li>MaxNotionalPctOfEquity = <b>28%</b> · DualMode MinVolumeRatio = <b>1.05</b></li>
-                        <li>ML Hard Gate / News Hard = <b>OFF</b> (shadow until proven)</li>
-                    </ul>
+                <h2 class="hx-h2">@T("quick.links_t")</h2>
+                <div class="hx-link-grid">
+                    <a href="/market" class="hx-tile"><span>📈</span><b>Market</b><small>@T("quick.l_market")</small></a>
+                    <a href="/settings" class="hx-tile"><span>⚙️</span><b>Settings</b><small>@T("quick.l_settings")</small></a>
+                    <a href="/ai-dashboard" class="hx-tile"><span>🧠</span><b>AI Dashboard</b><small>@T("quick.l_ai")</small></a>
+                    <a href="/macro-news" class="hx-tile"><span>📰</span><b>Macro News</b><small>@T("quick.l_news")</small></a>
+                    <a href="/positions" class="hx-tile"><span>📋</span><b>Positions</b><small>@T("quick.l_pos")</small></a>
+                    <a href="/twa/dashboard" class="hx-tile"><span>📱</span><b>Telegram Mini</b><small>@T("quick.l_twa")</small></a>
                 </div>
             </section>
         }
 
+        @* ── PIPELINE ── *@
         @if (_section == "pipeline")
         {
             <section class="hx-section">
-                <h2>@T("pipe.title")</h2>
-                <p class="hx-p">@T("pipe.intro")</p>
-
-                <div class="hx-flow">
-                    <div class="hx-flow-node">Market Data<br/><span>WS · REST · 15m+</span></div>
-                    <div class="hx-flow-arrow">→</div>
-                    <div class="hx-flow-node accent">CORE / MR<br/><span>signals</span></div>
-                    <div class="hx-flow-arrow">→</div>
-                    <div class="hx-flow-node accent2">Router<br/><span>DualMode</span></div>
-                    <div class="hx-flow-arrow">→</div>
-                    <div class="hx-flow-node">PROC<br/><span>Risk · SQ</span></div>
-                    <div class="hx-flow-arrow">→</div>
-                    <div class="hx-flow-node ok">Live + Demo<br/><span>1:1 entry</span></div>
+                <div class="hx-flow-wrap">
+                    <svg class="hx-flow-svg" viewBox="0 0 900 220" role="img" aria-label="Pipeline">
+                        <defs>
+                            <linearGradient id="fg" x1="0" y1="0" x2="1" y2="0">
+                                <stop offset="0%" stop-color="#22d3ee"/>
+                                <stop offset="50%" stop-color="#a78bfa"/>
+                                <stop offset="100%" stop-color="#22c55e"/>
+                            </linearGradient>
+                        </defs>
+                        <line x1="70" y1="110" x2="830" y2="110" stroke="url(#fg)" stroke-width="3" opacity="0.5"/>
+                        @{
+                            var nodes = new[] {
+                                ("WS", "Market data", 70),
+                                ("Dual", "BTC regime", 220),
+                                ("Core", "CORE_INST", 370),
+                                ("Range", "SPREAD", 520),
+                                ("Risk", "1R / caps", 670),
+                                ("Exec", "Demo·Live", 820)
+                            };
+                        }
+                        @foreach (var n in nodes)
+                        {
+                            <g transform="translate(@n.Item3, 110)">
+                                <circle r="28" fill="#0f172a" stroke="#22d3ee" stroke-width="2"/>
+                                <text text-anchor="middle" y="5" fill="#e2e8f0" font-size="11" font-weight="700">@n.Item1</text>
+                                <text text-anchor="middle" y="52" fill="#94a3b8" font-size="10">@n.Item2</text>
+                            </g>
+                        }
+                    </svg>
                 </div>
 
                 <div class="hx-grid-2">
-                    <div class="hx-card">
+                    <article class="hx-card">
+                        <div class="hx-tag cyan">TREND</div>
                         <h3>@T("pipe.trend_t")</h3>
-                        <ol class="hx-list num">
-                            <li>@T("pipe.trend_1")</li>
-                            <li>@T("pipe.trend_2")</li>
-                            <li>@T("pipe.trend_3")</li>
-                            <li>@T("pipe.trend_4")</li>
-                            <li>@T("pipe.trend_5")</li>
-                        </ol>
-                        <pre class="hx-code">SetupReason example:
-TREND: CORE_PULLBACK_LONG</pre>
-                    </div>
-                    <div class="hx-card">
+                        <p>@T("pipe.trend_p")</p>
+                        <ul class="hx-list">
+                            <li><code>CORE_INST_LONG / SHORT</code></li>
+                            <li>@T("pipe.trend_l2")</li>
+                            <li>@T("pipe.trend_l3")</li>
+                        </ul>
+                    </article>
+                    <article class="hx-card">
+                        <div class="hx-tag violet">RANGE</div>
                         <h3>@T("pipe.range_t")</h3>
-                        <ol class="hx-list num">
-                            <li>@T("pipe.range_1")</li>
-                            <li>@T("pipe.range_2")</li>
-                            <li>@T("pipe.range_3")</li>
-                            <li>@T("pipe.range_4")</li>
-                        </ol>
-                        <pre class="hx-code">SetupReason example:
-RANGE: RANGE_SPREAD_SHORT</pre>
-                    </div>
-                </div>
-
-                <div class="hx-card">
-                    <h3>@T("pipe.proc_t")</h3>
-                    <div class="hx-table-wrap">
-                        <table class="hx-table">
-                            <thead><tr><th>@T("pipe.col_stage")</th><th>@T("pipe.col_what")</th><th>@T("pipe.col_reject")</th></tr></thead>
-                            <tbody>
-                                <tr><td>Executable</td><td>CORE_ / TREND_ / RANGE_ only</td><td>NON_STRATEGY_BLOCKED</td></tr>
-                                <tr><td>DualMode</td><td>Regime · universe · flow · size/lev</td><td>regime/universe/flow</td></tr>
-                                <tr><td>Risk</td><td>1R · HardCap · notional 28% · max positions</td><td>QTY_ZERO · DIR_MAX</td></tr>
-                                <tr><td>Signal Quality</td><td>Auction score ≥ threshold</td><td>BELOW_QUALITY</td></tr>
-                                <tr><td>OB Guard</td><td>Spread / depth</td><td>SPREAD_WIDE</td></tr>
-                                <tr><td>Exec</td><td>Binance + ApprovedEntry → Demo</td><td>EXECUTION_FAILED</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
+                        <p>@T("pipe.range_p")</p>
+                        <ul class="hx-list">
+                            <li><code>RANGE_SPREAD_LONG / SHORT</code></li>
+                            <li>@T("pipe.range_l2")</li>
+                            <li>@T("pipe.range_l3")</li>
+                        </ul>
+                    </article>
                 </div>
 
                 <div class="hx-callout">
-                    <strong>Demo ≡ Live (decision parity)</strong>
-                    <p>@T("pipe.parity")</p>
+                    <strong>@T("pipe.note_t")</strong>
+                    <p>@T("pipe.note_p")</p>
                 </div>
             </section>
         }
 
+        @* ── DUAL ── *@
+        @if (_section == "dual")
+        {
+            <section class="hx-section">
+                <div class="hx-mode-row">
+                    <div class="hx-mode-card trend">
+                        <div class="hx-mode-head">TREND</div>
+                        <p>@T("dual.trend")</p>
+                        <div class="hx-chips">
+                            <span>CORE_INST</span><span>flow+volume</span><span>lev ↑</span>
+                        </div>
+                    </div>
+                    <div class="hx-mode-card range">
+                        <div class="hx-mode-head">RANGE</div>
+                        <p>@T("dual.range")</p>
+                        <div class="hx-chips">
+                            <span>SPREAD</span><span>no majors</span><span>lev 3–5×</span>
+                        </div>
+                    </div>
+                    <div class="hx-mode-card chaos">
+                        <div class="hx-mode-head">CHAOS</div>
+                        <p>@T("dual.chaos")</p>
+                        <div class="hx-chips">
+                            <span>hold all</span>
+                        </div>
+                    </div>
+                </div>
+                <article class="hx-card">
+                    <h3>@T("dual.log_t")</h3>
+                    <pre class="hx-code">[DUAL-MODE] BTC regime → Trend | Range | Chaos
+[ROUTER] CORE held … regime=RANGE
+[ROUTER] SPREAD held … regime=TREND
+[CORE][SCAN] evaluated=… emitted=…</pre>
+                </article>
+            </section>
+        }
+
+        @* ── STRATEGY ── *@
         @if (_section == "strategy")
         {
             <section class="hx-section">
-                <h2>@T("st.title")</h2>
                 <div class="hx-grid-2">
-                    <div class="hx-card">
-                        <div class="hx-tag green">TREND</div>
-                        <h3>@T("st.trend_h")</h3>
+                    <article class="hx-card accent">
+                        <h3>@T("st.struct_t")</h3>
+                        <p>@T("st.struct_p")</p>
+                        <div class="hx-metric-row">
+                            <div class="hx-metric"><span>4H</span><b>@T("st.m4h")</b></div>
+                            <div class="hx-metric"><span>1H</span><b>@T("st.m1h")</b></div>
+                            <div class="hx-metric"><span>15m</span><b>@T("st.m15")</b></div>
+                        </div>
+                    </article>
+                    <article class="hx-card accent">
+                        <h3>@T("st.geo_t")</h3>
+                        <p>@T("st.geo_p")</p>
                         <ul class="hx-list">
-                            <li>@T("st.trend_1")</li>
-                            <li>@T("st.trend_2")</li>
-                            <li>@T("st.trend_3")</li>
-                            <li>@T("st.trend_4")</li>
-                            <li>@T("st.trend_5")</li>
+                            <li>@T("st.geo_l1")</li>
+                            <li>@T("st.geo_l2")</li>
+                            <li>@T("st.geo_l3")</li>
                         </ul>
-                    </div>
-                    <div class="hx-card">
-                        <div class="hx-tag blue">RANGE</div>
-                        <h3>@T("st.range_h")</h3>
-                        <ul class="hx-list">
-                            <li>@T("st.range_1")</li>
-                            <li>@T("st.range_2")</li>
-                            <li>@T("st.range_3")</li>
-                            <li>@T("st.range_4")</li>
-                        </ul>
-                    </div>
+                    </article>
                 </div>
-                <div class="hx-card warn-border">
-                    <h3>@T("st.no_t")</h3>
-                    <p>@T("st.no_p")</p>
+                <div class="hx-banner warn">
+                    <div class="hx-banner-icon">!</div>
+                    <div>
+                        <strong>@T("st.warn_t")</strong>
+                        <p>@T("st.warn_p")</p>
+                    </div>
                 </div>
             </section>
         }
 
+        @* ── DATA ── *@
+        @if (_section == "data")
+        {
+            <section class="hx-section">
+                <div class="hx-grid-3">
+                    <article class="hx-card">
+                        <div class="hx-ico-lg">📡</div>
+                        <h3>@T("data.ws_t")</h3>
+                        <p>@T("data.ws_p")</p>
+                    </article>
+                    <article class="hx-card">
+                        <div class="hx-ico-lg">⏱</div>
+                        <h3>@T("data.close_t")</h3>
+                        <p>@T("data.close_p")</p>
+                    </article>
+                    <article class="hx-card">
+                        <div class="hx-ico-lg">🛡</div>
+                        <h3>@T("data.rate_t")</h3>
+                        <p>@T("data.rate_p")</p>
+                    </article>
+                </div>
+                <article class="hx-card">
+                    <h3>@T("data.flow_t")</h3>
+                    <p>@T("data.flow_p")</p>
+                    <pre class="hx-code">WS klines → buffer → CORE / MR on CLOSE
+Entry gate: volume ratio · OI delta · order book
+Algo orders: global cache 45s · 429 → 3 min cooldown
+REST klines: max 3 concurrent + circuit breaker</pre>
+                </article>
+            </section>
+        }
+
+        @* ── SETTINGS ── *@
         @if (_section == "settings")
         {
             <section class="hx-section">
-                <h2>@T("set.title")</h2>
-                <p class="hx-p">@T("set.intro")</p>
-
-                <h3 class="hx-h3">@T("set.risk_h")</h3>
                 <div class="hx-table-wrap">
                     <table class="hx-table">
                         <thead>
                             <tr>
                                 <th>@T("set.col_param")</th>
-                                <th>@T("set.col_default")</th>
+                                <th>@T("set.col_where")</th>
                                 <th>@T("set.col_mean")</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <tr><td><code>MaxOpenPositions</code></td><td><b>4</b></td><td>@T("set.mop")</td></tr>
-                            <tr><td><code>MaxSameSidePositions</code></td><td><b>2</b></td><td>@T("set.mss")</td></tr>
-                            <tr><td><code>CorrelationFilterMode</code></td><td><b>StaticLimit</b></td><td>@T("set.cfm")</td></tr>
-                            <tr><td><code>MaxAllowedCorrelation</code></td><td>0.80</td><td>@T("set.mac")</td></tr>
-                            <tr><td><code>DynamicLiquiditySizing</code></td><td>true</td><td>@T("set.dls")</td></tr>
-                            <tr><td><code>MaxNotionalPctOfEquity</code></td><td><b>0.28</b></td><td>@T("set.mnp")</td></tr>
-                            <tr><td><code>HardCapUsdMajor / Alt</code></td><td>80 / 35</td><td>@T("set.hcap")</td></tr>
-                            <tr><td><code>PostCloseCooldownMinutes</code></td><td>45</td><td>@T("set.pcc")</td></tr>
+                            <tr><td><code>DualMode.Enabled</code></td><td>Settings / JSON</td><td>@T("set.dual")</td></tr>
+                            <tr><td><code>MaxOpenPositions</code></td><td>Risk UI</td><td>@T("set.maxpos")</td></tr>
+                            <tr><td><code>CorrelationFilterMode</code></td><td>Risk UI</td><td>@T("set.corr")</td></tr>
+                            <tr><td><code>News SoftImpact</code></td><td>News / JSON</td><td>@T("set.news")</td></tr>
+                            <tr><td><code>EnableMlSkipGate</code></td><td>ML / Risk</td><td>@T("set.ml")</td></tr>
+                            <tr><td><code>MinExecute</code></td><td>Confidence</td><td>@T("set.minex")</td></tr>
                         </tbody>
                     </table>
                 </div>
-
-                <h3 class="hx-h3">@T("set.sq_h")</h3>
-                <div class="hx-table-wrap">
-                    <table class="hx-table">
-                        <thead><tr><th>@T("set.col_param")</th><th>@T("set.col_default")</th><th>@T("set.col_mean")</th></tr></thead>
-                        <tbody>
-                            <tr><td><code>MinQualityThreshold</code></td><td><b>78</b></td><td>@T("set.mqt")</td></tr>
-                            <tr><td><code>SignalSelectionStrategy</code></td><td>BestScoreAuction</td><td>@T("set.sss")</td></tr>
-                            <tr><td><code>AuctionWindowMs</code></td><td>400</td><td>@T("set.awm")</td></tr>
-                            <tr><td><code>WeightTrend / Deriv / Vol / RR</code></td><td>0.35 / 0.20 / 0.20 / 0.25</td><td>@T("set.wts")</td></tr>
-                            <tr><td><code>OrderbookGuardEnabled</code></td><td>true</td><td>@T("set.obg")</td></tr>
-                            <tr><td><code>MaxSpreadPct</code></td><td>0.0008 (0.08%)</td><td>@T("set.msp")</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                <h3 class="hx-h3">@T("set.dual_h")</h3>
-                <div class="hx-table-wrap">
-                    <table class="hx-table">
-                        <thead><tr><th>@T("set.col_param")</th><th>@T("set.col_default")</th><th>@T("set.col_mean")</th></tr></thead>
-                        <tbody>
-                            <tr><td><code>Enabled</code></td><td>true</td><td>@T("set.d_en")</td></tr>
-                            <tr><td><code>CoreMajorCount / TrendUniverseCount</code></td><td>5 / 18</td><td>@T("set.d_uni")</td></tr>
-                            <tr><td><code>SpreadLiquidCount</code></td><td>25</td><td>@T("set.d_sp")</td></tr>
-                            <tr><td><code>RangeLeverageMin–Max</code></td><td>3–5</td><td>@T("set.d_rl")</td></tr>
-                            <tr><td><code>TrendLeverageMin–Max</code></td><td>5–10</td><td>@T("set.d_tl")</td></tr>
-                            <tr><td><code>RangeSizeMult</code></td><td>0.35</td><td>@T("set.d_rs")</td></tr>
-                            <tr><td><code>RequireFlowOnTrend / Volume</code></td><td>true / true</td><td>@T("set.d_flow")</td></tr>
-                            <tr><td><code>MinVolumeRatio</code></td><td><b>1.05</b></td><td>@T("set.d_vol")</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                <h3 class="hx-h3">@T("set.ml_h")</h3>
-                <div class="hx-table-wrap">
-                    <table class="hx-table">
-                        <thead><tr><th>@T("set.col_param")</th><th>@T("set.col_default")</th><th>@T("set.col_mean")</th></tr></thead>
-                        <tbody>
-                            <tr><td><code>EnableMlSkipGate</code></td><td><b>false</b></td><td>@T("set.ml_gate")</td></tr>
-                            <tr><td><code>SkipThreshold</code></td><td>0.55</td><td>@T("set.ml_th")</td></tr>
-                            <tr><td><code>EnableMlHardReject</code></td><td>false</td><td>@T("set.ml_hard")</td></tr>
-                            <tr><td><code>EnableNewsHardMode</code></td><td>false</td><td>@T("set.nw_hard")</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                <div class="hx-callout warn">
-                    <strong>@T("set.warn_t")</strong>
-                    <p>@T("set.warn_p")</p>
-                </div>
+                <p class="hx-hint">@T("set.hint") <a href="/settings">/settings</a></p>
             </section>
         }
 
+        @* ── RISK ── *@
         @if (_section == "risk")
         {
             <section class="hx-section">
-                <h2>@T("risk.title")</h2>
                 <div class="hx-grid-2">
-                    <div class="hx-card">
-                        <h3>@T("risk.size_h")</h3>
+                    <article class="hx-card">
+                        <h3>@T("risk.size_t")</h3>
                         <p>@T("risk.size_p")</p>
-                        <pre class="hx-code">risk$ = equity × riskFrac (~0.6–0.75%)
-qty  = risk$ / |entry − SL|
-then min(HardCapUsd, MaxNotional% × equity / price)</pre>
-                    </div>
-                    <div class="hx-card">
-                        <h3>@T("risk.exit_h")</h3>
-                        <ul class="hx-list">
-                            <li>@T("risk.exit_1")</li>
-                            <li>@T("risk.exit_2")</li>
-                            <li>@T("risk.exit_3")</li>
-                            <li>@T("risk.exit_4")</li>
-                        </ul>
-                    </div>
+                    </article>
+                    <article class="hx-card">
+                        <h3>@T("risk.exit_t")</h3>
+                        <p>@T("risk.exit_p")</p>
+                    </article>
+                </div>
+                <div class="hx-steps-h">
+                    <div class="hx-step-h"><b>TP1</b><span>@T("risk.tp1")</span></div>
+                    <div class="hx-step-h"><b>BE</b><span>@T("risk.be")</span></div>
+                    <div class="hx-step-h"><b>TP2+</b><span>@T("risk.tp2")</span></div>
+                    <div class="hx-step-h"><b>Trail</b><span>@T("risk.trail")</span></div>
                 </div>
             </section>
         }
 
+        @* ── NEWS ── *@
+        @if (_section == "news")
+        {
+            <section class="hx-section">
+                <div class="hx-grid-2">
+                    <article class="hx-card">
+                        <div class="hx-tag cyan">TREND</div>
+                        <h3>@T("news.trend_t")</h3>
+                        <p>@T("news.trend_p")</p>
+                    </article>
+                    <article class="hx-card">
+                        <div class="hx-tag violet">RANGE</div>
+                        <h3>@T("news.range_t")</h3>
+                        <p>@T("news.range_p")</p>
+                    </article>
+                </div>
+                <a class="hx-btn primary" href="/macro-news">@T("news.open")</a>
+            </section>
+        }
+
+        @* ── UI MAP ── *@
         @if (_section == "ui")
         {
             <section class="hx-section">
-                <h2>@T("ui.title")</h2>
-                <div class="hx-grid-3">
-                    <div class="hx-card">
-                        <h3>/market</h3>
-                        <p>@T("ui.market")</p>
-                    </div>
-                    <div class="hx-card">
-                        <h3>/settings</h3>
-                        <p>@T("ui.settings")</p>
-                    </div>
-                    <div class="hx-card">
-                        <h3>/ai-dashboard</h3>
-                        <p>@T("ui.ai")</p>
-                    </div>
-                    <div class="hx-card">
-                        <h3>/macro-news</h3>
-                        <p>@T("ui.news")</p>
-                    </div>
-                    <div class="hx-card">
-                        <h3>History</h3>
-                        <p>@T("ui.hist")</p>
-                    </div>
-                    <div class="hx-card">
-                        <h3>Telegram / TWA</h3>
-                        <p>@T("ui.tg")</p>
-                    </div>
+                <div class="hx-link-grid">
+                    <a href="/market" class="hx-tile tall"><span>📈</span><b>/market</b><small>@T("ui.market")</small></a>
+                    <a href="/ai-dashboard" class="hx-tile tall"><span>🧠</span><b>/ai-dashboard</b><small>@T("ui.ai")</small></a>
+                    <a href="/ai-learning" class="hx-tile tall"><span>📚</span><b>/ai-learning</b><small>@T("ui.learn")</small></a>
+                    <a href="/macro-news" class="hx-tile tall"><span>📰</span><b>/macro-news</b><small>@T("ui.news")</small></a>
+                    <a href="/settings" class="hx-tile tall"><span>⚙️</span><b>/settings</b><small>@T("ui.set")</small></a>
+                    <a href="/positions" class="hx-tile tall"><span>📋</span><b>/positions</b><small>@T("ui.pos")</small></a>
                 </div>
             </section>
         }
 
+        @* ── OPS ── *@
         @if (_section == "ops")
         {
             <section class="hx-section">
-                <h2>@T("ops.title")</h2>
-                <div class="hx-card">
-                    <h3>@T("ops.logs_h")</h3>
-                    <pre class="hx-code">[CORE] SIGNAL / REJECT htf_bias|impulse_chase|no_volume_flow|rsi_fomo
-[ROUTER] CORE → channel | held (regime=RANGE)
-[DUAL-MODE] reject … | size× · lev=
-[RISK] notional-cap …
-[PROC] REJECT stage=… reason=…
-[EXEC] OrderCreated · [SL_ALGO] · [TP…]</pre>
-                </div>
-                <div class="hx-card">
-                    <h3>@T("ops.check_h")</h3>
-                    <ol class="hx-list num">
-                        <li>@T("ops.c1")</li>
-                        <li>@T("ops.c2")</li>
-                        <li>@T("ops.c3")</li>
-                        <li>@T("ops.c4")</li>
-                    </ol>
+                <article class="hx-card">
+                    <h3>@T("ops.logs_t")</h3>
+                    <pre class="hx-code">[DUAL-MODE] BTC regime → …
+[ROUTER] CORE held / SPREAD held
+[CORE][SCAN] universe=… emitted=…
+[STRAT][PUSH] CLOSE-only, REALTIME OFF
+[ALGO-RAW] OK / 429 cooldown
+[NEWS] directive …</pre>
+                </article>
+                <div class="hx-grid-2">
+                    <article class="hx-card">
+                        <h3>@T("ops.tg_t")</h3>
+                        <p>@T("ops.tg_p")</p>
+                        <pre class="hx-code">/status  /pause  /resume  /kill  /dashboard</pre>
+                    </article>
+                    <article class="hx-card">
+                        <h3>@T("ops.reset_t")</h3>
+                        <p>@T("ops.reset_p")</p>
+                    </article>
                 </div>
             </section>
         }
-
-        <footer class="hx-footer">
-            Vertex AutoTrade · Dual Mode Expert · @_lang.ToUpperInvariant()
-        </footer>
     </main>
 </div>
 
 <style>
-    .hx-root { display:flex; min-height:100vh; background:#0b0f14; color:#e8eef7; font-family:Inter,system-ui,sans-serif; }
-    .hx-nav { width:280px; flex-shrink:0; background:linear-gradient(180deg,#0f1520,#0b0f14); border-right:1px solid #1e2a3a; padding:16px 12px; display:flex; flex-direction:column; gap:12px; position:sticky; top:0; height:100vh; overflow:auto; }
-    .hx-brand { display:flex; gap:10px; align-items:center; padding:4px 6px 12px; }
-    .hx-logo { width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#22d3ee,#3b82f6); display:grid; place-items:center; font-weight:800; color:#041018; }
-    .hx-brand-title { font-weight:800; letter-spacing:.08em; font-size:13px; }
-    .hx-brand-sub { font-size:11px; color:#8b9bb4; }
-    .hx-lang { display:flex; gap:6px; }
-    .hx-lang button { flex:1; border:1px solid #243246; background:#121a26; color:#9fb0c9; border-radius:8px; padding:6px; cursor:pointer; font-weight:700; font-size:12px; }
-    .hx-lang button.on { background:#12304a; border-color:#22d3ee; color:#7dd3fc; }
-    .hx-search { width:100%; background:#121a26; border:1px solid #243246; border-radius:10px; padding:8px 10px; color:#e8eef7; font-size:13px; }
-    .hx-toc { display:flex; flex-direction:column; gap:4px; flex:1; }
-    .hx-toc-item { display:flex; gap:8px; align-items:center; text-align:left; border:0; background:transparent; color:#9fb0c9; padding:9px 10px; border-radius:10px; cursor:pointer; font-size:13px; }
-    .hx-toc-item:hover { background:#151e2c; color:#e8eef7; }
-    .hx-toc-item.active { background:#132536; color:#7dd3fc; box-shadow:inset 2px 0 0 #22d3ee; }
-    .hx-ico { width:18px; opacity:.9; }
-    .hx-nav-foot { display:flex; flex-wrap:wrap; gap:8px; padding-top:8px; border-top:1px solid #1e2a3a; }
-    .hx-nav-foot a { color:#7dd3fc; font-size:12px; text-decoration:none; }
-    .hx-main { flex:1; padding:28px 32px 48px; max-width:1100px; }
-    .hx-header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:22px; }
-    .hx-header h1 { margin:0 0 6px; font-size:26px; font-weight:800; letter-spacing:-.02em; }
-    .hx-lead { margin:0; color:#8b9bb4; font-size:14px; max-width:640px; line-height:1.5; }
-    .hx-badge { font-size:11px; font-weight:700; color:#7dd3fc; border:1px solid #1e4a5f; background:#0d2230; padding:6px 10px; border-radius:999px; white-space:nowrap; }
-    .hx-section { display:flex; flex-direction:column; gap:16px; }
-    .hx-h3 { margin:8px 0 0; font-size:15px; color:#cbd5e1; }
-    .hx-p { color:#a8b6c9; line-height:1.55; margin:0; }
-    .hx-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-    .hx-grid-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
-    .hx-card { background:#121a26; border:1px solid #1e2a3a; border-radius:14px; padding:16px 16px 14px; box-shadow:0 8px 24px rgba(0,0,0,.25); }
-    .hx-card.step { position:relative; padding-top:18px; }
-    .hx-card.warn-border { border-color:#7c3a1d; background:#1a1410; }
-    .hx-step { position:absolute; top:-10px; left:14px; width:26px; height:26px; border-radius:8px; background:linear-gradient(135deg,#22d3ee,#3b82f6); color:#041018; font-weight:800; display:grid; place-items:center; font-size:13px; }
-    .hx-card h3 { margin:0 0 8px; font-size:15px; }
-    .hx-card p { margin:0; color:#9fb0c9; font-size:13px; line-height:1.5; }
-    .hx-code { margin:10px 0 0; background:#0a1018; border:1px solid #1a2535; border-radius:10px; padding:10px 12px; font-size:12px; color:#a5f3fc; overflow:auto; white-space:pre-wrap; }
-    .hx-list { margin:8px 0 0; padding-left:18px; color:#b6c4d8; font-size:13px; line-height:1.55; }
-    .hx-list.num { list-style:decimal; }
-    .hx-callout { border-radius:12px; padding:14px 16px; border:1px solid #1e3a4a; background:#0e1a24; color:#b6c4d8; font-size:13px; line-height:1.5; }
-    .hx-callout.ok { border-color:#14532d; background:#0c1a12; }
-    .hx-callout.warn { border-color:#854d0e; background:#1a1508; }
-    .hx-callout strong { color:#e8eef7; display:block; margin-bottom:4px; }
-    .hx-flow { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:8px 0 12px; }
-    .hx-flow-node { background:#121a26; border:1px solid #2a3a50; border-radius:12px; padding:10px 12px; font-size:12px; font-weight:700; text-align:center; min-width:100px; }
-    .hx-flow-node span { display:block; font-weight:500; color:#8b9bb4; font-size:11px; margin-top:2px; }
-    .hx-flow-node.accent { border-color:#22d3ee55; box-shadow:0 0 20px #22d3ee22; }
-    .hx-flow-node.accent2 { border-color:#a78bfa55; }
-    .hx-flow-node.ok { border-color:#22c55e55; }
-    .hx-flow-arrow { color:#3b82f6; font-weight:800; }
-    .hx-table-wrap { overflow:auto; border-radius:12px; border:1px solid #1e2a3a; }
-    .hx-table { width:100%; border-collapse:collapse; font-size:13px; }
-    .hx-table th { text-align:left; background:#0f1722; color:#8b9bb4; padding:10px 12px; border-bottom:1px solid #1e2a3a; font-weight:600; }
-    .hx-table td { padding:10px 12px; border-bottom:1px solid #152033; color:#c5d0e0; vertical-align:top; }
-    .hx-table code { color:#7dd3fc; font-size:12px; }
-    .hx-tag { display:inline-block; font-size:10px; font-weight:800; letter-spacing:.06em; padding:3px 8px; border-radius:999px; margin-bottom:8px; }
-    .hx-tag.green { background:#052e16; color:#4ade80; border:1px solid #166534; }
-    .hx-tag.blue { background:#0c1e36; color:#60a5fa; border:1px solid #1e40af; }
-    .hx-footer { margin-top:28px; color:#5b6b82; font-size:11px; }
-    @@media (max-width: 960px) {
-        .hx-root { flex-direction:column; }
-        .hx-nav { width:100%; height:auto; position:relative; }
-        .hx-grid-2, .hx-grid-3 { grid-template-columns:1fr; }
-        .hx-main { padding:16px; }
-    }
+.hx-root{display:flex;min-height:calc(100vh - 48px);background:#070b14;color:#e2e8f0;font-family:Inter,system-ui,sans-serif;}
+.hx-nav{width:260px;flex-shrink:0;background:linear-gradient(180deg,#0b1220,#0a0f18);border-right:1px solid #1e293b;padding:18px 14px;display:flex;flex-direction:column;gap:12px;position:sticky;top:0;height:100vh;overflow:auto;}
+.hx-brand{display:flex;gap:10px;align-items:center;padding:4px 6px 12px;}
+.hx-brand-title{font-weight:800;letter-spacing:.12em;font-size:13px;color:#f8fafc;}
+.hx-brand-sub{font-size:11px;color:#64748b;margin-top:2px;}
+.hx-lang{display:flex;gap:6px;}
+.hx-lang button{flex:1;border:1px solid #1e293b;background:#0f172a;color:#94a3b8;border-radius:8px;padding:6px 0;cursor:pointer;font-weight:600;font-size:12px;}
+.hx-lang button.on{background:rgba(34,211,238,.12);border-color:#22d3ee;color:#22d3ee;}
+.hx-search{width:100%;box-sizing:border-box;background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:9px 12px;color:#e2e8f0;font-size:13px;outline:none;}
+.hx-search:focus{border-color:#22d3ee;}
+.hx-toc{display:flex;flex-direction:column;gap:4px;flex:1;}
+.hx-toc-item{display:flex;align-items:center;gap:10px;text-align:left;border:none;background:transparent;color:#94a3b8;padding:10px 12px;border-radius:10px;cursor:pointer;font-size:13px;transition:.15s;}
+.hx-toc-item:hover{background:#111827;color:#e2e8f0;}
+.hx-toc-item.active{background:linear-gradient(90deg,rgba(34,211,238,.15),rgba(167,139,250,.08));color:#f1f5f9;box-shadow:inset 3px 0 0 #22d3ee;}
+.hx-ico{width:22px;text-align:center;}
+.hx-nav-foot{display:flex;flex-wrap:wrap;gap:6px;padding-top:8px;border-top:1px solid #1e293b;}
+.hx-link-pill{font-size:11px;color:#94a3b8;text-decoration:none;padding:5px 8px;border-radius:999px;background:#0f172a;border:1px solid #1e293b;}
+.hx-link-pill:hover{color:#22d3ee;border-color:#22d3ee;}
+.hx-main{flex:1;padding:24px 28px 48px;overflow:auto;max-width:1100px;}
+.hx-hero{position:relative;display:flex;gap:24px;align-items:center;justify-content:space-between;padding:28px 28px 24px;border-radius:20px;background:linear-gradient(135deg,#0f172a 0%,#111827 50%,#0b1220 100%);border:1px solid #1e293b;margin-bottom:24px;overflow:hidden;}
+.hx-hero-glow{position:absolute;width:280px;height:280px;right:-40px;top:-80px;background:radial-gradient(circle,rgba(34,211,238,.25),transparent 70%);pointer-events:none;}
+.hx-kicker{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#22d3ee;margin-bottom:8px;font-weight:700;}
+.hx-hero h1{margin:0 0 8px;font-size:28px;font-weight:800;color:#f8fafc;}
+.hx-lead{margin:0;color:#94a3b8;font-size:14px;line-height:1.55;max-width:520px;}
+.hx-hero-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;}
+.hx-btn{display:inline-flex;align-items:center;padding:9px 14px;border-radius:10px;font-size:13px;font-weight:600;text-decoration:none;border:1px solid transparent;cursor:pointer;}
+.hx-btn.primary{background:linear-gradient(90deg,#0891b2,#22d3ee);color:#042f2e;}
+.hx-btn.ghost{background:transparent;border-color:#334155;color:#e2e8f0;}
+.hx-btn.ghost:hover{border-color:#22d3ee;color:#22d3ee;}
+.hx-chart-svg{width:260px;max-width:100%;opacity:.95;}
+.hx-section{display:flex;flex-direction:column;gap:16px;}
+.hx-h2{margin:8px 0 0;font-size:16px;color:#f1f5f9;}
+.hx-grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+.hx-grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;}
+.hx-card{background:#0f172a;border:1px solid #1e293b;border-radius:16px;padding:18px 18px 16px;box-shadow:0 8px 24px rgba(0,0,0,.25);}
+.hx-card.accent{border-color:rgba(34,211,238,.25);}
+.hx-card.step{position:relative;padding-top:22px;}
+.hx-step{position:absolute;top:-10px;left:16px;width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#22d3ee,#a78bfa);color:#0f172a;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;}
+.hx-card h3{margin:0 0 8px;font-size:15px;color:#f8fafc;}
+.hx-card p{margin:0;font-size:13px;color:#94a3b8;line-height:1.55;}
+.hx-code{margin:12px 0 0;padding:12px 14px;background:#020617;border:1px solid #1e293b;border-radius:10px;font-size:11.5px;color:#67e8f9;overflow:auto;line-height:1.45;white-space:pre-wrap;}
+.hx-banner{display:flex;gap:14px;align-items:flex-start;padding:14px 16px;border-radius:14px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);}
+.hx-banner.warn{background:rgba(234,179,8,.08);border-color:rgba(234,179,8,.3);}
+.hx-banner-icon{width:28px;height:28px;border-radius:8px;background:rgba(34,197,94,.2);color:#22c55e;display:flex;align-items:center;justify-content:center;font-weight:800;flex-shrink:0;}
+.hx-banner.warn .hx-banner-icon{background:rgba(234,179,8,.2);color:#eab308;}
+.hx-banner strong{color:#f1f5f9;font-size:13px;}
+.hx-banner p{margin:4px 0 0;font-size:12.5px;color:#94a3b8;}
+.hx-link-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+.hx-tile{display:flex;flex-direction:column;gap:4px;padding:16px;border-radius:14px;background:#0f172a;border:1px solid #1e293b;text-decoration:none;color:inherit;transition:.15s;}
+.hx-tile:hover{border-color:#22d3ee;transform:translateY(-2px);box-shadow:0 10px 24px rgba(34,211,238,.08);}
+.hx-tile span{font-size:22px;}
+.hx-tile b{font-size:14px;color:#f1f5f9;}
+.hx-tile small{font-size:12px;color:#64748b;}
+.hx-tile.tall{min-height:110px;}
+.hx-flow-wrap{background:#0f172a;border:1px solid #1e293b;border-radius:16px;padding:12px;overflow:auto;}
+.hx-flow-svg{width:100%;min-width:640px;height:auto;}
+.hx-tag{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.08em;padding:3px 8px;border-radius:6px;margin-bottom:8px;}
+.hx-tag.cyan{background:rgba(34,211,238,.12);color:#22d3ee;}
+.hx-tag.violet{background:rgba(167,139,250,.12);color:#a78bfa;}
+.hx-list{margin:10px 0 0;padding-left:18px;color:#94a3b8;font-size:13px;line-height:1.6;}
+.hx-list code{color:#67e8f9;font-size:12px;}
+.hx-callout{padding:14px 16px;border-radius:12px;background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.25);}
+.hx-callout strong{color:#e9d5ff;font-size:13px;}
+.hx-callout p{margin:6px 0 0;font-size:13px;color:#94a3b8;}
+.hx-mode-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+.hx-mode-card{border-radius:16px;padding:16px;border:1px solid #1e293b;background:#0f172a;}
+.hx-mode-card.trend{border-color:rgba(34,197,94,.35);box-shadow:inset 0 0 40px rgba(34,197,94,.05);}
+.hx-mode-card.range{border-color:rgba(167,139,250,.35);box-shadow:inset 0 0 40px rgba(167,139,250,.05);}
+.hx-mode-card.chaos{border-color:rgba(239,68,68,.35);box-shadow:inset 0 0 40px rgba(239,68,68,.05);}
+.hx-mode-head{font-weight:800;letter-spacing:.1em;font-size:13px;margin-bottom:8px;}
+.hx-mode-card.trend .hx-mode-head{color:#22c55e;}
+.hx-mode-card.range .hx-mode-head{color:#a78bfa;}
+.hx-mode-card.chaos .hx-mode-head{color:#ef4444;}
+.hx-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
+.hx-chips span{font-size:11px;padding:3px 8px;border-radius:999px;background:#020617;border:1px solid #1e293b;color:#94a3b8;}
+.hx-metric-row{display:flex;gap:10px;margin-top:12px;}
+.hx-metric{flex:1;background:#020617;border-radius:10px;padding:10px;border:1px solid #1e293b;}
+.hx-metric span{display:block;font-size:11px;color:#22d3ee;font-weight:700;}
+.hx-metric b{display:block;font-size:12px;color:#cbd5e1;font-weight:500;margin-top:4px;}
+.hx-ico-lg{font-size:28px;margin-bottom:8px;}
+.hx-table-wrap{overflow:auto;border-radius:14px;border:1px solid #1e293b;}
+.hx-table{width:100%;border-collapse:collapse;font-size:13px;}
+.hx-table th{text-align:left;padding:12px 14px;background:#020617;color:#94a3b8;font-weight:600;border-bottom:1px solid #1e293b;}
+.hx-table td{padding:12px 14px;border-bottom:1px solid #1e293b;color:#cbd5e1;}
+.hx-table code{color:#67e8f9;}
+.hx-hint{font-size:13px;color:#64748b;}
+.hx-hint a{color:#22d3ee;}
+.hx-steps-h{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+.hx-step-h{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:14px;text-align:center;}
+.hx-step-h b{display:block;color:#22d3ee;font-size:14px;margin-bottom:6px;}
+.hx-step-h span{font-size:12px;color:#94a3b8;}
+@@media (max-width: 960px){
+  .hx-root{flex-direction:column;}
+  .hx-nav{width:100%;height:auto;position:relative;}
+  .hx-grid-3,.hx-grid-2,.hx-link-grid,.hx-mode-row,.hx-steps-h{grid-template-columns:1fr;}
+  .hx-hero{flex-direction:column;align-items:flex-start;}
+}
 </style>
 
 @code {
@@ -433,24 +523,22 @@ then min(HardCapUsd, MaxNotional% × equity / price)</pre>
     private string _section = "quick";
     private string _query = "";
 
-    private record TocItem(string Id, string Icon, string LabelRu, string LabelEn)
-    {
-        public string Label => LabelRu; // bound via property on instance in FilteredToc
-    }
-
     private IEnumerable<(string Id, string Icon, string Label)> FilteredToc
     {
         get
         {
-            IEnumerable<(string Id, string Icon, string Label)> all = new[]
+            var all = new (string Id, string Icon, string Label)[]
             {
                 ("quick", "⚡", _lang=="en" ? "Quick start" : "Быстрый старт"),
                 ("pipeline", "🔗", _lang=="en" ? "Pipeline" : "Пайплайн"),
-                ("strategy", "📈", _lang=="en" ? "Expert strategy" : "Стратегия Expert"),
-                ("settings", "⚙️", _lang=="en" ? "UI settings" : "Настройки UI"),
+                ("dual", "⚖️", _lang=="en" ? "Dual mode" : "Dual mode"),
+                ("strategy", "📈", _lang=="en" ? "Strategy" : "Стратегия"),
+                ("data", "📡", _lang=="en" ? "Data & speed" : "Данные и скорость"),
+                ("settings", "⚙️", _lang=="en" ? "Settings map" : "Настройки"),
                 ("risk", "🛡", _lang=="en" ? "Risk & exits" : "Риск и выходы"),
-                ("ui", "🖥", _lang=="en" ? "UI map" : "Карта интерфейса"),
-                ("ops", "📋", _lang=="en" ? "Ops & logs" : "Операции и логи"),
+                ("news", "📰", _lang=="en" ? "News layer" : "Новости"),
+                ("ui", "🖥", _lang=="en" ? "UI map" : "Карта UI"),
+                ("ops", "📋", _lang=="en" ? "Ops & logs" : "Операции"),
             };
             if (string.IsNullOrWhiteSpace(_query)) return all;
             var q = _query.Trim();
@@ -462,9 +550,12 @@ then min(HardCapUsd, MaxNotional% × equity / price)</pre>
     {
         "quick" => T("title.quick"),
         "pipeline" => T("title.pipeline"),
+        "dual" => T("title.dual"),
         "strategy" => T("title.strategy"),
+        "data" => T("title.data"),
         "settings" => T("title.settings"),
         "risk" => T("title.risk"),
+        "news" => T("title.news"),
         "ui" => T("title.ui"),
         "ops" => T("title.ops"),
         _ => "Help"
@@ -474,146 +565,145 @@ then min(HardCapUsd, MaxNotional% × equity / price)</pre>
     {
         "quick" => T("lead.quick"),
         "pipeline" => T("lead.pipeline"),
+        "dual" => T("lead.dual"),
         "strategy" => T("lead.strategy"),
+        "data" => T("lead.data"),
         "settings" => T("lead.settings"),
         "risk" => T("lead.risk"),
+        "news" => T("lead.news"),
         "ui" => T("lead.ui"),
         "ops" => T("lead.ops"),
         _ => ""
     };
 
     private void Go(string id) => _section = id;
-    private void SetLang(string lang) => _lang = lang is "en" ? "en" : "ru";
+    private void SetLang(string lang) => _lang = lang;
 
     private string T(string key)
     {
-        var ru = _lang != "en";
+        bool ru = _lang != "en";
         return key switch
         {
             "help.brand_sub" => ru ? "Справка · Production" : "Help · Production",
             "help.search" => ru ? "Поиск раздела…" : "Search sections…",
+            "hero.settings" => ru ? "Открыть Settings" : "Open Settings",
+            "hero.market" => "Market",
+            "hero.ai" => "AI Dashboard",
 
             "title.quick" => ru ? "Быстрый старт" : "Quick start",
-            "title.pipeline" => ru ? "Пайплайн системы" : "System pipeline",
-            "title.strategy" => ru ? "Стратегия Expert v2.0" : "Expert strategy v2.0",
-            "title.settings" => ru ? "Настройки UI — справочник" : "UI settings reference",
-            "title.risk" => ru ? "Риск и управление позицией" : "Risk & position management",
+            "title.pipeline" => ru ? "Пайплайн сигналов" : "Signal pipeline",
+            "title.dual" => ru ? "Dual Mode — два режима" : "Dual Mode — two regimes",
+            "title.strategy" => ru ? "Стратегия CORE_INST" : "CORE_INST strategy",
+            "title.data" => ru ? "Данные, скорость, лимиты" : "Data, speed, rate limits",
+            "title.settings" => ru ? "Карта настроек" : "Settings map",
+            "title.risk" => ru ? "Риск и сопровождение" : "Risk & position management",
+            "title.news" => ru ? "Новостной слой" : "News layer",
             "title.ui" => ru ? "Карта интерфейса" : "UI map",
-            "title.ops" => ru ? "Операции, логи, чек-лист" : "Ops, logs, checklist",
+            "title.ops" => ru ? "Операции и логи" : "Ops & logs",
 
-            "lead.quick" => ru ? "Запуск с нуля, общие папки данных и профессиональные дефолты из коробки." : "From zero: shared data folders and professional defaults out of the box.",
-            "lead.pipeline" => ru ? "От свечей до ордера: CORE/MR → Router → Risk → Live и Demo одной логикой." : "From candles to orders: CORE/MR → Router → Risk → Live & Demo same logic.",
-            "lead.strategy" => ru ? "TREND = pullback + flow. RANGE = спред/mean-reversion без мажоров." : "TREND = pullback + flow. RANGE = spread/mean-reversion excluding majors.",
-            "lead.settings" => ru ? "Каждый параметр Settings с дефолтом и смыслом. Меняется без пересборки (runtime)." : "Every Settings parameter with default and meaning. Hot-reloadable at runtime.",
-            "lead.risk" => ru ? "1R sizing, notional cap, частичные TP и перенос стопа." : "1R sizing, notional cap, partial TPs and stop trail/lock.",
-            "lead.ui" => ru ? "Где смотреть позиции, историю, новости и AI-метрики." : "Where to watch positions, history, news and AI metrics.",
-            "lead.ops" => ru ? "Ключевые теги логов и порядок проверки перед Live." : "Key log tags and pre-Live checklist.",
+            "lead.quick" => ru ? "Запуск Engine + Web, Demo и безопасный Live." : "Start Engine + Web, Demo, then Live safely.",
+            "lead.pipeline" => ru ? "От рыночных данных до Demo/Live ордера." : "From market data to Demo/Live order.",
+            "lead.dual" => ru ? "TREND и RANGE не мешают друг другу." : "TREND and RANGE never fight each other.",
+            "lead.strategy" => ru ? "4H permission · 1H structure · 15m trigger · геометрия SL/TP." : "4H permission · 1H structure · 15m trigger · SL/TP geometry.",
+            "lead.data" => ru ? "WS-свечи, close-only стратегия, защита от 429." : "WS candles, close-only strategy, 429 protection.",
+            "lead.settings" => ru ? "Ключевые параметры UI и JSON." : "Key UI and JSON parameters.",
+            "lead.risk" => ru ? "1R, лимиты позиций, BE и трейлинг." : "1R, position limits, BE and trailing.",
+            "lead.news" => ru ? "Макро влияет на TREND; скальп RANGE почти не режется soft-новостями." : "Macro hits TREND; RANGE scalp is not soft-cut by news.",
+            "lead.ui" => ru ? "Куда нажимать в терминале." : "Where to click in the terminal.",
+            "lead.ops" => ru ? "Логи, Telegram, что смотреть после старта." : "Logs, Telegram, post-start checklist.",
 
             "quick.s1_t" => ru ? "Конфиг и SharedData" : "Config & SharedData",
-            "quick.s1_p" => ru ? "Engine и Web обязаны смотреть в один Root. Журнал — SQLite, сигналы — JSON/каналы." : "Engine and Web must share one Root. Journal is SQLite; signals via JSON/channels.",
-            "quick.s2_t" => ru ? "Binance + запуск" : "Binance + launch",
-            "quick.s2_p" => ru ? "USDT-M API (Trade, без Withdraw). Сначала Engine, затем Web." : "USDT-M API (Trade, no Withdraw). Start Engine first, then Web.",
+            "quick.s1_p" => ru ? "Один корень SharedData для Engine и Web. Журнал в SQLite." : "One SharedData root for Engine and Web. Journal in SQLite.",
+            "quick.s2_t" => ru ? "Запуск" : "Launch",
+            "quick.s2_p" => ru ? "Сначала worker, затем Web. В логах — sync времени и DualMode." : "Worker first, then Web. Watch time-sync and DualMode logs.",
             "quick.s3_t" => ru ? "Demo → Live" : "Demo → Live",
-            "quick.s3_p" => ru ? "Демо-счёт независим от биржи. Сначала бумага, потом реальные ордера." : "Demo balance is independent of the exchange. Paper first, then live orders.",
-            "quick.defaults_t" => ru ? "Профессиональные дефолты (уже в appsettings)" : "Professional defaults (already in appsettings)",
-            "quick.defaults_p" => ru ? "После pull эти значения — стартовая безопасная конфигурация. Тонкая настройка — в /settings." : "After pull these values are the safe starting config. Fine-tune in /settings.",
+            "quick.s3_p" => ru ? "Demo независим от баланса биржи. Live — после стабильного Demo." : "Demo is independent of exchange balance. Live only after stable Demo.",
+            "quick.ok_t" => ru ? "Система готова, если…" : "System is ready when…",
+            "quick.ok_p" => ru ? "Есть [DUAL-MODE] regime, [CORE][SCAN], нет шквала 429, Demo открывает/закрывает сделки." : "You see [DUAL-MODE] regime, [CORE][SCAN], no 429 storm, Demo opens/closes trades.",
+            "quick.links_t" => ru ? "Быстрые ссылки" : "Quick links",
+            "quick.l_market" => ru ? "График, позиции, TP/SL" : "Chart, positions, TP/SL",
+            "quick.l_settings" => ru ? "Риск, DualMode, новости" : "Risk, DualMode, news",
+            "quick.l_ai" => ru ? "Shadow KPI, нейроны" : "Shadow KPI, neurons",
+            "quick.l_news" => ru ? "Лента и макро" : "Tape & macro",
+            "quick.l_pos" => ru ? "Список позиций" : "Position list",
+            "quick.l_twa" => ru ? "Мини-приложение Telegram" : "Telegram mini app",
 
-            "pipe.title" => ru ? "Сквозной поток" : "End-to-end flow",
-            "pipe.intro" => ru ? "Сигнал рождается в стратегии, проходит институциональные фильтры и только потом становится ордером на бирже и записью Demo." : "A signal is born in strategy, passes institutional filters, then becomes an exchange order and a Demo fill.",
-            "pipe.trend_t" => ru ? "Нога TREND (CORE)" : "TREND leg (CORE)",
-            "pipe.trend_1" => ru ? "Pullback к EMA в структуре HH/HL (приоритет)." : "Pullback to EMA inside HH/HL structure (priority).",
-            "pipe.trend_2" => ru ? "На majors — только breakout + retest (без naked breakout)." : "On majors — breakout + retest only (no naked breakout).",
-            "pipe.trend_3" => ru ? "HTF bias (EMA50), RSI FOMO, impulse-chase ban, volume ≥ 1.05×." : "HTF bias (EMA50), RSI FOMO, impulse-chase ban, volume ≥ 1.05×.",
-            "pipe.trend_4" => ru ? "R:R до TP1 ≥ 1.5, structure SL + min 0.8%." : "R:R to TP1 ≥ 1.5, structure SL + min 0.8%.",
-            "pipe.trend_5" => ru ? "SimpleTrend continuation отключён (источник late-chase)." : "SimpleTrend continuation disabled (late-chase source).",
-            "pipe.range_t" => ru ? "Нога RANGE (Mean-Reversion)" : "RANGE leg (Mean-Reversion)",
-            "pipe.range_1" => ru ? "Только режим DualMode = RANGE (не CHAOS/TREND)." : "Only DualMode = RANGE (not CHAOS/TREND).",
-            "pipe.range_2" => ru ? "Z-score экстремум + volume surge + разворотная свеча." : "Z-score extreme + volume surge + reversal bar.",
-            "pipe.range_3" => ru ? "Нет BTC/ETH/BNB/SOL/XRP; ATR не расширяется (не fade тренд)." : "No BTC/ETH/BNB/SOL/XRP; ATR not expanding (don’t fade trends).",
-            "pipe.range_4" => ru ? "Плечо 3–5×, size mult ~0.35." : "Leverage 3–5×, size mult ~0.35.",
-            "pipe.proc_t" => ru ? "Слои PROC (после сигнала)" : "PROC layers (after signal)",
-            "pipe.col_stage" => ru ? "Стадия" : "Stage",
-            "pipe.col_what" => ru ? "Что делает" : "What it does",
-            "pipe.col_reject" => ru ? "Типичный reject" : "Typical reject",
-            "pipe.parity" => ru ? "Один и тот же ApprovedEntry после Risk. Demo не имеет отдельной «лёгкой» стратегии входа." : "Same ApprovedEntry after Risk. Demo has no separate lightweight entry strategy.",
+            "pipe.trend_t" => ru ? "Нога TREND" : "TREND leg",
+            "pipe.trend_p" => ru ? "Только при regime=Trend. Структура и поток капитала." : "Only when regime=Trend. Structure and capital flow.",
+            "pipe.trend_l2" => ru ? "Volume / OI / стакан на входе" : "Volume / OI / book at entry",
+            "pipe.trend_l3" => ru ? "Новости могут резать size или ставить паузу" : "News can cut size or pause",
+            "pipe.range_t" => ru ? "Нога RANGE (спред)" : "RANGE leg (spread)",
+            "pipe.range_p" => ru ? "Только при regime=Range. Не majors, малое плечо." : "Only when regime=Range. Non-majors, low leverage.",
+            "pipe.range_l2" => ru ? "Z-score mean-reversion" : "Z-score mean-reversion",
+            "pipe.range_l3" => ru ? "Soft-новости не душат; hard macro может блокировать" : "Soft news does not choke; hard macro may block",
+            "pipe.note_t" => ru ? "Важно" : "Important",
+            "pipe.note_p" => ru ? "Legacy StrategyEngine (REALTIME) отключён для live: решения на close + DualMode. Это снижает CPU и убирает FOMO на тиках." : "Legacy StrategyEngine REALTIME is off for live: decisions on close + DualMode. Lower CPU, less tick FOMO.",
 
-            "st.title" => ru ? "Логика эксперта" : "Expert logic",
-            "st.trend_h" => ru ? "Тренд = капитал в объёме" : "Trend = capital in volume",
-            "st.trend_1" => ru ? "Не гнать локальный импульс без объёма/flow." : "Don’t chase local impulse without volume/flow.",
-            "st.trend_2" => ru ? "Вселенная: динамический топ по 24h quote volume (не хардкод списка)." : "Universe: dynamic 24h quote-volume ranking (no hardcoded lists).",
-            "st.trend_3" => ru ? "15–18 ликвидных + core majors по рангу." : "Top 15–18 liquid + core majors by rank.",
-            "st.trend_4" => ru ? "Плечо выше (5–10×), size ×1.0 при подтверждённом flow." : "Higher lev (5–10×), size ×1.0 with confirmed flow.",
-            "st.trend_5" => ru ? "History Setup: TREND: CORE_*." : "History Setup: TREND: CORE_*.",
-            "st.range_h" => ru ? "Боковик = спред / mean-reversion" : "Range = spread / mean-reversion",
-            "st.range_1" => ru ? "Не мажоры — mid/liquid alts (динамический universe)." : "Non-majors — mid/liquid alts (dynamic universe).",
-            "st.range_2" => ru ? "Малое плечо и размер — переживать шум диапазона." : "Small lev & size — survive range noise.",
-            "st.range_3" => ru ? "Отдельная причина RANGE_SPREAD_* (не тот же CORE)." : "Separate RANGE_SPREAD_* reason (not the same CORE).",
-            "st.range_4" => ru ? "Router держит CORE в RANGE и SPREAD в TREND." : "Router holds CORE in RANGE and SPREAD in TREND.",
-            "st.no_t" => ru ? "Чего система сознательно не делает" : "What the system deliberately does not do",
-            "st.no_p" => ru ? "Не обещает win rate 80%. Не торгует «все сигналы». Не включает ML/News hard-gate, пока shadow KPI не покажет стабильный ΔPF." : "No promised 80% win rate. Doesn’t take every signal. ML/News hard-gates stay off until shadow KPI shows stable ΔPF.",
+            "dual.trend" => ru ? "Сильный направленный BTC (Efficiency). Торгуем ликвидный universe с подтверждением объёма." : "Strong directional BTC (Efficiency). Liquid universe with volume confirmation.",
+            "dual.range" => ru ? "Боковик BTC. Спред/MR на альтах, 3–5×, малый size." : "BTC sideways. Spread/MR on alts, 3–5×, small size.",
+            "dual.chaos" => ru ? "Шок / хаос — новые входы hold." : "Shock / chaos — new entries held.",
+            "dual.log_t" => ru ? "Что видеть в логах" : "What to see in logs",
 
-            "set.title" => ru ? "Справочник параметров Settings" : "Settings parameter reference",
-            "set.intro" => ru ? "Путь: страница /settings. Значения пишутся в runtime JSON и читаются Engine через IOptionsMonitor." : "Path: /settings page. Values write to runtime JSON and are read by Engine via IOptionsMonitor.",
-            "set.risk_h" => ru ? "Risk / Institutional" : "Risk / Institutional",
-            "set.sq_h" => ru ? "Signal Quality / Auction" : "Signal Quality / Auction",
-            "set.dual_h" => ru ? "DualMode (режим рынка)" : "DualMode (market regime)",
-            "set.ml_h" => ru ? "ML Gate & News" : "ML Gate & News",
+            "st.struct_t" => ru ? "Иерархия ТФ" : "Timeframe hierarchy",
+            "st.struct_p" => ru ? "Не гоним локальный 5m тренд вслепую." : "We do not chase a blind local 5m trend.",
+            "st.m4h" => ru ? "разрешение направления" : "direction permission",
+            "st.m1h" => ru ? "структура + зона value" : "structure + value zone",
+            "st.m15" => ru ? "триггер входа" : "entry trigger",
+            "st.geo_t" => ru ? "Геометрия риска" : "Risk geometry",
+            "st.geo_p" => ru ? "SL за свинг + ATR; TP с R:R ≥ 1.6." : "SL beyond swing + ATR; TP with R:R ≥ 1.6.",
+            "st.geo_l1" => ru ? "Min risk ~0.9% (анти микро-стоп)" : "Min risk ~0.9% (anti micro-stop)",
+            "st.geo_l2" => ru ? "Max risk ~2.8% (чтобы 1R был конечен)" : "Max risk ~2.8% (finite 1R)",
+            "st.geo_l3" => ru ? "TP 1.6R / 2.8R / 4.5R" : "TP 1.6R / 2.8R / 4.5R",
+            "st.warn_t" => ru ? "Пайплайн ≠ гарантия профита" : "Pipeline ≠ guaranteed profit",
+            "st.warn_p" => ru ? "Геометрия и фильтры защищают капитал, но рынок может быть против setup’а. Смотрите Demo статистику." : "Geometry and filters protect capital; market can still invalidate a setup. Watch Demo stats.",
+
+            "data.ws_t" => ru ? "WebSocket свечи" : "WebSocket candles",
+            "data.ws_p" => ru ? "Основной поток в buffer без weight. REST — только cold/miss." : "Primary stream into buffer, no weight. REST only on cold/miss.",
+            "data.close_t" => ru ? "Close-only strategy" : "Close-only strategy",
+            "data.close_p" => ru ? "Setup на закрытых барах. Объём/стакан — на гейте входа." : "Setups on closed bars. Volume/book at entry gate.",
+            "data.rate_t" => ru ? "Rate limits" : "Rate limits",
+            "data.rate_p" => ru ? "Algo cache 45s, REST ≤3, 429 → cooldown." : "Algo cache 45s, REST ≤3, 429 → cooldown.",
+            "data.flow_t" => ru ? "Цепочка данных" : "Data chain",
+            "data.flow_p" => ru ? "Боевой режим: без tick-storm REALTIME strategy." : "Combat mode: no REALTIME strategy tick-storm.",
+
             "set.col_param" => ru ? "Параметр" : "Parameter",
-            "set.col_default" => ru ? "Дефолт" : "Default",
+            "set.col_where" => ru ? "Где" : "Where",
             "set.col_mean" => ru ? "Смысл" : "Meaning",
-            "set.mop" => ru ? "Макс. одновременных позиций (все стороны)." : "Max concurrent positions (all sides).",
-            "set.mss" => ru ? "Макс. позиций в одну сторону (LONG или SHORT). 0 = без лимита стороны." : "Max same-direction positions. 0 = no side limit.",
-            "set.cfm" => ru ? "Disabled = только MaxOpen. StaticLimit = + MaxSameSide. DynamicCorrelation = корреляция к открытым." : "Disabled = MaxOpen only. StaticLimit = + MaxSameSide. DynamicCorrelation = vs open names.",
-            "set.mac" => ru ? "Порог корреляции в режиме DynamicCorrelation." : "Correlation threshold in DynamicCorrelation mode.",
-            "set.dls" => ru ? "При низкой ликвидности режет qty (не всегда полный reject)." : "On low liquidity, reduces qty (not always full reject).",
-            "set.mnp" => ru ? "Жёсткий потолок notional позиции = 28% equity (после 1R)." : "Hard position notional ceiling = 28% of equity (after 1R).",
-            "set.hcap" => ru ? "Доп. USD-потолок риска на сделку major/alt." : "Extra USD risk ceiling per trade major/alt.",
-            "set.pcc" => ru ? "Пауза повторного входа в символ после закрытия." : "Cooldown before re-entry on same symbol after close.",
-            "set.mqt" => ru ? "Минимальный composite score аукциона (0–100)." : "Minimum auction composite score (0–100).",
-            "set.sss" => ru ? "Отбор лучших сигналов в окне, а не «первый пришёл»." : "Pick best signals in the window, not first-come.",
-            "set.awm" => ru ? "Окно сбора кандидатов перед выбором слотов." : "Candidate collection window before slot selection.",
-            "set.wts" => ru ? "Веса факторов скоринга (сумма ≈ 1)." : "Scoring factor weights (sum ≈ 1).",
-            "set.obg" => ru ? "Блок/штраф при широком спреде стакана." : "Block/penalize wide orderbook spread.",
-            "set.msp" => ru ? "Макс. (ask−bid)/mid для входа." : "Max (ask−bid)/mid allowed for entry.",
-            "set.d_en" => ru ? "Включает разделение TREND/RANGE/CHAOS." : "Enables TREND/RANGE/CHAOS split.",
-            "set.d_uni" => ru ? "Сколько топ-символов по объёму в core и trend universe." : "How many top-volume symbols in core & trend universe.",
-            "set.d_sp" => ru ? "Размер пула для спред/RANGE (не majors)." : "Pool size for spread/RANGE (non-majors).",
-            "set.d_rl" => ru ? "Плечо в боковике (спред)." : "Leverage in range (spread).",
-            "set.d_tl" => ru ? "Плечо в тренде при flow." : "Leverage in trend with flow.",
-            "set.d_rs" => ru ? "Множитель размера в RANGE относительно 1R." : "Size multiplier in RANGE vs full 1R.",
-            "set.d_flow" => ru ? "На TREND без объёма/flow — reject." : "On TREND without volume/flow — reject.",
-            "set.d_vol" => ru ? "Объём сигнальной свечи ≥ 1.05× средней." : "Signal bar volume ≥ 1.05× average.",
-            "set.ml_gate" => ru ? "false = только shadow-метрики, входы не режет." : "false = shadow metrics only, does not cut entries.",
-            "set.ml_th" => ru ? "Порог P(win) если hard gate включён." : "P(win) threshold when hard gate is on.",
-            "set.ml_hard" => ru ? "Жёсткий SKIP по ML — только после валидного ΔPF." : "Hard ML SKIP — only after valid ΔPF.",
-            "set.nw_hard" => ru ? "Жёсткая пауза по новостям — осторожно, лучше shadow." : "Hard news pause — use carefully; prefer shadow.",
-            "set.warn_t" => ru ? "Не крутите всё на максимум сразу" : "Don’t max every toggle at once",
-            "set.warn_p" => ru ? "Correlation Disabled + MaxSameSide 0 + Quality 50 = портфель из 7 однонаправленных шортов. Держите StaticLimit + Quality ≥ 75." : "Correlation Disabled + MaxSameSide 0 + Quality 50 = seven same-side shorts. Keep StaticLimit + Quality ≥ 75.",
+            "set.dual" => ru ? "Вкл. TREND/RANGE маршрутизацию" : "Enable TREND/RANGE routing",
+            "set.maxpos" => ru ? "Макс. число открытых позиций" : "Max open positions",
+            "set.corr" => ru ? "Disabled / StaticLimit / DynamicCorrelation" : "Disabled / StaticLimit / DynamicCorrelation",
+            "set.news" => ru ? "Влияние новостей на TREND size/pause" : "News impact on TREND size/pause",
+            "set.ml" => ru ? "Жёсткий ML skip (после shadow)" : "Hard ML skip (after shadow)",
+            "set.minex" => ru ? "Порог conf для исполнения (RANGE ниже)" : "Conf threshold to execute (RANGE lower)",
+            "set.hint" => ru ? "Меняйте на лету в" : "Change live in",
 
-            "risk.title" => ru ? "Риск и сопровождение" : "Risk and management",
-            "risk.size_h" => ru ? "Размер позиции (1R)" : "Position size (1R)",
-            "risk.size_p" => ru ? "Объём считается от дистанции до SL, затем режется HardCap и MaxNotional%." : "Qty is derived from SL distance, then clamped by HardCap and MaxNotional%.",
-            "risk.exit_h" => ru ? "Выходы" : "Exits",
-            "risk.exit_1" => ru ? "TP1 partial → стоп к BE / lock-in step." : "TP1 partial → stop to BE / lock-in step.",
-            "risk.exit_2" => ru ? "TP2/TP3 — остаток + дальнейший lock." : "TP2/TP3 — remainder + further lock.",
-            "risk.exit_3" => ru ? "SL_STRATEGY_FAIL — первичный стоп по структуре." : "SL_STRATEGY_FAIL — primary structure stop.",
-            "risk.exit_4" => ru ? "Kill / Daily DD / BTC vol — аварийные контуры." : "Kill / Daily DD / BTC vol — emergency circuits.",
+            "risk.size_t" => ru ? "Размер позиции" : "Position size",
+            "risk.size_p" => ru ? "1R от дистанции до SL, HardCap, DualMode size/lev." : "1R from SL distance, HardCap, DualMode size/lev.",
+            "risk.exit_t" => ru ? "Выходы" : "Exits",
+            "risk.exit_p" => ru ? "TP1 partial → BE → lock-in → trail к TP3." : "TP1 partial → BE → lock-in → trail toward TP3.",
+            "risk.tp1" => ru ? "Частичная фиксация" : "Partial take",
+            "risk.be" => ru ? "Стоп в безубыток" : "Stop to breakeven",
+            "risk.tp2" => ru ? "Защита прибыли" : "Profit lock",
+            "risk.trail" => ru ? "ATR trailing" : "ATR trailing",
 
-            "ui.title" => ru ? "Где что смотреть" : "Where to look",
-            "ui.market" => ru ? "График, позиции, History (Setup / R / PnL Demo+Live)." : "Chart, positions, History (Setup / R / PnL Demo+Live).",
-            "ui.settings" => ru ? "Risk, Signal Quality, DualMode, ML/News тумблеры." : "Risk, Signal Quality, DualMode, ML/News toggles.",
-            "ui.ai" => ru ? "Shadow KPI, neurons, news impact (не hard-gate сам по себе)." : "Shadow KPI, neurons, news impact (not a hard-gate by itself).",
-            "ui.news" => ru ? "Лента новостей RU/EN, impact, контекст." : "News tape RU/EN, impact, context.",
-            "ui.hist" => ru ? "Колонка Setup: TREND vs RANGE — аудит ноги стратегии." : "Setup column: TREND vs RANGE — strategy leg audit.",
-            "ui.tg" => ru ? "/status /kill /resume и Mini App dashboard." : "/status /kill /resume and Mini App dashboard.",
+            "news.trend_t" => ru ? "Влияние на TREND" : "Impact on TREND",
+            "news.trend_p" => ru ? "High-impact / macro: пауза или уменьшение size." : "High-impact / macro: pause or size cut.",
+            "news.range_t" => ru ? "Влияние на RANGE" : "Impact on RANGE",
+            "news.range_p" => ru ? "Скальп не режется soft-мультипликатором; hard-окно (FOMC/CPI) может блокировать." : "Scalp not soft-multiplied; hard windows (FOMC/CPI) may block.",
+            "news.open" => ru ? "Открыть Macro News" : "Open Macro News",
 
-            "ops.title" => ru ? "Операции" : "Operations",
-            "ops.logs_h" => ru ? "Ключевые теги логов" : "Key log tags",
-            "ops.check_h" => ru ? "Чек-лист перед Live" : "Pre-Live checklist",
-            "ops.c1" => ru ? "git pull · rebuild Engine + Web." : "git pull · rebuild Engine + Web.",
-            "ops.c2" => ru ? "Проверить /settings: MaxOpen 4, SameSide 2, Quality ≥ 78." : "Verify /settings: MaxOpen 4, SameSide 2, Quality ≥ 78.",
-            "ops.c3" => ru ? "Demo 30–50 сделок, смотреть Setup и долю SL vs TP." : "Demo 30–50 trades, review Setup and SL vs TP mix.",
-            "ops.c4" => ru ? "Live с малым HardCap; Kill и Telegram настроены." : "Live with small HardCap; Kill and Telegram configured.",
+            "ui.market" => ru ? "График, ордера, live PnL" : "Chart, orders, live PnL",
+            "ui.ai" => ru ? "KPI, shadow, статус фильтров" : "KPI, shadow, filter status",
+            "ui.learn" => ru ? "Обучение / память" : "Learning / memory",
+            "ui.news" => ru ? "Лента новостей" : "News tape",
+            "ui.set" => ru ? "Все тумблеры риска" : "All risk toggles",
+            "ui.pos" => ru ? "Таблица позиций" : "Positions table",
+
+            "ops.logs_t" => ru ? "Ключевые теги логов" : "Key log tags",
+            "ops.tg_t" => ru ? "Telegram" : "Telegram",
+            "ops.tg_p" => ru ? "Команды бота и Mini App dashboard." : "Bot commands and Mini App dashboard.",
+            "ops.reset_t" => ru ? "Чистый старт" : "Clean start",
+            "ops.reset_p" => ru ? "Не обязательно чистить историю. При смене логики можно обнулить journal/memory осознанно." : "Clearing history is optional. After logic changes you may reset journal/memory deliberately.",
 
             _ => key
         };
