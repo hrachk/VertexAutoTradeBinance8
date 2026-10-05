@@ -256,7 +256,7 @@
                     {
                         var sc = (int)p.Score;
                         var confPct = (int)(p.Confidence * 100m);
-                        var regime = confPct >= 70 ? "UpTrend" : confPct >= 50 ? "Range" : "DownTrend";
+                        var regime = SimplifyRegime(p.Regime);
                         <div class="vxl-srow">
                             <span class="vxl-st">@p.Time.ToLocalTime().ToString("HH:mm:ss")</span>
                             <span class="vxl-ss">@ShortSym(p.Symbol)</span>
@@ -504,12 +504,26 @@
   margin-bottom: 14px;
 }
 .vxl-panel {
-  background: var(--panel);
+  background: linear-gradient(165deg, rgba(12, 20, 34, 0.95), rgba(8, 12, 22, 0.92));
   border: 1px solid var(--line);
   border-radius: 16px;
   padding: 14px 16px 16px;
-  box-shadow: 0 0 28px rgba(0, 212, 255, 0.04), inset 0 1px 0 rgba(255,255,255,0.03);
-  backdrop-filter: blur(12px);
+  box-shadow:
+    0 0 0 1px rgba(0, 212, 255, 0.04),
+    0 8px 32px rgba(0, 0, 0, 0.35),
+    0 0 40px rgba(0, 212, 255, 0.06),
+    inset 0 1px 0 rgba(255,255,255,0.04);
+  backdrop-filter: blur(14px);
+  position: relative;
+  overflow: hidden;
+}
+.vxl-panel::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 12%; right: 12%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0,212,255,0.45), transparent);
+  pointer-events: none;
 }
 .vxl-panel-h {
   display: flex;
@@ -549,7 +563,7 @@
   grid-template-columns: 28px 1fr 36px;
   gap: 4px;
   align-items: stretch;
-  height: 180px;
+  height: 200px;
 }
 .vxl-y-left, .vxl-y-right {
   display: flex;
@@ -860,15 +874,17 @@
             }
 
             Exposure = pts.GroupBy(p => p.Symbol)
-                .Select(g => new ExposureVm
+                .Select(g =>
                 {
-                    Symbol = g.Key,
-                    Score = (int)Math.Round(g.Average(p => (double)p.Score)),
-                    AvgConf = g.Average(p => p.Confidence),
-                    Count = g.Count(),
-                    Regime = g.Average(p => p.Confidence) > 0.70m ? "UpTrend"
-                           : g.Average(p => p.Confidence) > 0.50m ? "Range"
-                           : "DownTrend"
+                    var last = g.OrderByDescending(x => x.Time).First();
+                    return new ExposureVm
+                    {
+                        Symbol = g.Key,
+                        Score = (int)Math.Round(g.Average(p => (double)p.Score)),
+                        AvgConf = g.Average(p => p.Confidence),
+                        Count = g.Count(),
+                        Regime = SimplifyRegime(last.Regime)
+                    };
                 })
                 .OrderByDescending(e => e.Score)
                 .ToList();

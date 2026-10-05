@@ -8,6 +8,7 @@ public sealed class AiLearningFileService
 {
     private readonly string _filePath;
     private readonly string _backupPath;
+    private readonly string _legacyPath = "";
     private readonly ILogger<AiLearningFileService> _logger;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -22,12 +23,23 @@ public sealed class AiLearningFileService
         IConfiguration cfg,
         ILogger<AiLearningFileService> logger)
     {
-        var baseDir = Path.Combine(AppContext.BaseDirectory, "ai-models");
+        // Prefer SharedData:Root (same folder Engine writes), then app base
+        var root = cfg["SharedData:Root"];
+        string baseDir;
+        if (!string.IsNullOrWhiteSpace(root))
+            baseDir = Path.Combine(root.Trim(), "ai-models");
+        else
+            baseDir = Path.Combine(AppContext.BaseDirectory, "ai-models");
 
+        Directory.CreateDirectory(baseDir);
         _filePath = Path.Combine(baseDir, "ai_learning.json");
         _backupPath = Path.Combine(baseDir, "ai_learning_backup.json");
 
+        // Secondary fallback under Web bin (legacy)
+        _legacyPath = Path.Combine(AppContext.BaseDirectory, "ai-models", "ai_learning.json");
+
         _logger = logger;
+        _logger.LogInformation("[AI-LEARN-WEB] Snapshot path: {Path}", _filePath);
     }
 
     // ============================================================
@@ -36,26 +48,23 @@ public sealed class AiLearningFileService
     private async Task<T?> ReadSafeAsync<T>()
     {
         var result = await TryReadFileAsync<T>(_filePath);
-
         if (result != null)
             return result;
 
-        _logger.LogWarning(
-            "[AI-LEARN-WEB] Primary snapshot failed → trying backup");
-
+        _logger.LogWarning("[AI-LEARN-WEB] Primary snapshot failed → backup");
         result = await TryReadFileAsync<T>(_backupPath);
-
         if (result != null)
-        {
-            _logger.LogInformation(
-                "[AI-LEARN-WEB] Backup snapshot loaded successfully");
-
             return result;
+
+        if (!string.IsNullOrEmpty(_legacyPath) && !string.Equals(_legacyPath, _filePath, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("[AI-LEARN-WEB] Trying legacy path {Path}", _legacyPath);
+            result = await TryReadFileAsync<T>(_legacyPath);
+            if (result != null)
+                return result;
         }
 
-        _logger.LogError(
-            "[AI-LEARN-WEB] Both primary and backup snapshot failed");
-
+        _logger.LogError("[AI-LEARN-WEB] No readable ai_learning snapshot");
         return default;
     }
 
@@ -132,40 +141,40 @@ public sealed class AiLearningFileService
 
         foreach (var ms in snap.MarketStates)
         {
-            // ====================================================
-            // ATR-ADAPTIVE NORMALIZATION
-            // ====================================================
-
             var atrNorm = NormalizeAtr(ms.Atr, ms.Price);
+            var volatilityNorm = NormalizeVolatility(ms.VolatilityPercent, atrNorm);
+            var slopeNorm = NormalizeSlope(ms.TrendSlopePercent, atrNorm);
 
-            var volatilityNorm =
-                NormalizeVolatility(ms.VolatilityPercent, atrNorm);
+            // Confidence may be 0–1 or already 0–100 depending on writer
+            var conf01 = ms.Confidence;
+            if (conf01 > 1.5m)
+                conf01 = Math.Clamp(conf01 / 100m, 0m, 1m);
+            else
+                conf01 = Math.Clamp(conf01, 0m, 1m);
 
-            var slopeNorm =
-                NormalizeSlope(ms.TrendSlopePercent, atrNorm);
+            var score = ComputeDisplayScore(
+                conf01,
+                volatilityNorm,
+                slopeNorm,
+                ms.PulseValue,
+                ms.Time,
+                now);
 
-            var score =
-                ComputeAdaptiveScore(
-                    ms.Confidence,
-                    volatilityNorm,
-                    slopeNorm,
-                    ms.Time,
-                    now);
+            var regime = ms.Regime.ToString();
+            if (string.IsNullOrWhiteSpace(regime) || regime == "0")
+                regime = "Unknown";
 
             var model = new AiLearningPointModel
             {
                 Time = ms.Time,
                 Symbol = ms.Symbol,
-
                 Score = score,
-                Confidence = ms.Confidence,
-
+                Confidence = conf01,
                 Slope = slopeNorm,
-                Volatility = volatilityNorm,
-
-                LiquidityDanger =
-                    volatilityNorm > 0.75m &&
-                    Math.Abs(slopeNorm) < 0.15m
+                Volatility = Math.Clamp(volatilityNorm, 0m, 1.5m) / 1.5m, // 0–1 for chart
+                LiquidityDanger = volatilityNorm > 0.9m && Math.Abs(slopeNorm) < 0.2m,
+                Regime = regime,
+                PulseValue = (decimal)ms.PulseValue
             };
 
             points.Add(model);
@@ -226,24 +235,40 @@ public sealed class AiLearningFileService
     // ADAPTIVE SCORE ENGINE
     // ============================================================
 
-    private static int ComputeAdaptiveScore(
-        decimal confidence,
+    /// <summary>
+    /// UI-only activity score 0–100. Not a trade gate.
+    /// Avoids collapsing to 1 when engine Confidence≈0 by blending slope/vol/pulse.
+    /// </summary>
+    private static int ComputeDisplayScore(
+        decimal confidence01,
         decimal volatilityNorm,
         decimal slopeNorm,
+        double pulseValue,
         DateTime stateTime,
         DateTime now)
     {
-        var ageMinutes =
-            (decimal)(now - stateTime).TotalMinutes;
+        var ageMinutes = Math.Max(0, (now - stateTime).TotalMinutes);
+        // Soft recency: half-life ~3h so dashboard stays readable
+        var recency = (decimal)Math.Exp(-ageMinutes / 180.0);
+        recency = Math.Clamp(recency, 0.55m, 1m);
 
-        var recencyFactor =
-            Math.Exp(-(double)ageMinutes / 90.0);
+        var confPart = confidence01 * 100m;
+        var slopePart = Math.Min(30m, Math.Abs(slopeNorm) * 18m);
+        var volPart = Math.Min(25m, Math.Abs(volatilityNorm) * 12m);
+        var pulsePart = 0m;
+        if (pulseValue > 0 && pulseValue <= 1.5)
+            pulsePart = (decimal)pulseValue * 40m;
+        else if (pulseValue > 1.5 && pulseValue <= 100)
+            pulsePart = (decimal)pulseValue * 0.35m;
 
-        var score =
-            confidence * 100m *
-            (1m + Math.Abs(slopeNorm) * 0.35m) *
-            (decimal)recencyFactor;
+        decimal raw;
+        if (confPart >= 12m)
+            raw = confPart * 0.70m + slopePart * 0.15m + volPart * 0.15m;
+        else
+            // Low conf: still show market activity so UI is not a wall of "1"
+            raw = 28m + slopePart + volPart * 0.8m + pulsePart * 0.25m + confPart * 0.5m;
 
-        return (int)Math.Clamp(score, 1m, 100m);
+        raw *= recency;
+        return (int)Math.Clamp(Math.Round(raw), 1, 100);
     }
 }
