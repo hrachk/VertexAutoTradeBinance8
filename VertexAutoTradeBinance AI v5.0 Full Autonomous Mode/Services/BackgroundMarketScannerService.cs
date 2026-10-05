@@ -1,3 +1,4 @@
+using System.Linq;
 using Binance.Net.Enums;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -38,14 +39,19 @@ namespace VertexAutoTradeBinance8.Services
             {
                 try
                 {
-                    // 1. Берём авто-список ликвидных символов
+                    // 1. Top liquid only — combat: avoid REST 1m for entire universe every cycle
                     var snapshots = await _liquidity.LoadSnapshotsAsync();
                     if (snapshots.Count == 0)
                     {
                         _logger.LogWarning("[BG-SCANNER] No symbols from liquidity scanner");
                     }
-
-                    
+                    else
+                    {
+                        snapshots = snapshots
+                            .OrderByDescending(s => s.QuoteVolume24h)
+                            .Take(15)
+                            .ToList();
+                    }
 
                     foreach (var snap in snapshots)
                     {

@@ -73,7 +73,7 @@ public sealed class StrategyCoreEngine
     private const int SwingLookback = 40; // wider window for real swings
     private const int PivotWing = 2;      // fractal pivot L/R bars
     private const int Donchian = 20;
-    private const int QualityTopN = 40;
+    private const int QualityTopN = 28; // combat: fewer REST/CPU targets
     private const int MinBars = 55;
     private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(30);
     private static readonly KlineInterval Tf = KlineInterval.FifteenMinutes;
@@ -98,9 +98,9 @@ public sealed class StrategyCoreEngine
         _md = marketData;
         _md.WsClosedKline += OnWsClosed;
         _scanTimer = new Timer(_ => { _ = ScanQualitySafeAsync(); },
-            null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30));
+            null, TimeSpan.FromSeconds(12), TimeSpan.FromSeconds(45));
         _log.LogInformation(
-            "[CORE] v1.6 bound TF={tf} REST-fallback=ON structure-SL=ON (no ATR-only stop) scan=30s",
+            "[CORE] v1.6 bound TF={tf} REST-fallback=ON structure-SL=ON (no ATR-only stop) scan=45s combat",
             Tf);
     }
 
@@ -175,7 +175,7 @@ public sealed class StrategyCoreEngine
                 {
                     _log.LogWarning(ex, "[CORE] scan {sym} failed", sym);
                 }
-                await Task.Delay(50).ConfigureAwait(false);
+                await Task.Delay(80).ConfigureAwait(false); // REST/CPU spacing between symbols
             }
 
             // same_bar means reactive path already evaluated this closed bar — not a pipeline death

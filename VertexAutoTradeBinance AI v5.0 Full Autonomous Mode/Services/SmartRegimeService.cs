@@ -149,7 +149,7 @@ namespace VertexAutoTradeBinance8.Services
                 VolRegime = volRegime
             };
 
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "[SMART][{Symbol}][{TF}] base={Base} smart={Smart} slope={Slope:P2} vol={Vol:P2} corrBTC={Corr:F2} conf={Conf:P2} CT={CT} VC={VC} profile={Profile} riskBias={RiskBias:F2}",
                 symbol, interval, info.BaseRegime, info.SmartType, info.TrendSlopePercent, info.VolatilityPercent,
                 info.CorrelationToBtc, info.Confidence, info.IsControlledTrend, info.IsVolCompression,

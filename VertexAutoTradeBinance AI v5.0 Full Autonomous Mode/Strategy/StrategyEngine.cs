@@ -113,7 +113,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
         private readonly ConcurrentDictionary<string, DateTime> _lastSignalUtc = new();
         private static readonly TimeSpan SignalCooldown = TimeSpan.FromSeconds(10);
-        private static readonly long RealtimeThrottleTicks = (long)(Stopwatch.Frequency * 0.250); // 250 ms
+        private static readonly long RealtimeThrottleTicks = (long)(Stopwatch.Frequency * 5.0); // 5s residual guard
       
 
         public StrategyEngine(
@@ -223,21 +223,17 @@ namespace VertexAutoTradeBinance8.Strategy
                 SafeFireAndForget(() => RunReactive(symbol, tf, "CLOSE"));
             };
 
-            _onRealtimeHandler = (symbol, price) =>
-            {
-                if (!ShouldRunRealtime(symbol))
-                    return;
-
-                SafeFireAndForget(() =>
-                    RunReactive(symbol, KlineInterval.FiveMinutes, "REALTIME"));
-            };
+            // REALTIME disabled: tick-level RunReactive was the #1 CPU/log load
+            // (thousands of [REACTIVE] ENTER/SMART per minute) while Router ignores
+            // legacy TREND emits for live execution. CLOSE on decision TF is enough
+            // for diagnostic UI; CORE_INST + RANGE_SPREAD own live signals.
+            _onRealtimeHandler = null;
 
             marketData.OnWarm += _onWarmHandler;
             marketData.WsClosedKline += _onKlineHandler;
-            marketData.RealtimePrice += _onRealtimeHandler;
 
             _logger.LogInformation(
-                "[STRAT][PUSH] Reactive entry-point bound (REALTIME ENABLED)");
+                "[STRAT][PUSH] Reactive bound (CLOSE-only, REALTIME OFF — combat mode)");
         }
 
         public void UnbindReactive()
@@ -290,11 +286,9 @@ namespace VertexAutoTradeBinance8.Strategy
                 ? KlineInterval.FifteenMinutes
                 : KlineInterval.FiveMinutes;
 
-            _logger.LogInformation(
-    "[REACTIVE] ENTER {symbol} {tf} reason={reason}",
-    symbol,
-    decisionTf,
-    reason);
+            _logger.LogDebug(
+                "[REACTIVE] ENTER {symbol} {tf} reason={reason}",
+                symbol, decisionTf, reason);
 
             var key = (symbol, decisionTf);
             var nowTick = Stopwatch.GetTimestamp();

@@ -102,6 +102,10 @@ namespace VertexAutoTradeBinance8.Services
 
         public event Action<string, decimal>? RealtimePrice;
 
+        /// <summary>Per-symbol last RealtimePrice fan-out (combat: max ~2 Hz to subscribers).</summary>
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _lastRealtimeEmit = new(System.StringComparer.OrdinalIgnoreCase);
+        private static readonly long RealtimeEmitMinTicks = System.Diagnostics.Stopwatch.Frequency / 2; // 500ms
+
         public MarketDataFacade(
             MarketDataKlineBuffer buffer,
             WsKlineSubscriber ws,
@@ -129,7 +133,14 @@ namespace VertexAutoTradeBinance8.Services
             {
                 UpdateRealtimePrice(symbol, price);
 
-                RealtimePrice?.Invoke(symbol, price);
+                // Always update last price cache; fan-out to subscribers at most ~2 Hz/symbol
+                var now = System.Diagnostics.Stopwatch.GetTimestamp();
+                var emit = _lastRealtimeEmit.AddOrUpdate(
+                    symbol,
+                    now,
+                    (_, last) => (now - last < RealtimeEmitMinTicks) ? last : now);
+                if (emit == now)
+                    RealtimePrice?.Invoke(symbol, price);
             };
             // ✅ START CLEANUP LOOP (fire and forget)
             _ = Task.Run(CleanupLoop);
