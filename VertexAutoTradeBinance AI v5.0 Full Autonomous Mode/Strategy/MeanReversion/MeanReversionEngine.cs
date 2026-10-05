@@ -305,9 +305,10 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             // Stronger statistical extremes (higher |Z|) and a more confident
             // regime read both push confidence up, capped at 0.95 so it never
             // claims full certainty (this is a statistical bet, not a lock).
-            decimal zComponent = Math.Min(Math.Abs(zScore) / 4m, 1m); // |Z|=4 -> maxed out
-            decimal blended = zComponent * 0.6m + regimeConfidence * 0.4m;
-            return Math.Clamp(blended, 0.1m, 0.95m);
+            decimal zComponent = Math.Min(Math.Abs(zScore) / 3.5m, 1m); // |Z|~2.0 → ~0.57
+            decimal blended = zComponent * 0.65m + Math.Max(regimeConfidence, 0.35m) * 0.35m;
+            // Floor so valid sigma entries are not killed by MinExecute (0.42 RANGE)
+            return Math.Clamp(Math.Max(blended, 0.45m), 0.45m, 0.95m);
         }
 
         /// <summary>True when current ATR is expanded vs its recent average (do not fade trend ignition).</summary>

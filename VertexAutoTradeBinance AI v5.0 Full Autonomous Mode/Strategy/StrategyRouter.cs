@@ -142,6 +142,13 @@ namespace VertexAutoTradeBinance8.Strategy
                 _logger.LogInformation("[ROUTER] CORE held {sym} — regime=CHAOS", signal.Symbol);
                 return;
             }
+            if (regime == DualMarketMode.Unknown && _dualMode != null)
+            {
+                _logger.LogInformation(
+                    "[ROUTER] CORE held {sym} — regime=UNKNOWN (wait BTC DualMode refresh)",
+                    signal.Symbol);
+                return;
+            }
 
             // Tag as TREND leg for journal clarity (keep CORE_ prefix executable)
             if (!string.IsNullOrEmpty(signal.Reason) &&
@@ -188,7 +195,14 @@ namespace VertexAutoTradeBinance8.Strategy
                     _logger.LogInformation("[ROUTER] SPREAD held {sym} — regime=CHAOS", signal.Symbol);
                     return;
                 }
-                // Range or Unknown → allow spread (Unknown = treat as range-friendly for MR)
+                if (regime == DualMarketMode.Unknown)
+                {
+                    _logger.LogInformation(
+                        "[ROUTER] SPREAD held {sym} — regime=UNKNOWN (wait BTC DualMode refresh)",
+                        signal.Symbol);
+                    return;
+                }
+                // Range only → allow spread
             }
 
             if (ExecutableStrategyPolicy.IsCoreMajorSymbol(signal.Symbol))

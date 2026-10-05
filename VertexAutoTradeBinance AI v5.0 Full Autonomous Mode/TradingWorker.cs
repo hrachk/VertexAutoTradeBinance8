@@ -1033,7 +1033,10 @@ namespace VertexAutoTradeBinance8
                     : symbol.StartsWith("ETH", StringComparison.OrdinalIgnoreCase)
                                     ? (confCfg.ETH?.MinExecute ?? 0.55m)
                                     : confCfg.Default?.MinExecute ?? 0.58m;
-                double sigConf = (double)(signal.Confidence ?? 0m); /*/ 100.0;*/ // Confidence is decimal? 0-100
+                // RANGE/spread conf is statistical (often 0.45–0.55) — not CORE structure score
+                if (VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy.IsRangeLeg(signal.Reason))
+                    minExec = Math.Min(minExec, 0.42m);
+                double sigConf = (double)(signal.Confidence ?? 0m); // 0..1 scale
                 if (sigConf < (double)minExec)
                 {
                     await RejectAsync(signal, symbol, tf, "CONF", "WATCH_ONLY",
