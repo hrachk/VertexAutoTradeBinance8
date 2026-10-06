@@ -15,7 +15,9 @@ public static class ExecutableStrategyPolicy
         return r.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase)
             || r.StartsWith("TREND_", StringComparison.OrdinalIgnoreCase)
             || r.StartsWith("RANGE_", StringComparison.OrdinalIgnoreCase)
-            || r.StartsWith("MEANREV_", StringComparison.OrdinalIgnoreCase);
+            || r.StartsWith("MEANREV_", StringComparison.OrdinalIgnoreCase)
+            || r.StartsWith("SCALP_", StringComparison.OrdinalIgnoreCase)
+            || r.StartsWith("INST_", StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsTrendLeg(string? reason)
@@ -35,7 +37,8 @@ public static class ExecutableStrategyPolicy
         int pipe = r.IndexOf('|');
         if (pipe > 0) r = r.Substring(0, pipe);
         return r.StartsWith("RANGE_", StringComparison.OrdinalIgnoreCase)
-            || r.StartsWith("MEANREV_", StringComparison.OrdinalIgnoreCase);
+            || r.StartsWith("MEANREV_", StringComparison.OrdinalIgnoreCase)
+            || r.StartsWith("SCALP_", StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsCoreMajorSymbol(string? symbol)

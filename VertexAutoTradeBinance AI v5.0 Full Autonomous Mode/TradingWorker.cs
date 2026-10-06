@@ -1634,16 +1634,29 @@ namespace VertexAutoTradeBinance8
                 leverage = adjLev;
                 signal.Leverage = adjLev;
             }
-            // 8a) ConfirmEntryOn1m — same gate for Live AND Demo (parity)
+            // 8a) ConfirmEntryOn1m — soft for executable CORE/RANGE (parity with OrderExecutor)
             try
             {
                 var (ok1m, score1m, thr1m) = await _executor.ConfirmEntryOn1m(
                     symbol, signal.Side, ct, signal, null);
                 if (!ok1m)
                 {
-                    await RejectAsync(signal, symbol, tf, "EXEC", "BAD_1M_TIMING",
-                        ct, extra: $"score={score1m}/{thr1m}");
-                    return;
+                    bool soft1m = ExecutableStrategyPolicy.IsLiveExecutable(signal.Reason);
+                    if (soft1m)
+                    {
+                        decimal ratio = thr1m > 0 ? (decimal)score1m / thr1m : 0m;
+                        decimal sizeFactor = Math.Clamp(0.50m + ratio * 0.35m, 0.50m, 0.85m);
+                        signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * sizeFactor, 0.15m, 1.0m);
+                        _logger.LogInformation(
+                            "[PROC][{symbol}] 1m soft size×{sf:F2} score={s}/{t} (no hard block)",
+                            symbol, sizeFactor, score1m, thr1m);
+                    }
+                    else
+                    {
+                        await RejectAsync(signal, symbol, tf, "EXEC", "BAD_1M_TIMING",
+                            ct, extra: $"score={score1m}/{thr1m}");
+                        return;
+                    }
                 }
             }
             catch (Exception ex1m)

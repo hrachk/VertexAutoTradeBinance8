@@ -217,7 +217,7 @@ namespace VertexAutoTradeBinance8.Strategy
             }
 
             bool isLong = signal.Side == SignalSide.Buy;
-            string tag = regime == DualMarketMode.Trend ? "SCALP_PARALLEL" : "RANGE_SPREAD";
+            string tag = regime == DualMarketMode.Trend ? "RANGE_SCALP" : "RANGE_SPREAD";
             signal.Reason = isLong ? $"{tag}_LONG" : $"{tag}_SHORT";
             if (signal.Leverage is null or > 5)
                 signal.Leverage = 4;

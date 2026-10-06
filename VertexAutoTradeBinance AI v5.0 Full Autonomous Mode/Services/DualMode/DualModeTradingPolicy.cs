@@ -217,16 +217,20 @@ public sealed class DualModeTradingPolicy
         // No market data yet → fail closed for unknown (except never block BTC/ETH soft)
         if (_rankBySymbol.Count == 0)
         {
-            // Fail-open only for absolute leaders so system can still trade while warming
-            if (u is "BTCUSDT" or "ETHUSDT")
+            // Warmup: fail-open liquid majors + common trend names so DualMode does not kill all alts
+            if (u is "BTCUSDT" or "ETHUSDT" or "BNBUSDT" or "SOLUSDT" or "XRPUSDT")
                 return UniverseTier.CoreMajor;
-            return UniverseTier.Blocked;
+            if (u is "DOGEUSDT" or "ADAUSDT" or "AVAXUSDT" or "LINKUSDT" or "LTCUSDT"
+                or "DOTUSDT" or "NEARUSDT" or "ATOMUSDT" or "UNIUSDT" or "APTUSDT"
+                or "ARBUSDT" or "OPUSDT" or "SUIUSDT")
+                return UniverseTier.TrendLiquid;
+            return UniverseTier.SpreadAlt; // allow until ranked universe loads
         }
 
         if (!_rankBySymbol.TryGetValue(u, out int rank))
         {
-            // Not in ticker set
-            return UniverseTier.Blocked;
+            // Not in 24h ranking snapshot — treat as mid alt (still tradable for scalp/CORE)
+            return UniverseTier.SpreadAlt;
         }
 
         int coreN = Math.Max(1, o.CoreMajorCount);
