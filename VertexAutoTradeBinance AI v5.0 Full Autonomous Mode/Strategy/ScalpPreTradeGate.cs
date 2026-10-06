@@ -1,5 +1,5 @@
 using VertexAutoTradeBinance8.Models;
-using VertexAutoTradeBinance8.Services.MarketData;
+using VertexAutoTradeBinance8.Services;
 
 namespace VertexAutoTradeBinance8.Strategy;
 

@@ -3809,8 +3809,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                                 ResolveSelected();
                                 CalcStats();
                                 _ = EnsureActiveTfLoadedAsync();
-        _ = EnsureChartSessionAsync(sym);
-        RequestUiRender();
+                                _ = EnsureChartSessionAsync(saved.sym);
                             }
                         }
 
@@ -4538,6 +4537,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // in the narrow klines_bootstrap snapshot Series is built from.
         // Pull it in so the chart isn't blank.
         _ = EnsureActiveTfLoadedAsync();
+        _ = EnsureChartSessionAsync(sym);
         // If this symbol has no klines (e.g. manually opened position
         // on a coin not in the bot universe), trigger fetch.
         // Force re-fetch regardless of _preloadedSymbols — user explicitly
@@ -4954,6 +4954,102 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         finally
         {
             _symbolFetchInProgress.TryRemove(symbol, out _);
+        }
+    }
+
+
+    /// <summary>
+    /// Chart session: full history for selected symbol (datadb + REST), then live tip updates.
+    /// </summary>
+    async Task EnsureChartSessionAsync(string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol)) return;
+        try
+        {
+            var tf = string.IsNullOrEmpty(_activeTf) ? "FifteenMinutes" : _activeTf;
+            var tfLabel = TfLabel(tf).ToLowerInvariant();
+
+            var archive = await HistoricalReader.LoadAsync(symbol, tfLabel);
+            var klines = archive != null && archive.Count > 0
+                ? new List<KlineDto>(archive)
+                : new List<KlineDto>();
+
+            var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == tf);
+            if (idx >= 0 && Series[idx].Klines.Count > 0)
+            {
+                var map = new SortedDictionary<long, KlineDto>();
+                foreach (var k in klines) map[k.OpenTime] = k;
+                foreach (var k in Series[idx].Klines) map[k.OpenTime] = k;
+                klines = map.Values.ToList();
+            }
+
+            if (klines.Count < 80)
+            {
+                try
+                {
+                    var client = Factory.TryCreateRestClient();
+                    if (client != null)
+                    {
+                        var interval = tf switch
+                        {
+                            "OneMinute" => Binance.Net.Enums.KlineInterval.OneMinute,
+                            "ThreeMinutes" => Binance.Net.Enums.KlineInterval.ThreeMinutes,
+                            "FiveMinutes" => Binance.Net.Enums.KlineInterval.FiveMinutes,
+                            "FifteenMinutes" => Binance.Net.Enums.KlineInterval.FifteenMinutes,
+                            "ThirtyMinutes" => Binance.Net.Enums.KlineInterval.ThirtyMinutes,
+                            "OneHour" => Binance.Net.Enums.KlineInterval.OneHour,
+                            "TwoHour" => Binance.Net.Enums.KlineInterval.TwoHour,
+                            "FourHour" => Binance.Net.Enums.KlineInterval.FourHour,
+                            "OneDay" => Binance.Net.Enums.KlineInterval.OneDay,
+                            _ => Binance.Net.Enums.KlineInterval.FifteenMinutes
+                        };
+                        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                        var res = await client.UsdFuturesApi.ExchangeData
+                            .GetKlinesAsync(symbol, interval, limit: 500, ct: cts.Token);
+                        if (res.Success && res.Data != null)
+                        {
+                            var fromEx = res.Data.Select(k => new KlineDto(
+                                new DateTimeOffset(DateTime.SpecifyKind(k.OpenTime, DateTimeKind.Utc)).ToUnixTimeMilliseconds(),
+                                k.OpenPrice, k.HighPrice, k.LowPrice, k.ClosePrice, k.Volume)).ToList();
+                            var map = new SortedDictionary<long, KlineDto>();
+                            foreach (var k in klines) map[k.OpenTime] = k;
+                            foreach (var k in fromEx) map[k.OpenTime] = k;
+                            klines = map.Values.ToList();
+                        }
+                    }
+                }
+                catch { /* REST optional */ }
+            }
+
+            if (klines.Count == 0) return;
+            if (klines.Count > 1500)
+                klines = klines.Skip(klines.Count - 1500).ToList();
+
+            if (idx >= 0)
+                Series[idx] = Series[idx] with { Klines = klines };
+            else
+                Series.Add(new MarketSeries(symbol, tf, klines));
+
+            if (symbol == _activeSym)
+            {
+                ResolveSelected();
+                CalcStats();
+                await InvokeAsync(async () =>
+                {
+                    StateHasChanged();
+                    try { await RenderCharts(); } catch { }
+                    try
+                    {
+                        await JS.InvokeVoidAsync("marketChart.setSessionSymbol",
+                            $"chartContainer-{_chartInstanceId}", symbol);
+                    }
+                    catch { }
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[CHART-SESSION] {symbol}: {ex.Message}");
         }
     }
 
