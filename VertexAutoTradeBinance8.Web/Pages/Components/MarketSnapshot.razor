@@ -3275,10 +3275,17 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     CancellationTokenSource _cts = new();
     bool Frozen, _jsReady;
 
-    /// <summary>Bump when DOM structure must refresh (symbol change, positions load). Live ticks use JS only.</summary>
+    /// <summary>
+    /// Throttled Blazor paint for account strip + positions table so Mark/PnL
+    /// stay in sync with chart ticks without flooding the circuit (~2–3 Hz).
+    /// </summary>
+    DateTime _lastPosUiPaint = DateTime.MinValue;
     void RequestUiRender()
     {
-        // intentional no-op hook for future ShouldRender gating; callers still StateHasChanged
+        var now = DateTime.UtcNow;
+        if ((now - _lastPosUiPaint).TotalMilliseconds < 400) return;
+        _lastPosUiPaint = now;
+        _ = InvokeAsync(StateHasChanged);
     }
 
     decimal _last, _chg, _ema21, _ema55, _atr;
@@ -3611,7 +3618,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             };
         }
 
-        // Positions PnL in memory (no Blazor render)
+        // Positions PnL — SAME mark as chart (one tick → header + table + chart)
+        decimal? selQty = null;
+        string? selSide = null;
         if (_demoMode)
         {
             bool any = false;
@@ -3626,23 +3635,58 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     if (p2 > 0) total += pos.UnrealizedPnl(p2);
                 }
                 _demoUnrealizedTotal = total;
+                // Bust table cache so Mark/PnL/ROI match header (was frozen until snapshot refresh)
+                InvalidateDisplayedPositionsCache();
+                if (_selectedPosition != null && string.Equals(_selectedPosition.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
+                {
+                    var fresh = DisplayedPositions.FirstOrDefault(x =>
+                        string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(x.Side, _selectedPosition.Side, StringComparison.OrdinalIgnoreCase));
+                    if (fresh != null)
+                    {
+                        _selectedPosition = fresh;
+                        selQty = fresh.Qty;
+                        selSide = fresh.Side;
+                    }
+                }
+                // Throttled Blazor paint for account strip + positions row (~2.5/s)
+                RequestUiRender();
             }
         }
         else
+        {
             ApplyLivePriceToPositions(symbol, price);
+            if (_selectedPosition != null && string.Equals(_selectedPosition.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
+            {
+                selQty = _selectedPosition.Qty;
+                selSide = _selectedPosition.Side;
+            }
+            RequestUiRender();
+        }
 
-        // UI PLANE: only active chart — pure JS (rAF coalesced), zero Blazor tree diff
+        // UI PLANE: chart last bar + PnL with authoritative qty/side from position row
         if (symbol != _activeSym) return;
         if (!_jsReady) return;
 
         _last = price;
+        var qPass = selQty;
+        var sPass = selSide;
         _ = InvokeAsync(async () =>
         {
             try
             {
                 await JS.InvokeVoidAsync("marketChart.applyLivePrice", $"chartContainer-{_chartInstanceId}", (double)price);
-                if (_selectedPosition != null && _selectedPosition.Symbol == symbol)
-                    try { await JS.InvokeVoidAsync("marketChart.updatePnl", $"chartContainer-{_chartInstanceId}", price); } catch { }
+                if (_selectedPosition != null && string.Equals(_selectedPosition.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        if (qPass is decimal q && q > 0 && !string.IsNullOrEmpty(sPass))
+                            await JS.InvokeVoidAsync("marketChart.updatePnl", $"chartContainer-{_chartInstanceId}", (double)price, (double)q, sPass);
+                        else
+                            await JS.InvokeVoidAsync("marketChart.updatePnl", $"chartContainer-{_chartInstanceId}", (double)price);
+                    }
+                    catch { }
+                }
             }
             catch { }
         });

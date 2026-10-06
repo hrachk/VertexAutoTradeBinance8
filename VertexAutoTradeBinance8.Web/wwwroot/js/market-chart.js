@@ -2405,15 +2405,19 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
         // priceToCoordinate, placed near the center-left of the chart
         // per direct request — away from the crowded right edge where
         // Entry/SL/TP/Liq/BE labels and the price scale all compete.
-        updatePnl(containerId, currentPrice) {
+        updatePnl(containerId, currentPrice, qtyOpt, sideOpt) {
             const s = sessions.get(containerId);
             if (!s) return;
             if (!s.entryPrice) return;
+            // Keep chart PnL in lockstep with Blazor position table (same qty/side/mark)
+            if (qtyOpt != null && qtyOpt > 0) s.qty = Number(qtyOpt);
+            if (sideOpt) s.side = String(sideOpt).toUpperCase().indexOf('LONG') >= 0 ? 'LONG' : 'SHORT';
             s.candleSeries.applyOptions({ priceLineVisible: false });
             s.lastPnlPrice = currentPrice; // for the scroll/zoom subscription below to reposition without waiting for the next tick
 
             const dir = s.side === 'LONG' ? 1 : -1;
-            const pnl = (currentPrice - s.entryPrice) * dir * s.qty;
+            const q = (s.qty > 0) ? s.qty : 0;
+            const pnl = (currentPrice - s.entryPrice) * dir * q;
             const sign = pnl >= 0 ? '+' : '';
             const color = pnl >= 0 ? '#22c55e' : '#ef4444';
 
