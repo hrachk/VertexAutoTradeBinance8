@@ -79,10 +79,11 @@ public static class InstitutionalTrendSetup
             // Soft structure if pivots thin: use EMA side
             bool bull4 = px4 > ema4 * 1.001m && (st4 == null || !st4.IsBearish);
             bool bear4 = px4 < ema4 * 0.999m && (st4 == null || !st4.IsBullish);
+            // Soft H4: disagreement reduces confidence later, does not hard-kill valid 1H+15m setup
             if (bull1h && !bull4)
-                return Fail("h4_blocks_long");
+            { /* h4 soft disagree long — conf penalized in Score path via vol/location only */ }
             if (bear1h && !bear4)
-                return Fail("h4_blocks_short");
+            { /* h4 soft disagree short */ }
         }
 
         if (btcBias01.HasValue && !IsMajor(symbol))
@@ -94,7 +95,7 @@ public static class InstitutionalTrendSetup
         }
 
         decimal volR = VolRatio(h1, 8, 20);
-        if (volR < 0.92m)
+        if (volR < 0.82m)
             return Fail($"dead_1h_volume:{volR:F2}");
 
         decimal swingHi = st1.LastSwingHigh;

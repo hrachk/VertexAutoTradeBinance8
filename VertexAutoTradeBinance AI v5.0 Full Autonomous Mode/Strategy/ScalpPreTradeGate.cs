@@ -11,9 +11,9 @@ namespace VertexAutoTradeBinance8.Strategy;
 public static class ScalpPreTradeGate
 {
     // Defaults aligned with DualModeOptions scalp section
-    public const decimal DefaultMaxSpreadPct = 0.0006m;      // 6 bps
+    public const decimal DefaultMaxSpreadPct = 0.0012m;     // 12 bps      // 6 bps
     public const decimal DefaultRoundTripFeePct = 0.0008m;   // ~4bps*2 taker
-    public const decimal DefaultMinNetEdgePct = 0.0010m;     // 10 bps net target
+    public const decimal DefaultMinNetEdgePct = 0.0005m;    // 5 bps net after fees     // 10 bps net target
 
     public static bool Allow(
         TradeSignal signal,
@@ -83,12 +83,12 @@ public static class ScalpPreTradeGate
             decimal riskPct = isLong
                 ? (entry - signal.StopLoss) / entry
                 : (signal.StopLoss - entry) / entry;
-            if (riskPct > 0.015m)
+            if (riskPct > 0.028m)
             {
                 reason = $"scalp_risk_too_wide {riskPct:P2}";
                 return false;
             }
-            if (riskPct > 0 && tpDistPct > 0 && tpDistPct / riskPct < 1.05m)
+            if (riskPct > 0 && tpDistPct > 0 && tpDistPct / riskPct < 0.95m)
             {
                 reason = $"scalp_rr_lt_1 ({tpDistPct / riskPct:F2})";
                 return false;
@@ -96,8 +96,8 @@ public static class ScalpPreTradeGate
         }
 
         // Force micro size ceiling for any scalp-tagged reason
-        if (signal.SizeMultiplier > 0.55m)
-            signal.SizeMultiplier = 0.55m;
+        if (signal.SizeMultiplier > 0.70m)
+            signal.SizeMultiplier = 0.70m;
 
         reason = $"scalp_ok cost~{cost:P3} tp={tpDistPct:P3}";
         return true;

@@ -168,11 +168,12 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             if (ExecutableStrategyPolicy.IsCoreMajorSymbol(symbol))
                 return null;
 
-            // DualMode BTC regime: TREND/CHAOS → no RANGE leg (mutual exclusion)
+            // DualMode: CHAOS → no fade. TREND → still allow micro-scalp (Router tags SCALP_PARALLEL + size cut).
+            // Previously TREND hard-blocked here while Router expected parallel scalp → dead leg.
             var btcMode = _dualMode?.CurrentBtcMode ?? DualMarketMode.Unknown;
-            if (btcMode == DualMarketMode.Trend || btcMode == DualMarketMode.Chaos)
+            if (btcMode == DualMarketMode.Chaos)
             {
-                _logger.LogDebug("[MEANREV] skip {sym} — BTC dual={mode}", symbol, btcMode);
+                _logger.LogDebug("[MEANREV] skip {sym} — BTC dual=CHAOS", symbol);
                 return null;
             }
 
@@ -190,12 +191,15 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
 
             if (_opt.RequireRangeRegime)
             {
-                // Production: if BTC is in RANGE, allow MR on liquid alts even when
-                // local 15m "smart" still labels a mild directional slope.
-                if (_opt.AllowWhenBtcRange && btcRange)
+                if (btcMode == DualMarketMode.Trend)
                 {
-                    if (!rangeLike && !btcRange)
+                    // Parallel scalp in TREND only on local range/squeeze pockets — not pure trend chase
+                    if (!rangeLike)
                         return null;
+                }
+                else if (_opt.AllowWhenBtcRange && btcRange)
+                {
+                    // BTC range/unknown: allow even if local smart still mild-slope
                 }
                 else if (!rangeLike)
                     return null;

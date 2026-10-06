@@ -103,11 +103,11 @@ public sealed class DualModeOptions
     public int ScalpParallelLeverageMax { get; set; } = 4;
 
     /// <summary>Max bid-ask spread (fraction) to allow scalp entry after fees.</summary>
-    public decimal ScalpMaxSpreadPct { get; set; } = 0.0006m;
+    public decimal ScalpMaxSpreadPct { get; set; } = 0.0012m;
 
     /// <summary>Assumed round-trip taker fee fraction (entry+exit).</summary>
     public decimal ScalpRoundTripFeePct { get; set; } = 0.0008m;
 
     /// <summary>Min net edge after spread+fees as fraction of price (TP distance).</summary>
-    public decimal ScalpMinNetEdgePct { get; set; } = 0.0012m;
+    public decimal ScalpMinNetEdgePct { get; set; } = 0.0005m;
 }
