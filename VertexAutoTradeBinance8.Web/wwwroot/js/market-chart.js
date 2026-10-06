@@ -1461,6 +1461,11 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             s.entryPrice = entry;
             s.side = side;
             s.qty = qty;
+            // Seed LIVE PnL panel immediately (ticks may lag a few hundred ms)
+            try {
+                const seed = (s.lastPnlPrice && s.lastPnlPrice > 0) ? s.lastPnlPrice : entry;
+                this.updatePnl(containerId, seed, qty, side);
+            } catch (e) {}
 
             // The chart's own built-in last-price line would otherwise
             // sit right on top of the new PnL-tracking line at the same
@@ -2439,12 +2444,17 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             const container = document.getElementById(containerId);
             if (!container) return;
 
-            if (!s.pnlLabelEl) {
+            // Blazor StateHasChanged can rebuild the chart host and detach our node
+            // while session still holds a stale reference — always re-attach if needed.
+            if (!s.pnlLabelEl || !s.pnlLabelEl.isConnected) {
+                try { if (s.pnlLabelEl && s.pnlLabelEl.parentNode) s.pnlLabelEl.remove(); } catch (e) {}
                 s.pnlLabelEl = document.createElement('div');
                 s.pnlLabelEl.className = 'mk-pnl-live-panel';
-                s.pnlLabelEl.style.cssText = 'position:absolute;pointer-events:none;z-index:11;left:12px;top:44px;right:auto;transform:none;min-width:132px;padding:8px 12px;border-radius:8px;font-family:JetBrains Mono,ui-monospace,monospace;backdrop-filter:blur(8px);box-shadow:0 0 0 1px rgba(255,255,255,.04),0 8px 24px rgba(0,0,0,.45);';
+                s.pnlLabelEl.style.cssText = 'position:absolute;pointer-events:none;z-index:30;left:12px;top:44px;right:auto;transform:none;min-width:132px;padding:8px 12px;border-radius:8px;font-family:JetBrains Mono,ui-monospace,monospace;backdrop-filter:blur(8px);box-shadow:0 0 0 1px rgba(255,255,255,.04),0 8px 24px rgba(0,0,0,.45);';
                 if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
                 container.appendChild(s.pnlLabelEl);
+            } else if (s.pnlLabelEl.parentNode !== container) {
+                try { container.appendChild(s.pnlLabelEl); } catch (e) {}
             }
             // PINNED top-left — does not float with candles / zoom
             s.pnlLabelEl.style.left = '12px';

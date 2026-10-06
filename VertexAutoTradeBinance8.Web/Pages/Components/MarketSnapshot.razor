@@ -3282,8 +3282,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     DateTime _lastPosUiPaint = DateTime.MinValue;
     void RequestUiRender()
     {
+        // Positions table / account strip only — keep interval soft so chart
+        // DOM (live PnL panel) is not torn down every few hundred ms.
         var now = DateTime.UtcNow;
-        if ((now - _lastPosUiPaint).TotalMilliseconds < 400) return;
+        if ((now - _lastPosUiPaint).TotalMilliseconds < 750) return;
         _lastPosUiPaint = now;
         _ = InvokeAsync(StateHasChanged);
     }
