@@ -3317,7 +3317,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // Positions: 30s (open positions don't change that fast)
         // Orders: 60s (only changes when user moves SL/TP)
         // Account info: 60s (balance changes only on trade close)
-        _timer = new PeriodicTimer(TimeSpan.FromSeconds(20)); // positions/orders poll — 20s cuts REST+Blazor load vs 15s
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(30)); // positions/orders poll — 30s reduces REST+Blazor load
         // InvokeAsync ensures the entire async tick (and all StateHasChanged()
         // calls inside LoadData/LoadAllOpenPositions/etc.) runs on the Blazor
         // SynchronizationContext, not the ThreadPool. Without this, calling
@@ -3331,8 +3331,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     DateTime _lastLiveRender = DateTime.MinValue;
     DateTime _lastDemoPnlRender = DateTime.MinValue;
     bool _onTickBusy;
-    static readonly TimeSpan LiveRenderThrottle  = TimeSpan.FromMilliseconds(400); // chart JS ~2.5fps
-    static readonly TimeSpan StateHasChangedThrottle = TimeSpan.FromMilliseconds(800); // Blazor full-tree diff is expensive on /market
+    static readonly TimeSpan LiveRenderThrottle  = TimeSpan.FromMilliseconds(250); // JS updateLastBar only (~4fps)
+    static readonly TimeSpan StateHasChangedThrottle = TimeSpan.FromMilliseconds(900); // full Blazor tree — rare
+    DateTime _lastStateHasChanged = DateTime.MinValue;
 
     int _liveTickCount = 0;
     int _liveKlineCount = 0;
@@ -3500,7 +3501,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // Same 200ms budget the chart uses, so a busy symbol cannot flood the
         // circuit with re-renders.
         var now = DateTime.UtcNow;
-        if (now - _lastPosPnlRender >= LiveRenderThrottle)
+        if (now - _lastPosPnlRender >= StateHasChangedThrottle)
         {
             _lastPosPnlRender = now;
             _ = InvokeAsync(StateHasChanged);
@@ -3588,7 +3589,25 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         _lastTickSymbol = symbol;
         _lastTickTime = DateTime.UtcNow;
 
-        if (_demoMode && _demoSnapshot.Positions.Any(p => p.Symbol == symbol))
+        // Fast path: ignore symbols that are not active chart AND not in open positions.
+        // Engine may tick 50+ symbols — each must not schedule Blazor work.
+        bool isActive = symbol == _activeSym;
+        bool inPos = false;
+        if (_demoMode)
+        {
+            var dpos = _demoSnapshot.Positions;
+            for (int i = 0; i < dpos.Count; i++)
+                if (dpos[i].Symbol == symbol) { inPos = true; break; }
+        }
+        else
+        {
+            var apos = _allPositions;
+            for (int i = 0; i < apos.Count; i++)
+                if (apos[i].Symbol == symbol) { inPos = true; break; }
+        }
+        if (!isActive && !inPos) return;
+
+        if (_demoMode && inPos)
         {
             decimal total = 0m;
             foreach (var pos in _demoSnapshot.Positions)
@@ -3598,76 +3617,97 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             }
             _demoUnrealizedTotal = total;
             InvalidateDisplayedPositionsCache();
-
-            var nowDemo = DateTime.UtcNow;
-            if (nowDemo - _lastDemoPnlRender >= LiveRenderThrottle)
-            {
-                _lastDemoPnlRender = nowDemo;
-                _ = InvokeAsync(StateHasChanged);
-            }
         }
 
-        // Real positions: recompute unrealized PnL straight from the WS
-        // price. Demo mode already did this a few lines above; real
-        // positions were left waiting on the 15-second REST poll, which is
-        // exactly why the Positions list visibly lagged the chart.
-        // Costs zero API weight and lands on the same tick as the candle
-        // update, so the two can no longer disagree.
-        if (!_demoMode)
+        if (!_demoMode && inPos)
             ApplyLivePriceToPositions(symbol, price);
 
-        if (_onTickBusy) return; // drop overlapping ticks rather than letting async chains queue up and race
+        // Chart + Blazor only for active symbol (or position-only → SHC throttled)
+        if (!isActive)
+        {
+            var nowP = DateTime.UtcNow;
+            if (nowP - _lastStateHasChanged >= StateHasChangedThrottle)
+            {
+                _lastStateHasChanged = nowP;
+                _ = InvokeAsync(StateHasChanged);
+            }
+            return;
+        }
+
+        if (_onTickBusy) return;
         _onTickBusy = true;
 
         _ = InvokeAsync(async () =>
         {
             try
             {
+                var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == _activeTf);
+                if (idx < 0 || idx >= Series.Count || Series[idx].Klines.Count == 0) return;
 
-            var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == _activeTf);
-            if (idx < 0 || idx >= Series.Count || Series[idx].Klines.Count == 0) return;
-
-            var last = Series[idx].Klines[^1];
-            var updated = last with
-            {
-                High = Math.Max(last.High, price),
-                Low = Math.Min(last.Low, price),
-                Close = price
-            };
-
-            // PERF: mutate last bar in place — no allocation per tick.
-            // MarketSeries.Klines is List<KlineDto>, so the indexer is writable.
-            if (Series[idx].Klines.Count > 0)
+                var last = Series[idx].Klines[^1];
+                var updated = last with
+                {
+                    High = Math.Max(last.High, price),
+                    Low = Math.Min(last.Low, price),
+                    Close = price
+                };
                 Series[idx].Klines[^1] = updated;
 
-            if (symbol != _activeSym) return; // only re-render the chart actually on screen
+                // Cheap PnL caption on chart (no full redraw)
+                if (_selectedPosition != null && _selectedPosition.Symbol == symbol)
+                {
+                    try { await JS.InvokeVoidAsync("marketChart.updatePnl", $"chartContainer-{_chartInstanceId}", price); } catch { }
+                }
 
-            // Live PnL caption — cheap (just an applyOptions call, not
-            // a full chart redraw), so it updates on every tick rather
-            // than waiting on the same throttle gate as the full
-            // re-render below. This was very likely the actual reason
-            // the PnL line never appeared in practice: between
-            // throttled renders, it simply never got a chance to run.
-            if (_selectedPosition != null && _selectedPosition.Symbol == symbol)
-            {
-                try { await JS.InvokeVoidAsync("marketChart.updatePnl", $"chartContainer-{_chartInstanceId}", price); } catch { }
-            }
+                var now = DateTime.UtcNow;
+                if (now - _lastLiveRender < LiveRenderThrottle) return;
+                _lastLiveRender = now;
 
-            var now = DateTime.UtcNow;
-            if (now - _lastLiveRender < LiveRenderThrottle) return;
-            _lastLiveRender = now;
+                // Update in-memory stats for header strip without full merge/archive
+                if (Selected != null && Selected.Symbol == symbol)
+                {
+                    _last = price;
+                    // Keep Selected klines last bar in sync
+                    if (Selected.Klines.Count > 0)
+                        Selected.Klines[^1] = updated;
+                }
 
-            ResolveSelected();
-            CalcStats();
-            bool chartUpdated = false;
-            try { await RenderCharts(); chartUpdated = true; } catch { }
+                // Lightweight Charts: only last bar — NEVER full setData / archive load on tick
+                if (_jsReady)
+                {
+                    try
+                    {
+                        var jsK = new
+                        {
+                            openTime = updated.OpenTime,
+                            open = (double)updated.Open,
+                            high = (double)updated.High,
+                            low = (double)updated.Low,
+                            close = (double)updated.Close,
+                            volume = (double)updated.Volume,
+                            takerBuyVolume = (double?)null
+                        };
+                        await JS.InvokeVoidAsync("marketChart.updateLastBar", $"chartContainer-{_chartInstanceId}", jsK);
+                        // Keep merged dict last bar coherent for infinite history
+                        if (_mergedKlines != null && _mergedKlines.Count > 0)
+                        {
+                            var k = updated.OpenTime;
+                            if (_mergedKlines.ContainsKey(k))
+                            {
+                                var prev = _mergedKlines[k];
+                                _mergedKlines[k] = (prev.Open, Math.Max(prev.High, price), Math.Min(prev.Low, price), price, prev.Volume, prev.TakerBuy);
+                            }
+                        }
+                    }
+                    catch { }
+                }
 
-            // PERF: only call StateHasChanged when Blazor-rendered content
-            // actually changed (PnL, ticker strip, position panel values).
-            // The chart itself updates via JS interop — Blazor diffing 2770
-            // lines of template for a chart-only tick is wasteful.
-            // We still need it for PnL numbers and ticker to stay live.
-            StateHasChanged();
+                // Full Blazor re-render at most ~1/sec (900ms)
+                if (now - _lastStateHasChanged >= StateHasChangedThrottle)
+                {
+                    _lastStateHasChanged = now;
+                    StateHasChanged();
+                }
             }
             catch (Exception ex)
             {
@@ -5134,7 +5174,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             var tfLabel = TfLabel(Selected.Timeframe).ToLowerInvariant();
             var cacheKey = $"{Selected.Symbol}:{tfLabel}";
             var now = DateTime.UtcNow;
-            if (_archiveCacheKey != cacheKey || (now - _archiveCacheLoadedAt) > TimeSpan.FromSeconds(90))
+            if (_archiveCacheKey != cacheKey || (now - _archiveCacheLoadedAt) > TimeSpan.FromSeconds(180))
             {
                 _archiveCache = await HistoricalReader.LoadAsync(Selected.Symbol, tfLabel);
                 _archiveCacheKey = cacheKey;
