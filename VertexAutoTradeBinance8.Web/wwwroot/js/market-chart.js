@@ -2444,23 +2444,37 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             const container = document.getElementById(containerId);
             if (!container) return;
 
-            // Blazor StateHasChanged can rebuild the chart host and detach our node
-            // while session still holds a stale reference — always re-attach if needed.
+            // Blazor may detach the node — re-create/re-attach; keep user drag offset.
             if (!s.pnlLabelEl || !s.pnlLabelEl.isConnected) {
                 try { if (s.pnlLabelEl && s.pnlLabelEl.parentNode) s.pnlLabelEl.remove(); } catch (e) {}
+                s.pnlDragBound = false;
                 s.pnlLabelEl = document.createElement('div');
                 s.pnlLabelEl.className = 'mk-pnl-live-panel';
-                s.pnlLabelEl.style.cssText = 'position:absolute;pointer-events:none;z-index:30;left:12px;top:44px;right:auto;transform:none;min-width:132px;padding:8px 12px;border-radius:8px;font-family:JetBrains Mono,ui-monospace,monospace;backdrop-filter:blur(8px);box-shadow:0 0 0 1px rgba(255,255,255,.04),0 8px 24px rgba(0,0,0,.45);';
+                // narrower + slightly right of old 12px; draggable (pointer-events auto)
+                s.pnlLabelEl.style.cssText =
+                    'position:absolute;pointer-events:auto;cursor:grab;user-select:none;z-index:30;' +
+                    'left:56px;top:48px;right:auto;transform:none;' +
+                    'width:118px;min-width:110px;max-width:128px;padding:6px 10px;border-radius:8px;' +
+                    'font-family:JetBrains Mono,ui-monospace,monospace;' +
+                    'backdrop-filter:blur(8px);box-shadow:0 0 0 1px rgba(255,255,255,.04),0 8px 24px rgba(0,0,0,.45);';
                 if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
                 container.appendChild(s.pnlLabelEl);
+                this._bindPnlPanelDrag(containerId, s, container);
             } else if (s.pnlLabelEl.parentNode !== container) {
                 try { container.appendChild(s.pnlLabelEl); } catch (e) {}
+                this._bindPnlPanelDrag(containerId, s, container);
             }
-            // PINNED top-left — does not float with candles / zoom
-            s.pnlLabelEl.style.left = '12px';
-            s.pnlLabelEl.style.top = '44px';
+            // Restore last drag position (do not snap back on every tick)
+            const defLeft = 56, defTop = 48;
+            const left = (typeof s.pnlDragLeft === 'number') ? s.pnlDragLeft : defLeft;
+            const top = (typeof s.pnlDragTop === 'number') ? s.pnlDragTop : defTop;
+            s.pnlLabelEl.style.left = left + 'px';
+            s.pnlLabelEl.style.top = top + 'px';
             s.pnlLabelEl.style.right = 'auto';
             s.pnlLabelEl.style.transform = 'none';
+            s.pnlLabelEl.style.width = '118px';
+            s.pnlLabelEl.style.pointerEvents = 'auto';
+            s.pnlLabelEl.style.cursor = s.pnlDragging ? 'grabbing' : 'grab';
             const posColor = color;
             const borderCol = pnl >= 0 ? 'rgba(0,255,156,.45)' : 'rgba(255,77,106,.45)';
             const bgCol = pnl >= 0 ? 'rgba(5,14,12,.92)' : 'rgba(14,6,10,.92)';
@@ -2468,27 +2482,88 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             s.pnlLabelEl.style.border = '1px solid ' + borderCol;
             s.pnlLabelEl.style.boxShadow = '0 0 16px ' + (pnl >= 0 ? 'rgba(0,255,156,.2)' : 'rgba(255,77,106,.2)');
             s.pnlLabelEl.innerHTML =
-                '<div style="font-size:9px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#5a7a96;margin-bottom:3px;">Current PnL (LIVE)</div>' +
-                '<div style="font-size:15px;font-weight:800;color:' + posColor + ';text-shadow:0 0 12px ' + posColor + '55;">' +
-                sign + pnl.toFixed(2) + ' <span style="font-size:10px;opacity:.85">USDT</span></div>';
+                '<div style="font-size:8px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#5a7a96;margin-bottom:2px;cursor:grab;">Current PnL</div>' +
+                '<div style="font-size:14px;font-weight:800;color:' + posColor + ';text-shadow:0 0 12px ' + posColor + '55;cursor:grab;">' +
+                sign + pnl.toFixed(2) + ' <span style="font-size:9px;opacity:.85">USDT</span></div>';
 
-            // Reposition TP/SL quick-add buttons to follow the live price line Y
             this.repositionEntryButtons(containerId);
 
-            // Per direct report: keep this label tracking scroll/zoom
-            // synchronously, not only on the next price tick - subscribes
-            // once per session (not per call), repositioning using the
-            // last known price whenever the user scrolls/zooms the chart.
             if (!s.pnlRangeSub) {
-                s.pnlRangeSub = () => {
-                    this.repositionEntryButtons(containerId);
-                    if (s.pnlLabelEl) {
-                        s.pnlLabelEl.style.left = '12px';
-                        s.pnlLabelEl.style.top = '44px';
-                    }
-                };
+                s.pnlRangeSub = () => { this.repositionEntryButtons(containerId); };
                 s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.pnlRangeSub);
             }
+        },
+
+        _bindPnlPanelDrag(containerId, s, container) {
+            if (!s.pnlLabelEl || s.pnlDragBound) return;
+            s.pnlDragBound = true;
+            const el = s.pnlLabelEl;
+            el.addEventListener('mousedown', (ev) => {
+                if (ev.button !== 0) return;
+                ev.preventDefault();
+                ev.stopPropagation();
+                s.pnlDragging = true;
+                el.style.cursor = 'grabbing';
+                const rect = container.getBoundingClientRect();
+                const startX = ev.clientX;
+                const startY = ev.clientY;
+                const originLeft = parseFloat(el.style.left) || 56;
+                const originTop = parseFloat(el.style.top) || 48;
+                const onMove = (e) => {
+                    if (!s.pnlDragging) return;
+                    let nl = originLeft + (e.clientX - startX);
+                    let nt = originTop + (e.clientY - startY);
+                    const maxL = Math.max(0, rect.width - el.offsetWidth - 4);
+                    const maxT = Math.max(0, rect.height - el.offsetHeight - 4);
+                    nl = Math.max(0, Math.min(maxL, nl));
+                    nt = Math.max(0, Math.min(maxT, nt));
+                    s.pnlDragLeft = nl;
+                    s.pnlDragTop = nt;
+                    el.style.left = nl + 'px';
+                    el.style.top = nt + 'px';
+                };
+                const onUp = () => {
+                    s.pnlDragging = false;
+                    if (el) el.style.cursor = 'grab';
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                };
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+            // touch
+            el.addEventListener('touchstart', (ev) => {
+                if (!ev.touches || !ev.touches[0]) return;
+                ev.preventDefault();
+                const touch = ev.touches[0];
+                s.pnlDragging = true;
+                const rect = container.getBoundingClientRect();
+                const startX = touch.clientX;
+                const startY = touch.clientY;
+                const originLeft = parseFloat(el.style.left) || 56;
+                const originTop = parseFloat(el.style.top) || 48;
+                const onMove = (e) => {
+                    if (!s.pnlDragging || !e.touches || !e.touches[0]) return;
+                    const t = e.touches[0];
+                    let nl = originLeft + (t.clientX - startX);
+                    let nt = originTop + (t.clientY - startY);
+                    const maxL = Math.max(0, rect.width - el.offsetWidth - 4);
+                    const maxT = Math.max(0, rect.height - el.offsetHeight - 4);
+                    nl = Math.max(0, Math.min(maxL, nl));
+                    nt = Math.max(0, Math.min(maxT, nt));
+                    s.pnlDragLeft = nl;
+                    s.pnlDragTop = nt;
+                    el.style.left = nl + 'px';
+                    el.style.top = nt + 'px';
+                };
+                const onUp = () => {
+                    s.pnlDragging = false;
+                    document.removeEventListener('touchmove', onMove);
+                    document.removeEventListener('touchend', onUp);
+                };
+                document.addEventListener('touchmove', onMove, { passive: false });
+                document.addEventListener('touchend', onUp);
+            }, { passive: false });
         },
 
 
@@ -2545,7 +2620,7 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             if (s.liqPill) { try { s.liqPill.remove(); } catch (e) {} s.liqPill = null; }
             if (s.bePill) { try { s.bePill.remove(); } catch (e) {} s.bePill = null; }
             if (s.pnlLine) { try { s.candleSeries.removePriceLine(s.pnlLine); } catch (e) {} s.pnlLine = null; }
-            if (s.pnlLabelEl) { try { s.pnlLabelEl.remove(); } catch (e) {} s.pnlLabelEl = null; }
+            if (s.pnlLabelEl) { try { s.pnlLabelEl.remove(); } catch (e) {} s.pnlLabelEl = null; s.pnlDragBound = false; }
             if (s.pnlRangeSub) { try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.pnlRangeSub); } catch (e) {} s.pnlRangeSub = null; }
             if (s.entryBtnTp) { try { s.entryBtnTp.remove(); } catch (e) {} s.entryBtnTp = null; }
             if (s.entryBtnSl) { try { s.entryBtnSl.remove(); } catch (e) {} s.entryBtnSl = null; }
