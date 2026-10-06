@@ -1325,11 +1325,21 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             // confirmed-exhausted lazy-load retry uselessly on the next
             // scroll near the edge.
             const newEarliestTime = candles.length > 0 ? candles[0].time : null;
-            if (newEarliestTime !== s
+            if (newEarliestTime !== s.lastSeriesEarliestTime) {
+                s.historyExhausted = false;
+                s.lastSeriesEarliestTime = newEarliestTime;
+            }
+            applyTradeMarkers(s);
+        },
+
+        setSessionSymbol(containerId, symbol) {
+            const s = sessions.get(containerId);
+            if (s) s.symbol = symbol || '';
+        },
+
         /**
          * Exchange-terminal live path: coalesce ticks via rAF.
-         * Keeps last price + forming candle OHLC without Blazor re-render.
-         * Every tick's latest price is applied; intermediate paints are merged.
+         * Latest price wins; intermediate paints merge in one frame.
          */
         applyLivePrice(containerId, price) {
             const s = sessions.get(containerId);
@@ -1353,24 +1363,19 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
                     takerBuyVolume: last.takerBuyVolume
                 };
                 raw[raw.length - 1] = k;
-                this.updateLastBar(containerId, k);
-                // DOM price labels (no Blazor)
+                window.marketChart.updateLastBar(containerId, k);
                 try {
-                    document.querySelectorAll('[data-mk-live-price="' + (s.symbol || '') + '"]').forEach(el => {
-                        el.textContent = formatPrice(px);
-                    });
+                    const label = formatPrice(px);
+                    if (s.symbol) {
+                        document.querySelectorAll('[data-mk-live-price="' + s.symbol + '"]').forEach(el => {
+                            el.textContent = label;
+                        });
+                    }
                     document.querySelectorAll('[data-mk-live-price-active]').forEach(el => {
-                        el.textContent = formatPrice(px);
+                        el.textContent = label;
                     });
                 } catch (_) {}
             });
-        },
-
-.lastSeriesEarliestTime) {
-                s.historyExhausted = false;
-                s.lastSeriesEarliestTime = newEarliestTime;
-            }
-            applyTradeMarkers(s);
         },
 
         updateLastBar(containerId, k) {
