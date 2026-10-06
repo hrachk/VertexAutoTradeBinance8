@@ -19,14 +19,14 @@ namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
 /// </summary>
 public static class InstitutionalTrendSetup
 {
-    public const decimal MinConfidence = 0.64m;
+    public const decimal MinConfidence = 0.58m;
     public const decimal MinRr = 1.60m;
     public const decimal MaxRiskPct = 0.028m;   // hard cap risk distance
     public const decimal MinRiskPct = 0.009m;   // never thinner than 0.9% (anti micro-stop)
     public const decimal Atr1hPad = 0.35m;
     public const decimal Atr15Pad = 0.90m;
-    public const decimal DiscountMax = 0.42m;  // long only if pos in swing ≤ 0.42
-    public const decimal PremiumMin = 0.58m;
+    public const decimal DiscountMax = 0.48m;  // was 0.42 — slightly wider value zone  // long only if pos in swing ≤ 0.42
+    public const decimal PremiumMin = 0.52m;
 
     public readonly record struct Result(bool Ok, TradeSignal? Signal, string Reason);
 

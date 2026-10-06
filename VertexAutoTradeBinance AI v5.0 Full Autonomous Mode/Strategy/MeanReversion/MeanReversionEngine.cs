@@ -347,10 +347,10 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
         public int Window { get; set; } = 20;
 
         /// <summary>Entry trigger: |Z-Score| must reach this many standard deviations.</summary>
-        public decimal EntrySigma { get; set; } = 2.0m;
+        public decimal EntrySigma { get; set; } = 1.85m;
 
         public int VolumeAvgPeriod { get; set; } = 50;
-        public decimal VolumeSurgeMultiplier { get; set; } = 1.5m;
+        public decimal VolumeSurgeMultiplier { get; set; } = 1.15m;
 
         public bool RequireReversalConfirmation { get; set; } = true;
         public int ReversalLookback { get; set; } = 5;
@@ -370,7 +370,7 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
         /// <summary>Extra ATR padding beyond the entry band for the stop-loss.</summary>
         public decimal StopAtrPad { get; set; } = 0.3m;
 
-        public decimal MinRewardRiskRatio { get; set; } = 1.2m;
+        public decimal MinRewardRiskRatio { get; set; } = 1.15m;
 
         /// <summary>
         /// If the position hasn't reverted toward the mean within this many

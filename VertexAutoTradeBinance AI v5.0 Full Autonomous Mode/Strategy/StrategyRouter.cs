@@ -130,32 +130,31 @@ namespace VertexAutoTradeBinance8.Strategy
             }
 
             var regime = Regime();
-            if (regime == DualMarketMode.Range)
-            {
-                _logger.LogInformation(
-                    "[ROUTER] CORE held {sym} — regime=RANGE (use spread leg, not local trend)",
-                    signal.Symbol);
-                return;
-            }
+            // Parallel architecture:
+            //   TREND / UNKNOWN → adult CORE full path
+            //   RANGE → CORE still allowed at reduced size (serious structure only; scalp is separate leg)
+            //   CHAOS → hold large trend risk
             if (regime == DualMarketMode.Chaos)
             {
                 _logger.LogInformation("[ROUTER] CORE held {sym} — regime=CHAOS", signal.Symbol);
                 return;
             }
-            if (regime == DualMarketMode.Unknown && _dualMode != null)
+            if (regime == DualMarketMode.Range)
             {
+                // Serious HTF setup may still fire; keep small so it does not fight scalp book
+                signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.55m, 0.20m, 0.70m);
+                if (signal.Leverage is null or > 7)
+                    signal.Leverage = 6;
                 _logger.LogInformation(
-                    "[ROUTER] CORE held {sym} — regime=UNKNOWN (wait BTC DualMode refresh)",
-                    signal.Symbol);
-                return;
+                    "[ROUTER] CORE in RANGE {sym} size×{sz:F2} (parallel with scalp, reduced)",
+                    signal.Symbol, signal.SizeMultiplier);
             }
-
-            // Tag as TREND leg for journal clarity (keep CORE_ prefix executable)
-            if (!string.IsNullOrEmpty(signal.Reason) &&
-                signal.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase) &&
-                !signal.Reason.Contains("TREND", StringComparison.OrdinalIgnoreCase))
+            else if (regime == DualMarketMode.Unknown)
             {
-                // e.g. CORE_STRUCT_LONG → still CORE_* for filters; dual tag in worker
+                signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.70m, 0.25m, 1m);
+                _logger.LogInformation(
+                    "[ROUTER] CORE in UNKNOWN {sym} size×{sz:F2} (no longer hard-hold)",
+                    signal.Symbol, signal.SizeMultiplier);
             }
 
             Forward(signal, "TREND/CORE");
@@ -180,47 +179,58 @@ namespace VertexAutoTradeBinance8.Strategy
             }
 
             var regime = Regime();
-            // When DualMode disabled / Unknown: allow MR only if UI is Auto or MeanReversionOnly
+            // Scalp/spread leg: runs in RANGE, UNKNOWN, and (optionally) TREND at micro size.
+            // Does not block CORE — parallel accumulation path.
             if (_dualMode != null)
             {
-                if (regime == DualMarketMode.Trend)
-                {
-                    _logger.LogInformation(
-                        "[ROUTER] SPREAD held {sym} — regime=TREND (spread only in RANGE)",
-                        signal.Symbol);
-                    return;
-                }
                 if (regime == DualMarketMode.Chaos)
                 {
                     _logger.LogInformation("[ROUTER] SPREAD held {sym} — regime=CHAOS", signal.Symbol);
                     return;
                 }
-                if (regime == DualMarketMode.Unknown)
+                if (regime == DualMarketMode.Trend)
                 {
+                    // Parallel micro-scalp during trend (small size only)
+                    signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.28m, 0.15m, 0.40m);
+                    if (signal.Leverage is null or > 4)
+                        signal.Leverage = 3;
                     _logger.LogInformation(
-                        "[ROUTER] SPREAD held {sym} — regime=UNKNOWN (wait BTC DualMode refresh)",
-                        signal.Symbol);
-                    return;
+                        "[ROUTER] SPREAD parallel TREND {sym} micro size×{sz:F2}",
+                        signal.Symbol, signal.SizeMultiplier);
                 }
-                // Range only → allow spread
+                else if (regime == DualMarketMode.Unknown)
+                {
+                    signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.40m, 0.18m, 0.55m);
+                    if (signal.Leverage is null or > 4)
+                        signal.Leverage = 4;
+                }
             }
 
             if (ExecutableStrategyPolicy.IsCoreMajorSymbol(signal.Symbol))
             {
-                _logger.LogInformation(
-                    "[ROUTER] SPREAD skip major {sym} — majors not used for range/spread",
-                    signal.Symbol);
-                return;
+                // Majors: only micro fade if explicitly mean-reversion UI; else skip (CORE owns majors)
+                if (_modeState.Current != StrategyMode.MeanReversionOnly)
+                {
+                    _logger.LogDebug("[ROUTER] SPREAD skip major {sym}", signal.Symbol);
+                    return;
+                }
             }
 
-            // Canonical reason for DualMode + journal
             bool isLong = signal.Side == SignalSide.Buy;
-            signal.Reason = isLong ? "RANGE_SPREAD_LONG" : "RANGE_SPREAD_SHORT";
-            // Prefer small leverage hint before DualMode caps
+            string tag = regime == DualMarketMode.Trend ? "SCALP_PARALLEL" : "RANGE_SPREAD";
+            signal.Reason = isLong ? $"{tag}_LONG" : $"{tag}_SHORT";
             if (signal.Leverage is null or > 5)
                 signal.Leverage = 4;
 
-            Forward(signal, "RANGE/SPREAD");
+            // Pre-trade: spread + fees must leave edge for small targets
+            if (!ScalpPreTradeGate.Allow(signal, _marketData, out var scalpWhy))
+            {
+                _logger.LogInformation(
+                    "[ROUTER] SPREAD pre-trade skip {sym}: {why}", signal.Symbol, scalpWhy);
+                return;
+            }
+
+            Forward(signal, "SCALP/SPREAD");
         }
     }
 }

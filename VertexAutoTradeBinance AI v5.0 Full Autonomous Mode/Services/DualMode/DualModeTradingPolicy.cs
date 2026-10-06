@@ -287,32 +287,72 @@ public sealed class DualModeTradingPolicy
             ? $"rank={r + 1}"
             : "rank=?";
 
+        // Parallel scalp/spread signals: always size as micro-RANGE, independent of BTC TREND label
+        bool isScalpLeg =
+            (signal.Reason?.Contains("SCALP", StringComparison.OrdinalIgnoreCase) == true) ||
+            (signal.Reason?.Contains("RANGE_SPREAD", StringComparison.OrdinalIgnoreCase) == true) ||
+            (signal.Reason?.Contains("MEAN", StringComparison.OrdinalIgnoreCase) == true);
+        if (isScalpLeg && mode != DualMarketMode.Chaos)
+        {
+            if (tier == UniverseTier.Blocked)
+                return Reject(mode, tier, "SCALP_BLOCKED_TIER");
+            if (tier == UniverseTier.CoreMajor && mode == DualMarketMode.Trend)
+                return Reject(mode, tier, "SCALP_NO_MAJOR_IN_TREND"); // CORE owns majors in trend
+
+            // Spread economics from book
+            if (flow.SpreadPct > 0 && flow.SpreadPct > o.ScalpMaxSpreadPct)
+                return Reject(mode, tier, $"SCALP_SPREAD_TOO_WIDE {flow.SpreadPct:P3}>{o.ScalpMaxSpreadPct:P3}");
+
+            decimal edgeNeed = o.ScalpRoundTripFeePct + flow.SpreadPct + o.ScalpMinNetEdgePct;
+            // Soft: if we cannot measure TP, still allow with micro size
+            decimal size = mode == DualMarketMode.Trend ? o.ScalpParallelSizeMult : o.RangeSizeMult;
+            if (tier == UniverseTier.TrendLiquid)
+                size = Math.Max(size, o.RangeLiquidSizeMult * 0.6m);
+            size = Math.Clamp(size, 0.15m, 0.55m);
+            int lev = ClampLev(o.RangeLeverageMin, Math.Min(o.RangeLeverageMax, o.ScalpParallelLeverageMax), preferHigh: false);
+            _log.LogInformation(
+                "[DUAL-MODE] SCALP allow {sym} size×{sz:F2} lev={lev} spr={spr:P3} edgeNeed~{e:P3} {flow}",
+                symbol, size, lev, flow.SpreadPct, edgeNeed, flow.Summarize());
+            return new DualModeDecision(true, mode, tier, lev, size,
+                $"SCALP_PARALLEL {rankInfo} " + flow.Summarize(), flowOk);
+        }
+
         if (mode == DualMarketMode.Trend)
         {
             if (tier != UniverseTier.CoreMajor && tier != UniverseTier.TrendLiquid)
                 return Reject(mode, tier, $"TREND_TOP_LIQUID_ONLY ({rankInfo})");
 
-            if (o.RequireVolumeOnTrend && !volOk)
-            {
-                _log.LogWarning(
-                    "[DUAL-MODE] REJECT {sym} TREND no volume expansion ({flow}) — blind local slope blocked",
-                    symbol, flow.Summarize());
-                return new DualModeDecision(false, mode, tier, o.TrendLeverageMin, 0m,
-                    "NO_VOLUME_FLOW: " + flow.Summarize(), false);
-            }
+            decimal size = o.TrendSizeMult;
+            var flowNote = flow.Summarize();
+            bool soft = o.SoftFlowOnTrend || (!o.RequireFlowOnTrend && !o.RequireVolumeOnTrend);
 
-            if (o.RequireFlowOnTrend && !flowOk)
+            if (!volOk || !flowOk)
             {
-                _log.LogWarning(
-                    "[DUAL-MODE] REJECT {sym} TREND no capital flow ({flow})",
-                    symbol, flow.Summarize());
-                return new DualModeDecision(false, mode, tier, o.TrendLeverageMin, 0m,
-                    "NO_CAPITAL_FLOW: " + flow.Summarize(), false);
+                // Hard reject only when explicitly required AND soft mode off
+                if (!soft && o.RequireVolumeOnTrend && !volOk)
+                {
+                    _log.LogWarning("[DUAL-MODE] REJECT {sym} TREND no volume ({flow})", symbol, flowNote);
+                    return new DualModeDecision(false, mode, tier, o.TrendLeverageMin, 0m,
+                        "NO_VOLUME_FLOW: " + flowNote, false);
+                }
+                if (!soft && o.RequireFlowOnTrend && !flowOk)
+                {
+                    _log.LogWarning("[DUAL-MODE] REJECT {sym} TREND no capital flow ({flow})", symbol, flowNote);
+                    return new DualModeDecision(false, mode, tier, o.TrendLeverageMin, 0m,
+                        "NO_CAPITAL_FLOW: " + flowNote, false);
+                }
+
+                // Soft path: cut size, still allow adult trend setup
+                var sm = o.SoftFlowSizeMult > 0 ? o.SoftFlowSizeMult : 0.45m;
+                size = Math.Clamp(size * sm, 0.20m, 1m);
+                _log.LogInformation(
+                    "[DUAL-MODE] SOFT {sym} TREND size×{sz:F2} (volOk={v} flowOk={f}) {flow}",
+                    symbol, size, volOk, flowOk, flowNote);
             }
 
             int lev = ClampLev(o.TrendLeverageMin, o.TrendLeverageMax, preferHigh: true);
-            return new DualModeDecision(true, mode, tier, lev, o.TrendSizeMult,
-                $"TREND+FLOW+VOL {rankInfo} " + flow.Summarize(), flowOk);
+            return new DualModeDecision(true, mode, tier, lev, size,
+                $"TREND size={size:F2} {rankInfo} " + flowNote, flowOk && volOk);
         }
 
         if (mode == DualMarketMode.Range)

@@ -71,16 +71,43 @@ public sealed class DualModeOptions
     public decimal TrendSizeMult { get; set; } = 1.0m;
     public decimal TrendNoFlowSizeMult { get; set; } = 0.0m;
 
-    public bool RequireFlowOnTrend { get; set; } = true;
+    public bool RequireFlowOnTrend { get; set; } = false;
+
+    /// <summary>
+    /// When true (default), missing volume/flow on TREND cuts SizeMult instead of hard REJECT.
+    /// Hard reject only if SoftFlowSizeMult &lt;= 0.
+    /// </summary>
+    public bool SoftFlowOnTrend { get; set; } = true;
+
+    /// <summary>Size multiplier when TREND signal lacks volume/flow confirmation.</summary>
+    public decimal SoftFlowSizeMult { get; set; } = 0.45m;
     public bool RequireFlowOnRange { get; set; } = false;
 
     /// <summary>
     /// TREND entries must show bar volume expansion vs recent average (not slope-only).
     /// </summary>
-    public bool RequireVolumeOnTrend { get; set; } = true;
+    public bool RequireVolumeOnTrend { get; set; } = false;
 
     public decimal MinVolumeRatio { get; set; } = 1.05m;
     public decimal MinOiDeltaAbs { get; set; } = 0.0015m;
     public decimal MinBookAlign { get; set; } = 0.08m;
     public int RegimeCacheSeconds { get; set; } = 60;
+
+    /// <summary>When true, micro-scalp/spread leg may run while BTC regime is TREND (small size).</summary>
+    public bool AllowScalpParallelInTrend { get; set; } = true;
+
+    /// <summary>Size mult for parallel scalp during TREND regime.</summary>
+    public decimal ScalpParallelSizeMult { get; set; } = 0.28m;
+
+    /// <summary>Max leverage for parallel scalp leg.</summary>
+    public int ScalpParallelLeverageMax { get; set; } = 4;
+
+    /// <summary>Max bid-ask spread (fraction) to allow scalp entry after fees.</summary>
+    public decimal ScalpMaxSpreadPct { get; set; } = 0.0006m;
+
+    /// <summary>Assumed round-trip taker fee fraction (entry+exit).</summary>
+    public decimal ScalpRoundTripFeePct { get; set; } = 0.0008m;
+
+    /// <summary>Min net edge after spread+fees as fraction of price (TP distance).</summary>
+    public decimal ScalpMinNetEdgePct { get; set; } = 0.0012m;
 }
