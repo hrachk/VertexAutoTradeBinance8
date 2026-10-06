@@ -282,6 +282,25 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             if (reward / risk < _opt.MinRewardRiskRatio)
                 return null;
 
+            // TP ladder: mean (thesis) + extension toward opposite band (symbol bands, not fixed R)
+            var tps = new List<decimal> { takeProfit };
+            if (longSetup)
+            {
+                decimal ext = bands.Mean + Math.Max((bands.Mean - entry) * 0.85m, atr * 0.35m);
+                if (bands.UpperEntryBand > ext) ext = (ext + bands.UpperEntryBand) * 0.5m;
+                if (ext > takeProfit) tps.Add(ext);
+                decimal ext2 = Math.Max(ext + atr * 0.5m, bands.UpperEntryBand);
+                if (ext2 > tps[^1]) tps.Add(ext2);
+            }
+            else
+            {
+                decimal ext = bands.Mean - Math.Max((entry - bands.Mean) * 0.85m, atr * 0.35m);
+                if (bands.LowerEntryBand < ext) ext = (ext + bands.LowerEntryBand) * 0.5m;
+                if (ext < takeProfit) tps.Add(ext);
+                decimal ext2 = Math.Min(ext - atr * 0.5m, bands.LowerEntryBand);
+                if (ext2 < tps[^1]) tps.Add(ext2);
+            }
+
             var signal = new TradeSignal
             {
                 Symbol = symbol,
@@ -291,7 +310,7 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
                 EntryPrice = entry,
                 StopLoss = stopLoss,
                 Confidence = ClampConfidence(bands.ZScore, smart.Confidence),
-                TakeProfits = new List<decimal> { takeProfit },
+                TakeProfits = tps,
                 Timeframe = tf.ToString(),
                 Time = DateTime.UtcNow,
                 // Mean-reversion holds are inherently short — if the thesis

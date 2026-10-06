@@ -12,8 +12,8 @@ namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
 ///  15m = only trigger (reject into value)
 ///
 /// SL:
-///   Beyond last 1H swing + max(0.35 * ATR1H, 0.9 * ATR15, MinRiskPct * price)
-///   Capped at MaxRiskPct so size stays finite via RiskManager 1R.
+///   SL: 1H swing invalidation + symbol ATR pad (vol-scaled).
+///   TP: 15m liquidity pivots / measured move — not fixed 1.6/2.8/4.5R grid.
 /// TP: 1.6R / 2.8R / 4.5R (TP1 R:R ≥ 1.6).
 /// Location: long only in lower 42% of 1H swing range; short only upper 42%.
 /// </summary>
@@ -146,35 +146,31 @@ public static class InstitutionalTrendSetup
             if (!touchLong || !bullReject)
                 return Fail("no_m15_long_trigger");
 
-            // Professional SL: structure + 1H ATR pad, never micro
-            decimal slStruct = swingLo - Math.Max(atr1h * Atr1hPad, atr15 * Atr15Pad);
-            decimal slMin = close * (1m - MinRiskPct);
-            decimal slMax = close * (1m - MaxRiskPct); // furthest allowed
-            decimal sl = Math.Min(slStruct, slMin);    // at least MinRiskPct
-            if (sl < slMax)
-                sl = slMax; // clamp so risk ≤ MaxRiskPct
+            // SL: symbol structure first (swing invalidation + ATR pad of THIS pair)
+            decimal pad = Math.Max(atr1h * Atr1hPad, atr15 * Atr15Pad);
+            // Volatile alts get wider structural pad (ATR-relative), majors tighter
+            decimal atrPct = atr15 / close;
+            if (atrPct > 0.012m) pad = Math.Max(pad, atr15 * 1.15m);
+            else if (atrPct < 0.004m) pad = Math.Max(pad, atr15 * 0.85m);
 
-            // Prefer not above last closed 1H low
+            decimal slStruct = swingLo - pad;
             decimal last1hLow = h1[^1].LowPrice;
-            if (last1hLow < close)
-                sl = Math.Min(sl, last1hLow - atr15 * 0.15m);
+            if (last1hLow < close && last1hLow > swingLo * 0.998m)
+                slStruct = Math.Min(slStruct, last1hLow - atr15 * 0.2m);
 
+            // Floor: max(0.55% price, 0.75*ATR15) — anti micro-noise, still symbol-scaled
+            decimal floorDist = Math.Max(close * 0.0055m, atr15 * 0.75m);
+            decimal ceilDist = Math.Min(close * MaxRiskPct, Math.Max(atr1h * 2.2m, close * 0.012m));
+            if (ceilDist < floorDist) ceilDist = close * MaxRiskPct;
+
+            decimal sl = slStruct;
             decimal risk = close - sl;
-            if (risk <= 0)
-                return Fail("bad_risk");
-            if (risk / close < MinRiskPct * 0.98m)
-            {
-                sl = close - close * MinRiskPct;
-                risk = close - sl;
-            }
-            if (risk / close > MaxRiskPct * 1.02m)
-            {
-                sl = close - close * MaxRiskPct;
-                risk = close - sl;
-            }
+            if (risk < floorDist) { sl = close - floorDist; risk = floorDist; }
+            if (risk > ceilDist) { sl = close - ceilDist; risk = ceilDist; }
+            if (risk <= 0) return Fail("bad_risk");
 
-            var tps = Tps(true, close, risk);
-            if ((tps[0] - close) / risk < MinRr * 0.99m)
+            var tps = StructureTps(true, close, risk, swingHi, swingLo, atr15, atr1h, m15);
+            if ((tps[0] - close) / risk < 1.20m)
                 return Fail("rr_fail");
 
             decimal conf = Score(volR, true, DiscountMax - posInSwing);
@@ -190,33 +186,28 @@ public static class InstitutionalTrendSetup
             if (!touchShort || !bearReject)
                 return Fail("no_m15_short_trigger");
 
-            decimal slStruct = swingHi + Math.Max(atr1h * Atr1hPad, atr15 * Atr15Pad);
-            decimal slMin = close * (1m + MinRiskPct);
-            decimal slMax = close * (1m + MaxRiskPct);
-            decimal sl = Math.Max(slStruct, slMin);
-            if (sl > slMax)
-                sl = slMax;
+            decimal pad = Math.Max(atr1h * Atr1hPad, atr15 * Atr15Pad);
+            decimal atrPct = atr15 / close;
+            if (atrPct > 0.012m) pad = Math.Max(pad, atr15 * 1.15m);
+            else if (atrPct < 0.004m) pad = Math.Max(pad, atr15 * 0.85m);
 
+            decimal slStruct = swingHi + pad;
             decimal last1hHigh = h1[^1].HighPrice;
-            if (last1hHigh > close)
-                sl = Math.Max(sl, last1hHigh + atr15 * 0.15m);
+            if (last1hHigh > close && last1hHigh < swingHi * 1.002m)
+                slStruct = Math.Max(slStruct, last1hHigh + atr15 * 0.2m);
 
+            decimal floorDist = Math.Max(close * 0.0055m, atr15 * 0.75m);
+            decimal ceilDist = Math.Min(close * MaxRiskPct, Math.Max(atr1h * 2.2m, close * 0.012m));
+            if (ceilDist < floorDist) ceilDist = close * MaxRiskPct;
+
+            decimal sl = slStruct;
             decimal risk = sl - close;
-            if (risk <= 0)
-                return Fail("bad_risk");
-            if (risk / close < MinRiskPct * 0.98m)
-            {
-                sl = close + close * MinRiskPct;
-                risk = sl - close;
-            }
-            if (risk / close > MaxRiskPct * 1.02m)
-            {
-                sl = close + close * MaxRiskPct;
-                risk = sl - close;
-            }
+            if (risk < floorDist) { sl = close + floorDist; risk = floorDist; }
+            if (risk > ceilDist) { sl = close + ceilDist; risk = ceilDist; }
+            if (risk <= 0) return Fail("bad_risk");
 
-            var tps = Tps(false, close, risk);
-            if ((close - tps[0]) / risk < MinRr * 0.99m)
+            var tps = StructureTps(false, close, risk, swingHi, swingLo, atr15, atr1h, m15);
+            if ((close - tps[0]) / risk < 1.20m)
                 return Fail("rr_fail");
 
             decimal conf = Score(volR, true, posInSwing - PremiumMin);
@@ -246,9 +237,121 @@ public static class InstitutionalTrendSetup
         Atr = atr1h
     };
 
-    private static decimal[] Tps(bool isLong, decimal entry, decimal risk) => isLong
-        ? new[] { entry + risk * 1.60m, entry + risk * 2.80m, entry + risk * 4.50m }
-        : new[] { entry - risk * 1.60m, entry - risk * 2.80m, entry - risk * 4.50m };
+    /// <summary>
+    /// Per-symbol TP ladder from structure / liquidity, not a fixed 1.6/2.8/4.5 R grid.
+    /// R multiples only fill gaps when the chart has no usable opposing level.
+    /// </summary>
+    private static decimal[] StructureTps(
+        bool isLong, decimal entry, decimal risk,
+        decimal swingHi, decimal swingLo, decimal atr15, decimal atr1h,
+        List<BinanceFuturesUsdtKline> m15)
+    {
+        risk = Math.Max(risk, entry * 0.0005m);
+        var liq = RecentLiquidityLevels(m15, isLong, entry);
+
+        if (isLong)
+        {
+            // TP1: nearest liquidity ABOVE entry (equal high / swing), else 1.4R
+            decimal tp1Struct = 0m;
+            foreach (var lv in liq)
+                if (lv > entry + risk * 0.35m) { tp1Struct = lv; break; }
+            if (swingHi > entry + risk * 0.4m)
+                tp1Struct = tp1Struct > 0 ? Math.Min(tp1Struct, swingHi) : swingHi;
+
+            decimal tp1 = tp1Struct > entry
+                ? tp1Struct
+                : entry + risk * 1.45m;
+            // Enforce minimum R:R ~1.25 without forcing every symbol to 1.60R
+            if ((tp1 - entry) < risk * 1.25m)
+                tp1 = entry + risk * 1.25m;
+
+            // TP2: next liquidity or measured move (entry-swingLo projected)
+            decimal measured = entry + Math.Max(entry - swingLo, atr1h);
+            decimal tp2Struct = 0m;
+            foreach (var lv in liq)
+                if (lv > tp1 + atr15 * 0.15m) { tp2Struct = lv; break; }
+            decimal tp2 = tp2Struct > tp1
+                ? tp2Struct
+                : Math.Max(tp1 + risk * 0.9m, measured);
+            if (tp2 <= tp1) tp2 = tp1 + Math.Max(risk * 0.85m, atr15 * 0.5m);
+
+            // TP3: extension — range projection or 2nd measured
+            decimal tp3 = Math.Max(tp2 + Math.Max(risk * 1.1m, atr1h * 0.6m),
+                                   entry + Math.Max((entry - swingLo) * 1.6m, risk * 3.2m));
+            if (tp3 <= tp2) tp3 = tp2 + Math.Max(risk, atr15);
+
+            return new[] { tp1, tp2, tp3 };
+        }
+        else
+        {
+            decimal tp1Struct = 0m;
+            foreach (var lv in liq)
+                if (lv < entry - risk * 0.35m) { tp1Struct = lv; break; }
+            if (swingLo < entry - risk * 0.4m)
+                tp1Struct = tp1Struct > 0 ? Math.Max(tp1Struct, swingLo) : swingLo;
+
+            decimal tp1 = tp1Struct > 0 && tp1Struct < entry
+                ? tp1Struct
+                : entry - risk * 1.45m;
+            if ((entry - tp1) < risk * 1.25m)
+                tp1 = entry - risk * 1.25m;
+
+            decimal measured = entry - Math.Max(swingHi - entry, atr1h);
+            decimal tp2Struct = 0m;
+            foreach (var lv in liq)
+                if (lv < tp1 - atr15 * 0.15m) { tp2Struct = lv; break; }
+            decimal tp2 = tp2Struct > 0 && tp2Struct < tp1
+                ? tp2Struct
+                : Math.Min(tp1 - risk * 0.9m, measured);
+            if (tp2 >= tp1) tp2 = tp1 - Math.Max(risk * 0.85m, atr15 * 0.5m);
+
+            decimal tp3 = Math.Min(tp2 - Math.Max(risk * 1.1m, atr1h * 0.6m),
+                                   entry - Math.Max((swingHi - entry) * 1.6m, risk * 3.2m));
+            if (tp3 >= tp2) tp3 = tp2 - Math.Max(risk, atr15);
+
+            return new[] { tp1, tp2, tp3 };
+        }
+    }
+
+    /// <summary>Equal-high / equal-low clusters on 15m = simple liquidity proxies (symbol-specific).</summary>
+    private static List<decimal> RecentLiquidityLevels(
+        List<BinanceFuturesUsdtKline> m15, bool forLongTargets, decimal entry)
+    {
+        var levels = new List<decimal>();
+        if (m15 == null || m15.Count < 8) return levels;
+        int n = m15.Count;
+        int from = Math.Max(0, n - 48);
+        var pivots = new List<decimal>();
+        for (int i = from + 2; i < n - 2; i++)
+        {
+            decimal h = m15[i].HighPrice, l = m15[i].LowPrice;
+            bool swingH = h >= m15[i - 1].HighPrice && h >= m15[i - 2].HighPrice
+                          && h >= m15[i + 1].HighPrice && h >= m15[i + 2].HighPrice;
+            bool swingL = l <= m15[i - 1].LowPrice && l <= m15[i - 2].LowPrice
+                          && l <= m15[i + 1].LowPrice && l <= m15[i + 2].LowPrice;
+            if (forLongTargets && swingH) pivots.Add(h);
+            if (!forLongTargets && swingL) pivots.Add(l);
+        }
+        // Cluster near-equal pivots (within 0.15%)
+        pivots.Sort();
+        if (!forLongTargets) pivots.Reverse(); // nearest below entry first when short
+        else { /* ascending — filter those above entry */ }
+
+        decimal tol = entry * 0.0015m;
+        foreach (var p in pivots)
+        {
+            if (forLongTargets && p <= entry) continue;
+            if (!forLongTargets && p >= entry) continue;
+            if (levels.Count > 0 && Math.Abs(levels[^1] - p) <= tol) continue;
+            levels.Add(p);
+            if (levels.Count >= 6) break;
+        }
+        if (!forLongTargets)
+            levels = levels.OrderByDescending(x => x).ToList(); // nearest below first
+        else
+            levels = levels.OrderBy(x => x).ToList();
+        return levels;
+    }
 
     private static decimal Score(decimal volR, bool reject, decimal depthBonus)
     {
