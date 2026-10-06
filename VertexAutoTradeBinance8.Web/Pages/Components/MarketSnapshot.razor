@@ -11,6 +11,7 @@
 @inject IHttpClientFactory HttpClientFactory
 @inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
 @inject MarketDataLiveState LiveState
+@inject MarketTickStore TickStore
 @inject MissedTradeFileService SignalSvc
 @inject LiveSignalFileService LiveSignalSvc
 @inject BinanceClientFactory Factory
@@ -3274,6 +3275,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     CancellationTokenSource _cts = new();
     bool Frozen, _jsReady;
 
+    /// <summary>Bump when DOM structure must refresh (symbol change, positions load). Live ticks use JS only.</summary>
+    void RequestUiRender()
+    {
+        // intentional no-op hook for future ShouldRender gating; callers still StateHasChanged
+    }
+
     decimal _last, _chg, _ema21, _ema55, _atr;
     string? _archiveCacheKey;
     List<KlineDto> _archiveCache = new();
@@ -3501,11 +3508,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // Same 200ms budget the chart uses, so a busy symbol cannot flood the
         // circuit with re-renders.
         var now = DateTime.UtcNow;
-        if (now - _lastPosPnlRender >= StateHasChangedThrottle)
-        {
-            _lastPosPnlRender = now;
-            _ = InvokeAsync(StateHasChanged);
-        }
+        // Positions list: update numbers in memory; structural StateHasChanged on timer only
+        // (live PnL on chart via marketChart.updatePnl). Avoid full-page Blazor diffs per tick.
+        
     }
 
     // Refresh schedule after a position event. The first attempt is
@@ -3585,135 +3590,61 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     void OnLivePriceTicked(string symbol, decimal price)
     {
+        // DATA PLANE: always keep full fidelity in TickStore (already set in LiveState)
+        // + mutate in-memory series for any TF of this symbol we hold
         _liveTickCount++;
         _lastTickSymbol = symbol;
         _lastTickTime = DateTime.UtcNow;
 
-        // Fast path: ignore symbols that are not active chart AND not in open positions.
-        // Engine may tick 50+ symbols — each must not schedule Blazor work.
-        bool isActive = symbol == _activeSym;
-        bool inPos = false;
+        for (int i = 0; i < Series.Count; i++)
+        {
+            if (!string.Equals(Series[i].Symbol, symbol, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var kl = Series[i].Klines;
+            if (kl == null || kl.Count == 0) continue;
+            var last = kl[^1];
+            kl[^1] = last with
+            {
+                High = Math.Max(last.High, price),
+                Low = Math.Min(last.Low, price),
+                Close = price
+            };
+        }
+
+        // Positions PnL in memory (no Blazor render)
         if (_demoMode)
         {
-            var dpos = _demoSnapshot.Positions;
-            for (int i = 0; i < dpos.Count; i++)
-                if (dpos[i].Symbol == symbol) { inPos = true; break; }
+            bool any = false;
+            foreach (var pos in _demoSnapshot.Positions)
+                if (pos.Symbol == symbol) { any = true; break; }
+            if (any)
+            {
+                decimal total = 0m;
+                foreach (var pos in _demoSnapshot.Positions)
+                {
+                    var p2 = pos.Symbol == symbol ? price : (TickStore.TryGetLast(pos.Symbol, out var px) ? px : DemoAccount.GetLastPrice(pos.Symbol));
+                    if (p2 > 0) total += pos.UnrealizedPnl(p2);
+                }
+                _demoUnrealizedTotal = total;
+            }
         }
         else
-        {
-            var apos = _allPositions;
-            for (int i = 0; i < apos.Count; i++)
-                if (apos[i].Symbol == symbol) { inPos = true; break; }
-        }
-        if (!isActive && !inPos) return;
-
-        if (_demoMode && inPos)
-        {
-            decimal total = 0m;
-            foreach (var pos in _demoSnapshot.Positions)
-            {
-                var p2 = pos.Symbol == symbol ? price : DemoAccount.GetLastPrice(pos.Symbol);
-                if (p2 > 0) total += pos.UnrealizedPnl(p2);
-            }
-            _demoUnrealizedTotal = total;
-            InvalidateDisplayedPositionsCache();
-        }
-
-        if (!_demoMode && inPos)
             ApplyLivePriceToPositions(symbol, price);
 
-        // Chart + Blazor only for active symbol (or position-only → SHC throttled)
-        if (!isActive)
-        {
-            var nowP = DateTime.UtcNow;
-            if (nowP - _lastStateHasChanged >= StateHasChangedThrottle)
-            {
-                _lastStateHasChanged = nowP;
-                _ = InvokeAsync(StateHasChanged);
-            }
-            return;
-        }
+        // UI PLANE: only active chart — pure JS (rAF coalesced), zero Blazor tree diff
+        if (symbol != _activeSym) return;
+        if (!_jsReady) return;
 
-        if (_onTickBusy) return;
-        _onTickBusy = true;
-
+        _last = price;
         _ = InvokeAsync(async () =>
         {
             try
             {
-                var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == _activeTf);
-                if (idx < 0 || idx >= Series.Count || Series[idx].Klines.Count == 0) return;
-
-                var last = Series[idx].Klines[^1];
-                var updated = last with
-                {
-                    High = Math.Max(last.High, price),
-                    Low = Math.Min(last.Low, price),
-                    Close = price
-                };
-                Series[idx].Klines[^1] = updated;
-
-                // Cheap PnL caption on chart (no full redraw)
+                await JS.InvokeVoidAsync("marketChart.applyLivePrice", $"chartContainer-{_chartInstanceId}", (double)price);
                 if (_selectedPosition != null && _selectedPosition.Symbol == symbol)
-                {
                     try { await JS.InvokeVoidAsync("marketChart.updatePnl", $"chartContainer-{_chartInstanceId}", price); } catch { }
-                }
-
-                var now = DateTime.UtcNow;
-                if (now - _lastLiveRender < LiveRenderThrottle) return;
-                _lastLiveRender = now;
-
-                // Update in-memory stats for header strip without full merge/archive
-                if (Selected != null && Selected.Symbol == symbol)
-                {
-                    _last = price;
-                    // Keep Selected klines last bar in sync
-                    if (Selected.Klines.Count > 0)
-                        Selected.Klines[^1] = updated;
-                }
-
-                // Lightweight Charts: only last bar — NEVER full setData / archive load on tick
-                if (_jsReady)
-                {
-                    try
-                    {
-                        var jsK = new
-                        {
-                            openTime = updated.OpenTime,
-                            open = (double)updated.Open,
-                            high = (double)updated.High,
-                            low = (double)updated.Low,
-                            close = (double)updated.Close,
-                            volume = (double)updated.Volume,
-                            takerBuyVolume = (double?)null
-                        };
-                        await JS.InvokeVoidAsync("marketChart.updateLastBar", $"chartContainer-{_chartInstanceId}", jsK);
-                        // Keep merged dict last bar coherent for infinite history
-                        if (_mergedKlines != null && _mergedKlines.Count > 0)
-                        {
-                            var k = updated.OpenTime;
-                            if (_mergedKlines.ContainsKey(k))
-                            {
-                                var prev = _mergedKlines[k];
-                                _mergedKlines[k] = (prev.Open, Math.Max(prev.High, price), Math.Min(prev.Low, price), price, prev.Volume, prev.TakerBuy);
-                            }
-                        }
-                    }
-                    catch { }
-                }
-
-                // Full Blazor re-render at most ~1/sec (900ms)
-                if (now - _lastStateHasChanged >= StateHasChangedThrottle)
-                {
-                    _lastStateHasChanged = now;
-                    StateHasChanged();
-                }
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine("[Market] OnTick: " + ex.Message);
-            }
-            finally { _onTickBusy = false; }
+            catch { }
         });
     }
 
@@ -3741,6 +3672,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             ResolveSelected();
             CalcStats();
             try { await RenderCharts(); } catch { }
+            RequestUiRender();
             StateHasChanged();
         });
     }
@@ -3877,6 +3809,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                                 ResolveSelected();
                                 CalcStats();
                                 _ = EnsureActiveTfLoadedAsync();
+        _ = EnsureChartSessionAsync(sym);
+        RequestUiRender();
                             }
                         }
 

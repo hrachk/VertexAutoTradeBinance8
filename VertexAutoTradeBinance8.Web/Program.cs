@@ -85,6 +85,7 @@ builder.Services.AddHttpClient("WebHistoryBootstrap");
 builder.Services.AddHostedService<WebHistoryBootstrapService>();
 builder.Services.AddSingleton<RealDcaHistoryReader>();
 builder.Services.Configure<DcaOptions>(builder.Configuration.GetSection("Dca"));
+builder.Services.AddSingleton<MarketTickStore>();
 builder.Services.AddSingleton<MarketDataLiveState>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.DemoAccountService>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Twa.TwaDashboardService>();

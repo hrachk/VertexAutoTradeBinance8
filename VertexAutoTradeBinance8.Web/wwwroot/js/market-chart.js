@@ -1,3 +1,4 @@
+function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p);if(a>=1000)return p.toFixed(2);if(a>=1)return p.toFixed(4);if(a>=0.01)return p.toFixed(5);return p.toFixed(8);}
 // ============================================================
 // VERTEX TRADING CHART — powered by TradingView Lightweight Charts™ v5
 // ============================================================
@@ -1298,6 +1299,7 @@
             const ema55 = ema(closes, 55);
             const rsiVals = rsi(closes, 14);
 
+            if (candles && candles.length) { /* symbol set from outside via setSessionSymbol */ }
             s.candleSeries.setData(candles);
             s.lastCandles = candles;
             applyStructure(s);
@@ -1323,7 +1325,48 @@
             // confirmed-exhausted lazy-load retry uselessly on the next
             // scroll near the edge.
             const newEarliestTime = candles.length > 0 ? candles[0].time : null;
-            if (newEarliestTime !== s.lastSeriesEarliestTime) {
+            if (newEarliestTime !== s
+        /**
+         * Exchange-terminal live path: coalesce ticks via rAF.
+         * Keeps last price + forming candle OHLC without Blazor re-render.
+         * Every tick's latest price is applied; intermediate paints are merged.
+         */
+        applyLivePrice(containerId, price) {
+            const s = sessions.get(containerId);
+            if (!s || !s.candleSeries || price == null || !isFinite(price)) return;
+            s._pendingLivePrice = +price;
+            if (s._liveRaf) return;
+            s._liveRaf = requestAnimationFrame(() => {
+                s._liveRaf = 0;
+                const px = s._pendingLivePrice;
+                if (px == null || !isFinite(px)) return;
+                const raw = s.lastKlinesRaw;
+                if (!raw || raw.length === 0) return;
+                const last = raw[raw.length - 1];
+                const k = {
+                    openTime: last.openTime,
+                    open: last.open,
+                    high: Math.max(last.high, px),
+                    low: Math.min(last.low, px),
+                    close: px,
+                    volume: last.volume,
+                    takerBuyVolume: last.takerBuyVolume
+                };
+                raw[raw.length - 1] = k;
+                this.updateLastBar(containerId, k);
+                // DOM price labels (no Blazor)
+                try {
+                    document.querySelectorAll('[data-mk-live-price="' + (s.symbol || '') + '"]').forEach(el => {
+                        el.textContent = formatPrice(px);
+                    });
+                    document.querySelectorAll('[data-mk-live-price-active]').forEach(el => {
+                        el.textContent = formatPrice(px);
+                    });
+                } catch (_) {}
+            });
+        },
+
+.lastSeriesEarliestTime) {
                 s.historyExhausted = false;
                 s.lastSeriesEarliestTime = newEarliestTime;
             }
@@ -2599,7 +2642,8 @@
                     const ema55 = ema(closes, 55);
                     const rsiVals = rsi(closes, 14);
 
-                    s.candleSeries.setData(candles);
+                    if (candles && candles.length) { /* symbol set from outside via setSessionSymbol */ }
+            s.candleSeries.setData(candles);
                     s.lastCandles = candles;
                     applyStructure(s);
                     s.ema21Series.setData(candles.map((c, i) => ({ time: c.time, value: ema21[i] })).filter(d => d.value != null));
