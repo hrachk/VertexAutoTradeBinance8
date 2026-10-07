@@ -3280,14 +3280,79 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     /// stay in sync with chart ticks without flooding the circuit (~2–3 Hz).
     /// </summary>
     DateTime _lastPosUiPaint = DateTime.MinValue;
+    int _chartJsFlushScheduled; // 0/1 single-flight for JS chart updates
+    decimal _chartJsLatestPrice;
+    decimal _chartJsQty;
+    string _chartJsSide = "";
+
     void RequestUiRender()
     {
-        // Positions table / account strip only — keep interval soft so chart
-        // DOM (live PnL panel) is not torn down every few hundred ms.
+        // Positions strip only — slow paint prevents Blazor circuit overload / freeze
         var now = DateTime.UtcNow;
-        if ((now - _lastPosUiPaint).TotalMilliseconds < 750) return;
+        if ((now - _lastPosUiPaint).TotalMilliseconds < 1200) return;
         _lastPosUiPaint = now;
-        _ = InvokeAsync(StateHasChanged);
+        try { _ = InvokeAsync(StateHasChanged); } catch { /* circuit may be disposed */ }
+    }
+
+    void ScheduleChartJsUpdate(decimal price, decimal? qty, string? side)
+    {
+        _chartJsLatestPrice = price;
+        if (qty is decimal q && q > 0) _chartJsQty = q;
+        if (!string.IsNullOrEmpty(side)) _chartJsSide = side;
+        if (System.Threading.Interlocked.CompareExchange(ref _chartJsFlushScheduled, 1, 0) != 0)
+            return; // already scheduled — latest price will be read on flush
+        try
+        {
+            _ = InvokeAsync(FlushChartJsAsync);
+        }
+        catch
+        {
+            System.Threading.Interlocked.Exchange(ref _chartJsFlushScheduled, 0);
+        }
+    }
+
+    async Task FlushChartJsAsync()
+    {
+        decimal lastDrawn = 0m;
+        try
+        {
+            if (!_jsReady) return;
+            for (int i = 0; i < 3; i++)
+            {
+                var price = _chartJsLatestPrice;
+                if (price <= 0) break;
+                lastDrawn = price;
+                try
+                {
+                    await JS.InvokeVoidAsync("marketChart.applyLivePrice",
+                        $"chartContainer-{_chartInstanceId}", (double)price);
+                    if (_selectedPosition != null
+                        && string.Equals(_selectedPosition.Symbol, _activeSym, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (_chartJsQty > 0 && !string.IsNullOrEmpty(_chartJsSide))
+                            await JS.InvokeVoidAsync("marketChart.updatePnl",
+                                $"chartContainer-{_chartInstanceId}", (double)price, (double)_chartJsQty, _chartJsSide);
+                        else
+                            await JS.InvokeVoidAsync("marketChart.updatePnl",
+                                $"chartContainer-{_chartInstanceId}", (double)price);
+                    }
+                }
+                catch { break; }
+                if (price == _chartJsLatestPrice) break;
+                await Task.Delay(24);
+            }
+        }
+        finally
+        {
+            System.Threading.Interlocked.Exchange(ref _chartJsFlushScheduled, 0);
+            // Only reschedule if a newer tick arrived after last draw
+            if (_chartJsLatestPrice > 0 && _chartJsLatestPrice != lastDrawn
+                && System.Threading.Interlocked.CompareExchange(ref _chartJsFlushScheduled, 1, 0) == 0)
+            {
+                try { _ = InvokeAsync(FlushChartJsAsync); }
+                catch { System.Threading.Interlocked.Exchange(ref _chartJsFlushScheduled, 0); }
+            }
+        }
     }
 
     decimal _last, _chg, _ema21, _ema55, _atr;
@@ -3599,99 +3664,99 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     void OnLivePriceTicked(string symbol, decimal price)
     {
-        // DATA PLANE: always keep full fidelity in TickStore (already set in LiveState)
-        // + mutate in-memory series for any TF of this symbol we hold
+        if (price <= 0) return;
         _liveTickCount++;
         _lastTickSymbol = symbol;
         _lastTickTime = DateTime.UtcNow;
 
-        for (int i = 0; i < Series.Count; i++)
+        // Only mutate the active chart series — avoids O(n series × all symbols) on every tick
+        bool isActive = string.Equals(symbol, _activeSym, StringComparison.OrdinalIgnoreCase);
+        if (isActive)
         {
-            if (!string.Equals(Series[i].Symbol, symbol, StringComparison.OrdinalIgnoreCase))
-                continue;
-            var kl = Series[i].Klines;
-            if (kl == null || kl.Count == 0) continue;
-            var last = kl[^1];
-            kl[^1] = last with
+            for (int i = 0; i < Series.Count; i++)
             {
-                High = Math.Max(last.High, price),
-                Low = Math.Min(last.Low, price),
-                Close = price
-            };
+                if (!string.Equals(Series[i].Symbol, symbol, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!string.IsNullOrEmpty(_activeTf)
+                    && !string.Equals(Series[i].Timeframe, _activeTf, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var kl = Series[i].Klines;
+                if (kl == null || kl.Count == 0) continue;
+                var last = kl[^1];
+                kl[^1] = last with
+                {
+                    High = Math.Max(last.High, price),
+                    Low = Math.Min(last.Low, price),
+                    Close = price
+                };
+            }
         }
 
-        // Positions PnL — SAME mark as chart (one tick → header + table + chart)
         decimal? selQty = null;
         string? selSide = null;
+        bool needPosUi = false;
+
         if (_demoMode)
         {
-            bool any = false;
-            foreach (var pos in _demoSnapshot.Positions)
-                if (pos.Symbol == symbol) { any = true; break; }
-            if (any)
+            // In-place update of cached rows (no full list rebuild per tick)
+            bool touchedPos = false;
+            if (_displayedPositionsCacheValid && _displayedPositionsCache != null)
+            {
+                foreach (var row in _displayedPositionsCache)
+                {
+                    if (!string.Equals(row.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    row.MarkPrice = price;
+                    row.Pnl = string.Equals(row.Side, "LONG", StringComparison.OrdinalIgnoreCase)
+                        ? (price - row.EntryPrice) * row.Qty
+                        : (row.EntryPrice - price) * row.Qty;
+                    row.Roi = row.Margin > 0 ? row.Pnl / row.Margin : 0m;
+                    touchedPos = true;
+                    if (_selectedPosition != null
+                        && string.Equals(_selectedPosition.Symbol, symbol, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(_selectedPosition.Side, row.Side, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _selectedPosition = row;
+                        selQty = row.Qty;
+                        selSide = row.Side;
+                    }
+                }
+            }
+
+            if (touchedPos || (_demoSnapshot.Positions?.Any(p =>
+                    string.Equals(p.Symbol, symbol, StringComparison.OrdinalIgnoreCase)) == true))
             {
                 decimal total = 0m;
                 foreach (var pos in _demoSnapshot.Positions)
                 {
-                    var p2 = pos.Symbol == symbol ? price : (TickStore.TryGetLast(pos.Symbol, out var px) ? px : DemoAccount.GetLastPrice(pos.Symbol));
+                    var p2 = string.Equals(pos.Symbol, symbol, StringComparison.OrdinalIgnoreCase)
+                        ? price
+                        : (TickStore.TryGetLast(pos.Symbol, out var px) ? px : DemoAccount.GetLastPrice(pos.Symbol));
                     if (p2 > 0) total += pos.UnrealizedPnl(p2);
                 }
                 _demoUnrealizedTotal = total;
-                // Bust table cache so Mark/PnL/ROI match header (was frozen until snapshot refresh)
-                InvalidateDisplayedPositionsCache();
-                if (_selectedPosition != null && string.Equals(_selectedPosition.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
-                {
-                    var fresh = DisplayedPositions.FirstOrDefault(x =>
-                        string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)
-                        && string.Equals(x.Side, _selectedPosition.Side, StringComparison.OrdinalIgnoreCase));
-                    if (fresh != null)
-                    {
-                        _selectedPosition = fresh;
-                        selQty = fresh.Qty;
-                        selSide = fresh.Side;
-                    }
-                }
-                // Throttled Blazor paint for account strip + positions row (~2.5/s)
-                RequestUiRender();
+                needPosUi = true;
             }
         }
         else
         {
             ApplyLivePriceToPositions(symbol, price);
-            if (_selectedPosition != null && string.Equals(_selectedPosition.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
+            if (_selectedPosition != null
+                && string.Equals(_selectedPosition.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
             {
                 selQty = _selectedPosition.Qty;
                 selSide = _selectedPosition.Side;
             }
-            RequestUiRender();
+            needPosUi = true;
         }
 
-        // UI PLANE: chart last bar + PnL with authoritative qty/side from position row
-        if (symbol != _activeSym) return;
-        if (!_jsReady) return;
+        if (needPosUi)
+            RequestUiRender();
+
+        if (!isActive || !_jsReady) return;
 
         _last = price;
-        var qPass = selQty;
-        var sPass = selSide;
-        _ = InvokeAsync(async () =>
-        {
-            try
-            {
-                await JS.InvokeVoidAsync("marketChart.applyLivePrice", $"chartContainer-{_chartInstanceId}", (double)price);
-                if (_selectedPosition != null && string.Equals(_selectedPosition.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
-                {
-                    try
-                    {
-                        if (qPass is decimal q && q > 0 && !string.IsNullOrEmpty(sPass))
-                            await JS.InvokeVoidAsync("marketChart.updatePnl", $"chartContainer-{_chartInstanceId}", (double)price, (double)q, sPass);
-                        else
-                            await JS.InvokeVoidAsync("marketChart.updatePnl", $"chartContainer-{_chartInstanceId}", (double)price);
-                    }
-                    catch { }
-                }
-            }
-            catch { }
-        });
+        ScheduleChartJsUpdate(price, selQty, selSide);
     }
 
     void OnLiveKlineClosed(string symbol, string timeframe, KlineDto kline)
