@@ -32,7 +32,14 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
     function disposeSession(containerId) {
         const s = sessions.get(containerId);
         if (!s) return;
+        // Stop RAF loops first — prevents updates on a dead chart after navigation
+        if (s._liveRaf) { try { cancelAnimationFrame(s._liveRaf); } catch (e) {} s._liveRaf = 0; }
+        if (s._pillRafId) { try { cancelAnimationFrame(s._pillRafId); } catch (e) {} s._pillRafId = null; }
+        s._pendingLivePrice = null;
         if (s.abortController) { try { s.abortController.abort(); } catch (e) {} }
+        // Document-level drag listeners (if mid-drag when navigating away)
+        if (s._pnlDocMove) { try { document.removeEventListener('mousemove', s._pnlDocMove, true); } catch (e) {} s._pnlDocMove = null; }
+        if (s._pnlDocUp) { try { document.removeEventListener('mouseup', s._pnlDocUp, true); } catch (e) {} s._pnlDocUp = null; }
         if (s.previewBox && s.previewBox.parentNode) s.previewBox.remove();
         if (s.previewVLine && s.previewVLine.parentNode) s.previewVLine.remove();
         if (s.tooltipEl && s.tooltipEl.parentNode) s.tooltipEl.remove();
@@ -57,6 +64,18 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
         if (s.tpSlPriceScaleSub) {
             try { s.chart.priceScale('right').unsubscribePriceRangeChange(s.tpSlPriceScaleSub); } catch(e) {}
             s.tpSlPriceScaleSub = null;
+        }
+        if (s.pnlRangeSub) {
+            try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.pnlRangeSub); } catch (e) {}
+            s.pnlRangeSub = null;
+        }
+        if (s.entryBtnRangeSub) {
+            try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.entryBtnRangeSub); } catch (e) {}
+            s.entryBtnRangeSub = null;
+        }
+        if (s.tpSlPillRangeSub) {
+            try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub); } catch (e) {}
+            s.tpSlPillRangeSub = null;
         }
         try { s.chart.remove(); } catch (e) { /* already gone */ }
         sessions.delete(containerId);
@@ -1348,6 +1367,8 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             if (s._liveRaf) return;
             s._liveRaf = requestAnimationFrame(() => {
                 s._liveRaf = 0;
+                // Session may have been disposed between schedule and frame
+                if (!sessions.has(containerId)) return;
                 const px = s._pendingLivePrice;
                 if (px == null || !isFinite(px)) return;
                 const raw = s.lastKlinesRaw;
@@ -2527,7 +2548,11 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
                     if (el) el.style.cursor = 'grab';
                     document.removeEventListener('mousemove', onMove);
                     document.removeEventListener('mouseup', onUp);
+                    s._pnlDocMove = null;
+                    s._pnlDocUp = null;
                 };
+                s._pnlDocMove = onMove;
+                s._pnlDocUp = onUp;
                 document.addEventListener('mousemove', onMove);
                 document.addEventListener('mouseup', onUp);
             });

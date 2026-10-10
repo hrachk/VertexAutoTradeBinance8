@@ -3274,6 +3274,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     PeriodicTimer? _timer;
     CancellationTokenSource _cts = new();
     bool Frozen, _jsReady;
+    volatile bool _disposed;
 
     /// <summary>
     /// Throttled Blazor paint for account strip + positions table so Mark/PnL
@@ -3287,6 +3288,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     void RequestUiRender()
     {
+        if (_disposed) return;
         // Positions strip only — slow paint prevents Blazor circuit overload / freeze
         var now = DateTime.UtcNow;
         if ((now - _lastPosUiPaint).TotalMilliseconds < 1200) return;
@@ -3296,6 +3298,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     void ScheduleChartJsUpdate(decimal price, decimal? qty, string? side)
     {
+        if (_disposed || !_jsReady) return;
         _chartJsLatestPrice = price;
         if (qty is decimal q && q > 0) _chartJsQty = q;
         if (!string.IsNullOrEmpty(side)) _chartJsSide = side;
@@ -3316,9 +3319,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         decimal lastDrawn = 0m;
         try
         {
-            if (!_jsReady) return;
+            if (_disposed || !_jsReady) return;
             for (int i = 0; i < 3; i++)
             {
+                if (_disposed || !_jsReady) break;
                 var price = _chartJsLatestPrice;
                 if (price <= 0) break;
                 lastDrawn = price;
@@ -3339,14 +3343,14 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 }
                 catch { break; }
                 if (price == _chartJsLatestPrice) break;
-                await Task.Delay(24);
+                await Task.Delay(16);
             }
         }
         finally
         {
             System.Threading.Interlocked.Exchange(ref _chartJsFlushScheduled, 0);
             // Only reschedule if a newer tick arrived after last draw
-            if (_chartJsLatestPrice > 0 && _chartJsLatestPrice != lastDrawn
+            if (!_disposed && _jsReady && _chartJsLatestPrice > 0 && _chartJsLatestPrice != lastDrawn
                 && System.Threading.Interlocked.CompareExchange(ref _chartJsFlushScheduled, 1, 0) == 0)
             {
                 try { _ = InvokeAsync(FlushChartJsAsync); }
@@ -3457,12 +3461,14 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     void OnDemoAccountUpdated()
     {
+        if (_disposed) return;
         RefreshDemoSnapshot();
-        _ = InvokeAsync(StateHasChanged);
+        try { _ = InvokeAsync(StateHasChanged); } catch { }
     }
 
     void OnDemoModeChangedExternally()
     {
+        if (_disposed) return;
         if (_demoMode == DemoAccount.DemoMode) return;
         _demoMode = DemoAccount.DemoMode;
         _activeSignal = null;
@@ -3508,16 +3514,18 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     void OnKlineHistoryReady(string symbol, string tf, int barCount)
     {
+        if (_disposed) return;
         // Engine finished loading history for this symbol — refresh chart
         _ = InvokeAsync(async () =>
         {
+            if (_disposed) return;
             try
             {
-                if (_klineLoadingSymbol == symbol)
+                if (string.Equals(_klineLoadingSymbol, symbol, StringComparison.OrdinalIgnoreCase))
                     _klineLoadingSymbol = null;
 
                 // Only refresh if this is the currently viewed symbol
-                if (_activeSym == symbol)
+                if (string.Equals(_activeSym, symbol, StringComparison.OrdinalIgnoreCase))
                 {
                     try { await RenderCharts(); } catch { }
                     StateHasChanged();
@@ -3543,15 +3551,16 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     /// The REST poll still runs on its timer, but it is now only correcting
     /// for funding and fees - it is no longer what makes the numbers move.
     /// </summary>
-    void ApplyLivePriceToPositions(string symbol, decimal price)
+    /// <returns>true if any open position on this symbol was updated in-place.</returns>
+    bool ApplyLivePriceToPositions(string symbol, decimal price)
     {
-        if (price <= 0) return;
+        if (price <= 0) return false;
 
         // LoadAllOpenPositionsAsync replaces this list wholesale, so take the
         // reference once rather than indexing a collection that may be
         // swapped underneath us mid-loop.
         var snapshot = _allPositions;
-        if (snapshot.Count == 0) return;
+        if (snapshot.Count == 0) return false;
 
         bool touched = false;
         decimal totalUnrealized = 0m;
@@ -3560,10 +3569,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         {
             if (p.Qty <= 0) continue;
 
-            if (p.Symbol == symbol)
+            if (string.Equals(p.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
             {
                 p.MarkPrice = price;
-                p.Pnl = p.Side == "LONG"
+                p.Pnl = string.Equals(p.Side, "LONG", StringComparison.OrdinalIgnoreCase)
                     ? (price - p.EntryPrice) * p.Qty
                     : (p.EntryPrice - price) * p.Qty;
                 // Same convention as the REST path: a fraction, not a percent.
@@ -3574,17 +3583,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             totalUnrealized += p.Pnl;
         }
 
-        if (!touched) return;
+        if (!touched) return false;
 
         _acctUnrealizedPnl = totalUnrealized;
-        InvalidateDisplayedPositionsCache();
-
-        // Same 200ms budget the chart uses, so a busy symbol cannot flood the
-        // circuit with re-renders.
-        var now = DateTime.UtcNow;
-        // Positions list: update numbers in memory; structural StateHasChanged on timer only
-        // (live PnL on chart via marketChart.updatePnl). Avoid full-page Blazor diffs per tick.
-        
+        // In-place mutation of the same ActivePositionInfo instances that
+        // DisplayedPositions already references — do NOT invalidate cache
+        // (that forces rebuild and can desync selected row identity).
+        return true;
     }
 
     // Refresh schedule after a position event. The first attempt is
@@ -3599,7 +3604,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     void OnLivePositionChanged(string symbol, string side, string eventType)
     {
-        if (_demoMode) return; // demo positions are in-memory, already live
+        if (_disposed || _demoMode) return; // demo positions are in-memory, already live
 
         // Coalesce instead of drop. A single trade produces several events
         // (entry fill, then each protection order), and the old 1-second
@@ -3664,7 +3669,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     void OnLivePriceTicked(string symbol, decimal price)
     {
-        if (price <= 0) return;
+        if (_disposed || price <= 0) return;
         _liveTickCount++;
         _lastTickSymbol = symbol;
         _lastTickTime = DateTime.UtcNow;
@@ -3740,14 +3745,18 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         }
         else
         {
-            ApplyLivePriceToPositions(symbol, price);
-            if (_selectedPosition != null
-                && string.Equals(_selectedPosition.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
+            // LIVE: only paint UI when this symbol has an open position
+            bool touched = ApplyLivePriceToPositions(symbol, price);
+            if (touched)
             {
-                selQty = _selectedPosition.Qty;
-                selSide = _selectedPosition.Side;
+                if (_selectedPosition != null
+                    && string.Equals(_selectedPosition.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
+                {
+                    selQty = _selectedPosition.Qty;
+                    selSide = _selectedPosition.Side;
+                }
+                needPosUi = true;
             }
-            needPosUi = true;
         }
 
         if (needPosUi)
@@ -3761,13 +3770,28 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     void OnLiveKlineClosed(string symbol, string timeframe, KlineDto kline)
     {
+        if (_disposed) return;
         _liveKlineCount++;
         _ = InvokeAsync(async () =>
         {
-            var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == timeframe);
+            if (_disposed) return;
+            var idx = Series.FindIndex(s =>
+                string.Equals(s.Symbol, symbol, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(s.Timeframe, timeframe, StringComparison.OrdinalIgnoreCase));
             if (idx < 0) return;
 
-            var klines = Series[idx].Klines.ToList();
+            // Mutate list in place when possible to avoid ToList + record copy GC storm
+            var existing = Series[idx].Klines;
+            List<KlineDto> klines;
+            if (existing is List<KlineDto> mutable)
+            {
+                klines = mutable;
+            }
+            else
+            {
+                klines = existing.ToList();
+            }
+
             if (klines.Count > 0 && klines[^1].OpenTime == kline.OpenTime)
                 klines[^1] = kline;          // finalize the candle that was forming live
             else
@@ -3776,15 +3800,18 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             if (klines.Count > 500)
                 klines.RemoveRange(0, klines.Count - 500);
 
-            Series[idx] = Series[idx] with { Klines = klines };
+            if (!ReferenceEquals(existing, klines))
+                Series[idx] = Series[idx] with { Klines = klines };
 
-            if (symbol != _activeSym || timeframe != _activeTf) return;
+            // Only active chart needs full re-render of closed bar
+            if (!string.Equals(symbol, _activeSym, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(timeframe, _activeTf, StringComparison.OrdinalIgnoreCase))
+                return;
 
             ResolveSelected();
             CalcStats();
             try { await RenderCharts(); } catch { }
             RequestUiRender();
-            StateHasChanged();
         });
     }
 
@@ -4029,6 +4056,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     // stale-reference bookkeeping is needed on this side at all.
     async Task InitChartAsync()
     {
+        if (_disposed) return;
         _dotNetRef ??= DotNetObjectReference.Create(this);
         try
         {
@@ -4060,9 +4088,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     {
         try
         {
-            while (await _timer!.WaitForNextTickAsync(_cts.Token))
+            while (!_disposed && await _timer!.WaitForNextTickAsync(_cts.Token))
             {
-                if (Frozen) continue;
+                if (_disposed || Frozen) continue;
 
                 // Per performance audit: these three are fully
                 // independent (different data sources: local file vs
@@ -5296,7 +5324,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     async Task RenderCharts()
     {
-        if (!_jsReady || Selected == null || Selected.Klines.Count < 5) return;
+        if (_disposed || !_jsReady || Selected == null || Selected.Klines.Count < 5) return;
         try
         {
             // Merge archived history (datadb/ — deeper, but only as fresh
@@ -9605,12 +9633,14 @@ sealed class RealTradeRow
 
     public async ValueTask DisposeAsync()
     {
-        // Capture the final scroll position before anything else -
-        // the user may have just scrolled/zoomed without triggering
-        // any of the other explicit save points (tab switch, symbol
-        // change, etc), so this is the most reliable place to catch
-        // wherever they actually left the chart.
-        if (!string.IsNullOrEmpty(_activeSym) && !string.IsNullOrEmpty(_activeTf))
+        // Stop accepting ticks/events immediately — prevents InvokeAsync
+        // after circuit teardown (root cause of "page freezes until refresh").
+        _disposed = true;
+        _jsReady = false;
+        _chartInitDone = false;
+
+        // Capture the final scroll position before tearing down the chart.
+        if (!string.IsNullOrEmpty(_activeSym) && !string.IsNullOrEmpty(_activeTf) && !string.IsNullOrEmpty(_chartInstanceId))
         {
             try
             {
@@ -9620,18 +9650,27 @@ sealed class RealTradeRow
             catch { }
         }
 
-        LiveState.PriceTicked      -= OnLivePriceTicked;
-        LiveState.PositionChanged  -= OnLivePositionChanged;
-        LiveState.PriceTicked        -= OnLivePriceTicked;
-        LiveState.PositionChanged    -= OnLivePositionChanged;
-        LiveState.KlineHistoryReady  -= OnKlineHistoryReady;
-        DemoAccount.Updated -= OnDemoAccountUpdated;
+        // Unsubscribe once (duplicate -= was harmless but confusing)
+        LiveState.PriceTicked       -= OnLivePriceTicked;
+        LiveState.PositionChanged   -= OnLivePositionChanged;
+        LiveState.KlineHistoryReady -= OnKlineHistoryReady;
+        LiveState.KlineClosed       -= OnLiveKlineClosed;
+        DemoAccount.Updated         -= OnDemoAccountUpdated;
         DemoAccount.DemoModeChanged -= OnDemoModeChangedExternally;
-        LiveState.KlineClosed -= OnLiveKlineClosed;
-        _cts.Cancel();
-        _timer?.Dispose();
-        _dotNetRef?.Dispose();
+
+        try { _cts.Cancel(); } catch { }
+        try { _timer?.Dispose(); } catch { }
+        _timer = null;
+
+        // Tear down Lightweight Charts session + DOM overlays (PnL panel, pills, RAF)
+        if (!string.IsNullOrEmpty(_chartInstanceId))
+        {
+            try { await JS.InvokeVoidAsync("marketChart.dispose", $"chartContainer-{_chartInstanceId}"); } catch { }
+        }
         try { await JS.InvokeVoidAsync("stickyStack.dispose"); } catch { }
+
+        try { _dotNetRef?.Dispose(); } catch { }
+        _dotNetRef = null;
     }
 
     // Stable identity comparison — needed because demo positions get
