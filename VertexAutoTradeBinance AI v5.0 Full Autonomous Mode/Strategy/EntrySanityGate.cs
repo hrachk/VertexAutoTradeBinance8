@@ -7,9 +7,16 @@ namespace VertexAutoTradeBinance8.Strategy;
 /// Last-line entry quality gate for ALL strategies (CORE / RANGE / any future leg).
 /// Applied in StrategyRouter (best-effort) and TradingWorker (hard reject before orders).
 /// Closes parabolic-chase holes that individual engines miss after pumps.
+///
+/// SL geometry aligned with InstitutionalTrendSetup:
+///   MinRiskPct = 0.9%, MaxRiskPct = 2.8% (was 0.4% / 6% — caused SL_STRATEGY_FAIL flood).
 /// </summary>
 public static class EntrySanityGate
 {
+    // Aligned with InstitutionalTrendSetup.MinRiskPct / MaxRiskPct
+    public const decimal MinRiskPct = 0.009m;   // 0.9% — never thinner (anti micro-stop)
+    public const decimal MaxRiskPct = 0.028m;   // 2.8% — hard cap
+
     /// <summary>Hard reject → do not trade. Soft reasons still log.</summary>
     public static bool Allow(
         TradeSignal signal,
@@ -24,6 +31,19 @@ public static class EntrySanityGate
             return false;
         }
 
+        // Mandatory Setup — no Setup → no trade
+        signal.EnsureSetup();
+        if (string.IsNullOrWhiteSpace(signal.Setup) && string.IsNullOrWhiteSpace(signal.Reason))
+        {
+            reason = "SANITY_NO_SETUP";
+            return false;
+        }
+        if (!ExecutableStrategyPolicy.IsLiveExecutable(signal.Setup ?? signal.Reason))
+        {
+            reason = $"SANITY_BAD_SETUP {(signal.Setup ?? signal.Reason)}";
+            return false;
+        }
+
         bool isLong = signal.Side == SignalSide.Buy;
         decimal entry = signal.EntryPrice;
         if (entry <= 0)
@@ -33,21 +53,21 @@ public static class EntrySanityGate
         }
 
         // RANGE / mean-reversion trades AT extremes by design — do not apply TREND chase bans
-        bool rangeLeg = ExecutableStrategyPolicy.IsRangeLeg(signal.Reason);
+        bool rangeLeg = ExecutableStrategyPolicy.IsRangeLeg(signal.Setup ?? signal.Reason);
 
-        // Geometry: micro SL / absurd SL
+        // Geometry: micro SL / absurd SL — STRICT (aligned with InstitutionalTrendSetup)
         if (signal.StopLoss > 0)
         {
             decimal risk = Math.Abs(entry - signal.StopLoss);
             decimal riskPct = risk / entry;
-            if (riskPct < 0.004m)
+            if (riskPct < MinRiskPct)
             {
-                reason = $"SANITY_MICRO_SL {riskPct:P2}";
+                reason = $"SANITY_MICRO_SL {riskPct:P2} (min {MinRiskPct:P1})";
                 return false;
             }
-            if (riskPct > 0.06m)
+            if (riskPct > MaxRiskPct)
             {
-                reason = $"SANITY_SL_TOO_FAR {riskPct:P2}";
+                reason = $"SANITY_SL_TOO_FAR {riskPct:P2} (max {MaxRiskPct:P1})";
                 return false;
             }
             // Side consistency
@@ -61,6 +81,12 @@ public static class EntrySanityGate
                 reason = "SANITY_SL_SIDE_SHORT";
                 return false;
             }
+        }
+        else
+        {
+            // No SL at all → reject
+            reason = "SANITY_NO_SL";
+            return false;
         }
 
         // TREND-only chase bans (RANGE leg intentionally fades extremes)
@@ -199,12 +225,10 @@ public static class EntrySanityGate
         int start = k.Count - period;
         for (int i = start; i < k.Count; i++)
         {
-            decimal tr = k[i].HighPrice - k[i].LowPrice;
-            if (i > 0)
-            {
-                tr = Math.Max(tr, Math.Abs(k[i].HighPrice - k[i - 1].ClosePrice));
-                tr = Math.Max(tr, Math.Abs(k[i].LowPrice - k[i - 1].ClosePrice));
-            }
+            var bar = k[i];
+            decimal prevClose = k[i - 1].ClosePrice;
+            decimal tr = Math.Max(bar.HighPrice - bar.LowPrice,
+                Math.Max(Math.Abs(bar.HighPrice - prevClose), Math.Abs(bar.LowPrice - prevClose)));
             sum += tr;
         }
         return sum / period;

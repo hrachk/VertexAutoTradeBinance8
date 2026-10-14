@@ -2549,7 +2549,25 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                 var bestSl = isLong
                     ? existingSlList.OrderByDescending(o => o.StopPrice ?? 0m).First()
                     : existingSlList.OrderBy(o => o.StopPrice ?? 0m).First();
-                decimal slNew = tick > 0 ? Math.Round(signal.StopLoss / tick) * tick : signal.StopLoss;
+                // FIX-SETUP-SL-V1: never allow micro-SL below 0.9% or beyond 2.8%
+                decimal slRaw = signal.StopLoss;
+                const decimal minRiskPct = 0.009m;
+                const decimal maxRiskPct = 0.028m;
+                if (slRaw <= 0)
+                    slRaw = isLong ? entryPrice * (1m - 0.012m) : entryPrice * (1m + 0.012m);
+                decimal minDist = entryPrice * minRiskPct;
+                decimal maxDist = entryPrice * maxRiskPct;
+                if (isLong)
+                {
+                    if ((entryPrice - slRaw) < minDist) slRaw = entryPrice - minDist;
+                    if ((entryPrice - slRaw) > maxDist) slRaw = entryPrice - maxDist;
+                }
+                else
+                {
+                    if ((slRaw - entryPrice) < minDist) slRaw = entryPrice + minDist;
+                    if ((slRaw - entryPrice) > maxDist) slRaw = entryPrice + maxDist;
+                }
+                decimal slNew = tick > 0 ? Math.Round(slRaw / tick) * tick : slRaw;
                 bool nearlyIdentical = Math.Abs(((bestSl.StopPrice ?? 0m) - slNew) / Math.Max(slNew, 0.0001m)) < 0.003m;
                 bool existingBetter  = isLong ? (bestSl.StopPrice ?? 0m) > slNew : (bestSl.StopPrice ?? 0m) < slNew;
 

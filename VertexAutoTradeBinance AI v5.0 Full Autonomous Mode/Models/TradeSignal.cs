@@ -1,4 +1,4 @@
-﻿using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Models;
 
@@ -49,8 +49,15 @@ public class TradeSignal
 
     /// <summary>
     /// Причина/тип сигнала: "PULLBACK_EMA21", "BREAKOUT_RETEST_LONG" и т.д.
+    /// Может содержать pipe-суффиксы (|DUAL_TREND и т.п.).
     /// </summary>
     public string? Reason { get; set; }
+
+    /// <summary>
+    /// Чистый Setup-тег без pipe-суффиксов: CORE_HTF_PB_LONG, RANGE_SPREAD_SHORT и т.д.
+    /// Обязателен для live-исполнения. Если пустой — сигнал должен быть отклонён.
+    /// </summary>
+    public string? Setup { get; set; }
 
     /// <summary>
     /// Супер-сигнал (разрешаем усреднение/повторный вход при открытой позе)
@@ -122,6 +129,22 @@ public class TradeSignal
         };
     }
 
+    /// <summary>
+    /// Ensure Setup is populated from Reason if missing.
+    /// Call before any live-execution decision.
+    /// </summary>
+    public void EnsureSetup()
+    {
+        if (!string.IsNullOrWhiteSpace(Setup))
+            return;
+        if (string.IsNullOrWhiteSpace(Reason))
+            return;
+        var r = Reason.Trim();
+        int pipe = r.IndexOf('|');
+        if (pipe > 0) r = r.Substring(0, pipe);
+        Setup = r;
+    }
+
     public void CopyFrom(TradeSignal src)
     {
         if (src == null) return;
@@ -134,12 +157,11 @@ public class TradeSignal
 
         Confidence = src.Confidence;
         Reason = src.Reason;
+        Setup = src.Setup;
         Atr = src.Atr;
         Leverage = src.Leverage;
         SafetyRiskMultiplier = src.SafetyRiskMultiplier;
         IsSuperSignal = src.IsSuperSignal;
-
     }
 
 }
-

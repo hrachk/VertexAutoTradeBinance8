@@ -232,6 +232,7 @@ public static class InstitutionalTrendSetup
         TakeProfits = tps.ToList(),
         Confidence = conf,
         Reason = reason,
+        Setup = reason, // FIX-SETUP-SL-V1: explicit Setup for History
         Timeframe = "FifteenMinutes",
         Time = DateTime.UtcNow,
         Atr = atr1h

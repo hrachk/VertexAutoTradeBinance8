@@ -914,7 +914,18 @@ namespace VertexAutoTradeBinance8
             }
 
             // Dual strategy: TREND (CORE_/TREND_*) + RANGE spread (RANGE_*/MEANREV_*) only.
-            if (!ExecutableStrategyPolicy.IsLiveExecutable(signal.Reason))
+            // ── Mandatory Setup (FIX-SETUP-SL-V1) ─────────────────────────
+            signal.EnsureSetup();
+            if (string.IsNullOrWhiteSpace(signal.Setup))
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "POLICY",
+                    "NO_SETUP",
+                    ct).ConfigureAwait(false);
+                return;
+            }
+            if (!ExecutableStrategyPolicy.IsLiveExecutable(signal.Setup))
             {
                 await RejectAsync(
                     signal, symbol, tf,
@@ -1589,7 +1600,7 @@ namespace VertexAutoTradeBinance8
             try
             {
                 // Do NOT rewrite TREND/CORE or RANGE/SPREAD SL/TP — Demo uses signal as-is.
-                if (!ExecutableStrategyPolicy.IsLiveExecutable(signal.Reason))
+                if (!ExecutableStrategyPolicy.IsLiveExecutable(signal.Setup ?? signal.Reason))
                 {
                     var klines = await _marketDataFacade
                         .GetKlinesAsync(symbol, tf, 120, ct)
@@ -1641,7 +1652,7 @@ namespace VertexAutoTradeBinance8
                     symbol, signal.Side, ct, signal, null);
                 if (!ok1m)
                 {
-                    bool soft1m = ExecutableStrategyPolicy.IsLiveExecutable(signal.Reason);
+                    bool soft1m = ExecutableStrategyPolicy.IsLiveExecutable(signal.Setup ?? signal.Reason);
                     if (soft1m)
                     {
                         decimal ratio = thr1m > 0 ? (decimal)score1m / thr1m : 0m;

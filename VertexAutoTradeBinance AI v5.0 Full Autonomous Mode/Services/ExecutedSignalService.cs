@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using VertexAutoTradeBinance8.Models;
 using Microsoft.Extensions.Configuration;
@@ -126,6 +126,23 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
+        /// <summary>
+        /// Normalize Setup from Reason (strip pipe suffixes).
+        /// </summary>
+        private static string ResolveSetup(TradeSignal signal)
+        {
+            if (!string.IsNullOrWhiteSpace(signal.Setup))
+                return signal.Setup.Trim();
+
+            if (string.IsNullOrWhiteSpace(signal.Reason))
+                return string.Empty;
+
+            var r = signal.Reason.Trim();
+            int pipe = r.IndexOf('|');
+            if (pipe > 0) r = r.Substring(0, pipe);
+            return r;
+        }
+
         // ============================================================
         // API
         // ============================================================
@@ -140,6 +157,9 @@ namespace VertexAutoTradeBinance8.Services
             decimal notional,
             string tags = "")
         {
+            signal.EnsureSetup();
+            var setup = ResolveSetup(signal);
+
             var record = new ExecutedSignalRecord
             {
                 Symbol = signal.Symbol,
@@ -152,6 +172,7 @@ namespace VertexAutoTradeBinance8.Services
                 Notional = notional,
                 Status = TradeExecutionStatus.SignalCreated,
                 Reason = signal.Reason ?? string.Empty,
+                Setup = setup,
                 OpportunityScore = opportunityScore,
                 Atr = atr,
                 Volatility = volatility,
@@ -169,8 +190,8 @@ namespace VertexAutoTradeBinance8.Services
             ExecutedSignalsChanged?.Invoke();
 
             _logger.LogInformation(
-                "[EXEC][{symbol}] SignalCreated saved (qty={qty}, ntn={ntn:F2})",
-                signal.Symbol, qty, notional);
+                "[EXEC][{symbol}] SignalCreated saved setup={setup} (qty={qty}, ntn={ntn:F2})",
+                signal.Symbol, setup, qty, notional);
 
             return record;
         }
@@ -181,10 +202,11 @@ namespace VertexAutoTradeBinance8.Services
          TradeExecutionStatus status,
          decimal? qty = null,
          decimal? notional = null,
-         decimal? filledEntry = null,   // ⬅️ НОВОЕ
+         decimal? filledEntry = null,
          decimal? exitPrice = null,
          decimal? pnl = null,
-         decimal? roi = null)
+         decimal? roi = null,
+         string? closeReason = null)
         {
             lock (_lock)
             {
@@ -204,21 +226,22 @@ namespace VertexAutoTradeBinance8.Services
                 if (qty.HasValue) rec.Qty = qty.Value;
                 if (notional.HasValue) rec.Notional = notional.Value;
 
-                //  фактический Price  вход
                 if (filledEntry.HasValue)
                     rec.FilledEntryPrice = filledEntry.Value;
-
 
                 if (exitPrice.HasValue) rec.ExitPrice = exitPrice.Value;
                 if (pnl.HasValue) rec.PnL = pnl.Value;
                 if (roi.HasValue) rec.RoiPercent = roi.Value;
+                if (!string.IsNullOrWhiteSpace(closeReason))
+                    rec.CloseReason = closeReason;
 
                 SaveInternal(list);
             }
 
             ExecutedSignalsChanged?.Invoke();
 
-            _logger.LogInformation("[EXEC][{symbol}] Status updated → {status}", symbol, status);
+            _logger.LogInformation("[EXEC][{symbol}] Status updated → {status} closeReason={cr}",
+                symbol, status, closeReason ?? "-");
         }
 
         public List<ExecutedSignalRecord> GetAll()
@@ -244,7 +267,7 @@ namespace VertexAutoTradeBinance8.Services
                 var list = LoadInternal();
                 var rec = list.FirstOrDefault(x =>
                     x.Symbol == symbol &&
-                    x.Time == time   // ✅ строгое совпадение
+                    x.Time == time
                 ); 
  
                 if (rec == null)

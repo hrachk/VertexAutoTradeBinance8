@@ -13,6 +13,8 @@ namespace VertexAutoTradeBinance8.Strategy
     ///   RANGE regime  → Mean-reversion / spread on non-majors (range leg)
     ///   CHAOS         → no execution forwards
     /// LIVE and DEMO share the same channel after this router.
+    ///
+    /// FIX: mandatory Setup before forward; CHAOS hard-block; no empty-setup leaks.
     /// </summary>
     public sealed class StrategyRouter
     {
@@ -86,6 +88,23 @@ namespace VertexAutoTradeBinance8.Strategy
         {
             if (signal == null) return;
 
+            // ── Mandatory Setup ──────────────────────────────────────────
+            signal.EnsureSetup();
+            if (string.IsNullOrWhiteSpace(signal.Setup))
+            {
+                _logger.LogWarning(
+                    "[ROUTER] NO_SETUP block {src} {sym} reason={r}",
+                    source, signal.Symbol, signal.Reason);
+                return;
+            }
+            if (!ExecutableStrategyPolicy.IsLiveExecutable(signal.Setup))
+            {
+                _logger.LogWarning(
+                    "[ROUTER] BAD_SETUP block {src} {sym} setup={s}",
+                    source, signal.Symbol, signal.Setup);
+                return;
+            }
+
             // Best-effort universal gate using cached bars (Worker re-checks hard)
             try
             {
@@ -112,8 +131,8 @@ namespace VertexAutoTradeBinance8.Strategy
                 _logger.LogWarning(ex, "[ROUTER] live_signals write failed ({src})", source);
             }
             _logger.LogInformation(
-                "[ROUTER] {src} → channel+file {sym} {side} conf={c:F2} reason={r}",
-                source, signal.Symbol, signal.Side, signal.Confidence ?? 0m, signal.Reason);
+                "[ROUTER] {src} → channel+file {sym} {side} conf={c:F2} setup={s} reason={r}",
+                source, signal.Symbol, signal.Side, signal.Confidence ?? 0m, signal.Setup, signal.Reason);
             OnSignalGenerated?.Invoke(signal);
         }
 
@@ -121,6 +140,24 @@ namespace VertexAutoTradeBinance8.Strategy
         private void OnCoreSignal(TradeSignal signal)
         {
             if (signal == null) return;
+
+            signal.EnsureSetup();
+            // Force CORE prefix if engine forgot
+            if (string.IsNullOrWhiteSpace(signal.Setup) && !string.IsNullOrWhiteSpace(signal.Reason))
+            {
+                var r = signal.Reason.Trim();
+                int pipe = r.IndexOf('|');
+                if (pipe > 0) r = r.Substring(0, pipe);
+                if (!r.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase)
+                    && !r.StartsWith("TREND_", StringComparison.OrdinalIgnoreCase)
+                    && !r.StartsWith("INST_", StringComparison.OrdinalIgnoreCase))
+                {
+                    signal.Setup = "CORE_" + r;
+                    signal.Reason = signal.Setup + (signal.Reason.Contains('|') ? signal.Reason[signal.Reason.IndexOf('|')..] : "");
+                }
+                else
+                    signal.Setup = r;
+            }
 
             var uiMode = _modeState.Current;
             if (uiMode == StrategyMode.MeanReversionOnly)
@@ -130,10 +167,6 @@ namespace VertexAutoTradeBinance8.Strategy
             }
 
             var regime = Regime();
-            // Parallel architecture:
-            //   TREND / UNKNOWN → adult CORE full path
-            //   RANGE → CORE still allowed at reduced size (serious structure only; scalp is separate leg)
-            //   CHAOS → hold large trend risk
             if (regime == DualMarketMode.Chaos)
             {
                 _logger.LogInformation("[ROUTER] CORE held {sym} — regime=CHAOS", signal.Symbol);
@@ -141,7 +174,6 @@ namespace VertexAutoTradeBinance8.Strategy
             }
             if (regime == DualMarketMode.Range)
             {
-                // Serious HTF setup may still fire; keep small so it does not fight scalp book
                 signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.55m, 0.20m, 0.70m);
                 if (signal.Leverage is null or > 7)
                     signal.Leverage = 6;
@@ -179,8 +211,6 @@ namespace VertexAutoTradeBinance8.Strategy
             }
 
             var regime = Regime();
-            // Scalp/spread leg: runs in RANGE, UNKNOWN, and (optionally) TREND at micro size.
-            // Does not block CORE — parallel accumulation path.
             if (_dualMode != null)
             {
                 if (regime == DualMarketMode.Chaos)
@@ -208,7 +238,6 @@ namespace VertexAutoTradeBinance8.Strategy
 
             if (ExecutableStrategyPolicy.IsCoreMajorSymbol(signal.Symbol))
             {
-                // Majors: only micro fade if explicitly mean-reversion UI; else skip (CORE owns majors)
                 if (_modeState.Current != StrategyMode.MeanReversionOnly)
                 {
                     _logger.LogDebug("[ROUTER] SPREAD skip major {sym}", signal.Symbol);
@@ -219,10 +248,10 @@ namespace VertexAutoTradeBinance8.Strategy
             bool isLong = signal.Side == SignalSide.Buy;
             string tag = regime == DualMarketMode.Trend ? "RANGE_SCALP" : "RANGE_SPREAD";
             signal.Reason = isLong ? $"{tag}_LONG" : $"{tag}_SHORT";
+            signal.Setup = signal.Reason; // explicit Setup for History
             if (signal.Leverage is null or > 5)
                 signal.Leverage = 4;
 
-            // Pre-trade: spread + fees must leave edge for small targets
             if (!ScalpPreTradeGate.Allow(signal, _marketData, out var scalpWhy))
             {
                 _logger.LogInformation(

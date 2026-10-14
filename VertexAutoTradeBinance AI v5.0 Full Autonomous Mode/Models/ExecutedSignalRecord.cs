@@ -1,4 +1,4 @@
-﻿using Binance.Net.Enums;
+using Binance.Net.Enums;
 
 namespace VertexAutoTradeBinance8.Models
 {
@@ -36,7 +36,22 @@ namespace VertexAutoTradeBinance8.Models
 
         public TradeExecutionStatus Status { get; set; }
 
+        /// <summary>
+        /// Полный Reason (может содержать pipe-суффиксы).
+        /// </summary>
         public string Reason { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Чистый Setup-тег: CORE_HTF_PB_LONG, RANGE_SPREAD_SHORT и т.д.
+        /// Отображается в UI History → колонка Setup.
+        /// Никогда не должен быть пустым для исполненных сигналов.
+        /// </summary>
+        public string Setup { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Причина закрытия: SL_STRUCTURE, SL_TRAIL, SL_PROFIT_LOCK, SL_EMERGENCY, TP, MANUAL и т.д.
+        /// </summary>
+        public string? CloseReason { get; set; }
 
         // AI / режим
         public int OpportunityScore { get; set; }
