@@ -1417,6 +1417,22 @@ namespace VertexAutoTradeBinance8
                         signal.StopLoss = wsl;
                     else if (signal.Side == SignalSide.Sell && wsl > signal.StopLoss)
                         signal.StopLoss = wsl;
+
+                    if (signal.EntryPrice > 0)
+                    {
+                        decimal rp = Math.Abs(signal.EntryPrice - signal.StopLoss) / signal.EntryPrice;
+                        bool rangeLeg = VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
+                            .IsRangeLeg(signal.Setup ?? signal.Reason);
+                        decimal cap = rangeLeg
+                            ? VertexAutoTradeBinance8.Strategy.EntrySanityGate.RangeMaxRiskPct
+                            : VertexAutoTradeBinance8.Strategy.EntrySanityGate.MaxRiskPct;
+                        if (rp > cap)
+                        {
+                            await RejectAsync(signal, symbol, tf, "SMARTFLOW",
+                                $"SL_TOO_WIDE_AFTER_FLOW {rp:P2}", ct);
+                            return;
+                        }
+                    }
                 }
             }
             catch (Exception ex)
@@ -1630,10 +1646,16 @@ namespace VertexAutoTradeBinance8
             // =====================================================
 
 
-            // 🔥 realtime price override
-            if (_price.TryGet(symbol, out var realtimePrice) && realtimePrice > 0)
+            // Live price may replace the planned close only when SL side, risk band and TP1 R:R still hold.
+            if (_price.TryGet(symbol, out var realtimePrice) && realtimePrice > 0
+                && realtimePrice != signal.EntryPrice)
             {
-                signal.EntryPrice = realtimePrice;
+                if (!VertexAutoTradeBinance8.Strategy.EntrySanityGate.AllowPriceUpdate(
+                        signal, realtimePrice, out var driftWhy))
+                {
+                    await RejectAsync(signal, symbol, tf, "ENTRY_DRIFT", driftWhy, ct);
+                    return;
+                }
             }
 
             var leverage = (signal.Leverage is decimal sl && sl > 0) ? sl : (trading.Leverage > 0 ? trading.Leverage : 1m);

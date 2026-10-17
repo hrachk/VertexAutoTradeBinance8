@@ -167,8 +167,11 @@ public sealed class StrategyCoreEngine
                     else if (reason == "no_setup") noSetup++;
                     if (!string.IsNullOrEmpty(reason))
                     {
-                        reasonBag.TryGetValue(reason, out var c);
-                        reasonBag[reason] = c + 1;
+                        var key = reason;
+                        int colon = key.IndexOf(':');
+                        if (colon > 0) key = key.Substring(0, colon);
+                        reasonBag.TryGetValue(key, out var c);
+                        reasonBag[key] = c + 1;
                     }
                 }
                 catch (Exception ex)
@@ -276,9 +279,8 @@ public sealed class StrategyCoreEngine
             return (true, false, "atr_band");
         }
 
-        // ═══ INSTITUTIONAL TREND (from zero) — only InstitutionalTrendSetup ═══
-        _lastSignalBarMs[symbol] = barKey;
-
+        // Do not stamp the 15m bar until HTF data actually loaded.
+        // A single REST miss used to lock the symbol until the next 15m close.
         var h1 = await LoadKlinesTfAsync(symbol, KlineInterval.OneHour, 90).ConfigureAwait(false);
         if (h1 == null || h1.Count < 55)
             return (true, false, "htf_1h_thin");
@@ -290,6 +292,7 @@ public sealed class StrategyCoreEngine
         catch { /* neutral */ }
 
         var built = InstitutionalTrendSetup.TryBuild(symbol, h1, slice, h4, btcBias);
+        _lastSignalBarMs[symbol] = barKey;
         if (!built.Ok || built.Signal == null)
         {
             _log.LogDebug("[CORE][{sym}] no setup: {r}", symbol, built.Reason);

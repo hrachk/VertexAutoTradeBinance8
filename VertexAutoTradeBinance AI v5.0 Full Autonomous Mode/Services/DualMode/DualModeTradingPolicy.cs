@@ -19,7 +19,7 @@ public enum DualMarketMode
 public enum UniverseTier
 {
     Blocked = 0,
-    /// <summary>Top-N by 24h volume — TREND only.</summary>
+    /// <summary>Top-N by 24h volume — full size in TREND, reduced size for pullbacks in RANGE.</summary>
     CoreMajor = 1,
     /// <summary>Inside trend top band, outside core — TREND + RANGE spread.</summary>
     TrendLiquid = 2,
@@ -361,9 +361,28 @@ public sealed class DualModeTradingPolicy
 
         if (mode == DualMarketMode.Range)
         {
+            bool trendLeg = VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
+                .IsTrendLeg(signal.Setup ?? signal.Reason);
+            if (trendLeg)
+            {
+                // A 1H pullback is still a pullback when BTC's efficiency ratio says "range".
+                // The old RANGE_NO_CORE_MAJORS rule deleted BTC/ETH/SOL every time the
+                // classifier was Range — or Unknown, which is remapped to Range above.
+                // Router already forwards these at reduced size; do not veto them here.
+                decimal trendSize = Math.Clamp(o.TrendSizeMult * 0.50m, 0.20m, 0.65m);
+                if (!flowOk || !volOk)
+                    trendSize = Math.Min(trendSize, 0.35m);
+                int trendLev = ClampLev(o.TrendLeverageMin, Math.Min(o.TrendLeverageMax, 8), preferHigh: false);
+                _log.LogInformation(
+                    "[DUAL-MODE] TREND inside RANGE {sym} size×{sz:F2} lev={lev} {flow}",
+                    symbol, trendSize, trendLev, flow.Summarize());
+                return new DualModeDecision(true, mode, tier, trendLev, trendSize,
+                    $"TREND_INSIDE_RANGE {rankInfo} " + flow.Summarize(), flowOk && volOk);
+            }
+
             if (tier == UniverseTier.CoreMajor)
                 return Reject(mode, tier,
-                    $"RANGE_NO_CORE_MAJORS ({rankInfo}) — top volume waits for TREND+flow");
+                    $"RANGE_NO_CORE_MAJORS ({rankInfo}) — fade leg stays off BTC/ETH");
 
             if (tier != UniverseTier.TrendLiquid && tier != UniverseTier.SpreadAlt)
                 return Reject(mode, tier, $"RANGE_UNIVERSE_MISS ({rankInfo})");

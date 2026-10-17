@@ -1,40 +1,53 @@
-# Institutional TREND v2 — professional geometry
+# Institutional TREND v3 — coherent pullback
+
+## Why v2 emitted almost nothing
+
+v2 required all of these at once:
+
+- bullish structure (price making higher highs — so price is high in the swing)
+- price in the **lower 42%** of that same swing
+- price in the **top 28%** of the last 24×1H banned as "parabolic"
+- stop clamped **inside** the swing when risk exceeded 2.8%
+- stop floor in code was **0.55%** while the sanity gate required **0.9%**
+
+An uptrend cannot be both at the highs (structure) and in discount, and a trend stop that is pulled closer than invalidation is stopped by noise. v3 removes that contradiction.
 
 ## Hierarchy
+
 | TF | Role |
 |----|------|
-| **4H** | Permission: long blocked if price under 4H EMA50 / bearish structure |
-| **1H** | Bias (HH/HL) + swing invalidation + ATR for stop width |
-| **15m** | Trigger only (reject into EMA21) |
-
-## Stop-Loss (not noise)
-```
-slPad = max(0.35 * ATR(1H), 0.90 * ATR(15m))
-SL long  = min(swingLow - pad, entry - 0.9%)  then clamp risk ≤ 2.8%
-SL short = max(swingHigh + pad, entry + 0.9%) then clamp risk ≤ 2.8%
-```
-- **Min risk distance 0.9%** — kills micro-stops (~0.2%) that always stop out.
-- **Max 2.8%** — keeps 1R sizing sane.
-- TP ladder: **1.6R / 2.8R / 4.5R**.
+| **4H** | Hard-block **alts** only when EMA side and structure both disagree. Majors pay a confidence penalty. Closed 4H bar only (age ≥ 180m). |
+| **1H** | Bias: EMA21/50 stack + defended higher-low (long) or lower-high (short). Swing = invalidation. |
+| **15m** | Trigger: EMA21 touch inside the last 4 closed bars + rejection or reclaim. |
 
 ## Location
-- Long only if price in **lower 42%** of last 1H swing range.
-- Short only in **upper 42%**.
+
+Retrace of the last 1H impulse, not a fixed discount box:
+
+- long: (swingHigh - close) / (swingHigh - swingLow) in 15% .. 72%
+- short: mirror
+- chase (under 15%) and broken trend (over 72%) are rejected
+
+## Stop
+
+```
+sl = swing invalidation ∓ max(0.35×ATR1H, 0.90×ATR15)
+risk < 0.9%  → widen to 0.9% (away from noise)
+risk > 2.8%  → no trade (do not pull the stop inside the swing)
+```
+
+RANGE leg uses **0.45% .. 2.2%** (mean-reversion). Same rule: never tighten inside the extreme.
+
+## Take profit
+
+Nearest opposing 15m liquidity, else 1.35R. Trade is dropped if TP1 R:R is under 1.35.
+
+## Live price
+
+The worker no longer overwrites `EntryPrice` with the ticker. The live price is accepted only when the stop stays on the correct side, risk stays inside the band, chase ≤ 0.35%, and TP1 R:R ≥ 1.15.
 
 ## Reasons
-`CORE_INST_LONG` / `CORE_INST_SHORT`  
-Rejects: `h4_blocks_long`, `long_not_in_discount`, `parabolic_top`, …
 
+`CORE_INST_LONG` / `CORE_INST_SHORT`
 
-## Dual mode (TREND vs RANGE) — how the system marks regime
-
-BTC **1H** Kaufman Efficiency Ratio + ATR ratio + 15m spike:
-
-| Mode | Condition | Live leg |
-|------|-----------|----------|
-| **TREND** | ER ≥ TrendEfficiencyMin (default 0.32) | CORE_INST_* only |
-| **RANGE** | ER below threshold, not chaos | RANGE_SPREAD_* only |
-| **CHAOS** | ATR expand + low ER, or BTC ±1.8%/15m | no new entries |
-
-Log: `[DUAL-MODE] BTC regime → Range/Trend`.
-News: TREND full impact; RANGE only hard macro pause.
+Rejects: `no_clear_1h_bias`, `long_chase`, `long_too_deep`, `no_m15_long_trigger`, `sl_too_wide`, `rr_fail`, `h4_against_long`, `vertical_long`, `btc_against_long`.

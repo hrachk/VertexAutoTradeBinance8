@@ -6,18 +6,22 @@ namespace VertexAutoTradeBinance8.Strategy;
 /// <summary>
 /// Last-line entry quality gate for ALL strategies (CORE / RANGE / any future leg).
 /// Applied in StrategyRouter (best-effort) and TradingWorker (hard reject before orders).
-/// Closes parabolic-chase holes that individual engines miss after pumps.
 ///
-/// SL geometry aligned with InstitutionalTrendSetup:
-///   MinRiskPct = 0.9%, MaxRiskPct = 2.8% (was 0.4% / 6% — caused SL_STRATEGY_FAIL flood).
+/// TREND SL geometry aligned with InstitutionalTrendSetup: 0.9% .. 2.8%.
+/// RANGE fades are allowed a tighter stop (0.45% .. 2.2%) — a 0.9% floor
+/// made mean-reversion R:R impossible and the leg never fired.
+///
+/// Anti-chase is "vertical move with no retrace", not "price is high in the
+/// 24h range". An uptrend lives in the top of its range; banning that banned every trend.
 /// </summary>
 public static class EntrySanityGate
 {
-    // Aligned with InstitutionalTrendSetup.MinRiskPct / MaxRiskPct
-    public const decimal MinRiskPct = 0.009m;   // 0.9% — never thinner (anti micro-stop)
-    public const decimal MaxRiskPct = 0.028m;   // 2.8% — hard cap
+    public const decimal MinRiskPct = 0.009m;
+    public const decimal MaxRiskPct = 0.028m;
+    public const decimal RangeMinRiskPct = 0.0045m;
+    public const decimal RangeMaxRiskPct = 0.022m;
 
-    /// <summary>Hard reject → do not trade. Soft reasons still log.</summary>
+    /// <summary>Hard reject → do not trade.</summary>
     public static bool Allow(
         TradeSignal signal,
         IReadOnlyList<BinanceFuturesUsdtKline>? m15,
@@ -31,7 +35,6 @@ public static class EntrySanityGate
             return false;
         }
 
-        // Mandatory Setup — no Setup → no trade
         signal.EnsureSetup();
         if (string.IsNullOrWhiteSpace(signal.Setup) && string.IsNullOrWhiteSpace(signal.Reason))
         {
@@ -52,25 +55,24 @@ public static class EntrySanityGate
             return false;
         }
 
-        // RANGE / mean-reversion trades AT extremes by design — do not apply TREND chase bans
         bool rangeLeg = ExecutableStrategyPolicy.IsRangeLeg(signal.Setup ?? signal.Reason);
+        decimal minRisk = rangeLeg ? RangeMinRiskPct : MinRiskPct;
+        decimal maxRisk = rangeLeg ? RangeMaxRiskPct : MaxRiskPct;
 
-        // Geometry: micro SL / absurd SL — STRICT (aligned with InstitutionalTrendSetup)
         if (signal.StopLoss > 0)
         {
             decimal risk = Math.Abs(entry - signal.StopLoss);
             decimal riskPct = risk / entry;
-            if (riskPct < MinRiskPct)
+            if (riskPct < minRisk)
             {
-                reason = $"SANITY_MICRO_SL {riskPct:P2} (min {MinRiskPct:P1})";
+                reason = $"SANITY_MICRO_SL {riskPct:P2} (min {minRisk:P1})";
                 return false;
             }
-            if (riskPct > MaxRiskPct)
+            if (riskPct > maxRisk)
             {
-                reason = $"SANITY_SL_TOO_FAR {riskPct:P2} (max {MaxRiskPct:P1})";
+                reason = $"SANITY_SL_TOO_FAR {riskPct:P2} (max {maxRisk:P1})";
                 return false;
             }
-            // Side consistency
             if (isLong && signal.StopLoss >= entry)
             {
                 reason = "SANITY_SL_SIDE_LONG";
@@ -84,18 +86,16 @@ public static class EntrySanityGate
         }
         else
         {
-            // No SL at all → reject
             reason = "SANITY_NO_SL";
             return false;
         }
 
-        // TREND-only chase bans (RANGE leg intentionally fades extremes)
         if (!rangeLeg)
         {
             if (h1 != null && h1.Count >= 16)
             {
                 var list = h1.OrderBy(x => x.OpenTime).ToList();
-                var para = PassParabolic(list, isLong, entry);
+                var para = PassParabolic(list, isLong);
                 if (!para.ok)
                 {
                     reason = para.reason;
@@ -113,82 +113,121 @@ public static class EntrySanityGate
                     return false;
                 }
             }
+        }
 
-            var refBars = (h1 != null && h1.Count >= 12) ? h1.OrderBy(x => x.OpenTime).ToList()
-                : (m15 != null && m15.Count >= 20) ? m15.OrderBy(x => x.OpenTime).ToList()
-                : null;
-            if (refBars != null)
+        if (signal.TakeProfits is { Count: > 0 })
+        {
+            decimal tp1 = signal.TakeProfits[0];
+            decimal reward = isLong ? tp1 - entry : entry - tp1;
+            decimal risk = Math.Abs(entry - signal.StopLoss);
+            if (reward <= 0 || risk <= 0 || reward / risk < 1.15m)
             {
-                var w = refBars.TakeLast(Math.Min(refBars.Count, 24)).ToList();
-                decimal open0 = w[0].OpenPrice;
-                if (open0 > 0)
-                {
-                    decimal move = (entry - open0) / open0;
-                    if (isLong && move >= 0.18m)
-                    {
-                        reason = $"SANITY_SESSION_PUMP move={move:P1}";
-                        return false;
-                    }
-                    if (!isLong && move <= -0.18m)
-                    {
-                        reason = $"SANITY_SESSION_DUMP move={move:P1}";
-                        return false;
-                    }
-                }
+                reason = $"SANITY_RR {(risk > 0 ? reward / risk : 0m):F2}";
+                return false;
             }
         }
 
         return true;
     }
 
-    private static (bool ok, string reason) PassParabolic(
-        List<BinanceFuturesUsdtKline> h1, bool isLong, decimal close)
+    /// <summary>
+    /// Replace the planned close with the live price only when geometry still holds.
+    /// Blind overwrite used to move entry through the stop or kill R:R after the signal was built.
+    /// </summary>
+    public static bool AllowPriceUpdate(TradeSignal signal, decimal livePrice, out string reason)
+    {
+        reason = "";
+        if (signal == null || signal.EntryPrice <= 0 || livePrice <= 0 || signal.StopLoss <= 0)
+        {
+            reason = "BAD_PRICE";
+            return false;
+        }
+
+        decimal planned = signal.EntryPrice;
+        bool isLong = signal.Side == SignalSide.Buy;
+        decimal drift = (livePrice - planned) / planned;
+        decimal atrPct = signal.Atr is decimal atr && atr > 0 ? atr / planned : 0.01m;
+        // About one 1H ATR of adverse drift — normal lag is fine, a new impulse is not.
+        decimal maxChase = Math.Clamp(atrPct * 1.0m, 0.006m, 0.018m);
+
+        if (isLong && drift > maxChase)
+        {
+            reason = $"CHASE_LONG drift={drift:P2}";
+            return false;
+        }
+        if (!isLong && drift < -maxChase)
+        {
+            reason = $"CHASE_SHORT drift={drift:P2}";
+            return false;
+        }
+        if (isLong && livePrice <= signal.StopLoss)
+        {
+            reason = "LIVE_THROUGH_SL";
+            return false;
+        }
+        if (!isLong && livePrice >= signal.StopLoss)
+        {
+            reason = "LIVE_THROUGH_SL";
+            return false;
+        }
+
+        bool rangeLeg = ExecutableStrategyPolicy.IsRangeLeg(signal.Setup ?? signal.Reason);
+        decimal minRisk = rangeLeg ? RangeMinRiskPct : MinRiskPct;
+        decimal maxRisk = rangeLeg ? RangeMaxRiskPct : MaxRiskPct;
+        decimal risk = Math.Abs(livePrice - signal.StopLoss);
+        decimal riskPct = risk / livePrice;
+        if (riskPct < minRisk)
+        {
+            reason = $"DRIFT_MICRO_SL {riskPct:P2}";
+            return false;
+        }
+        if (riskPct > maxRisk)
+        {
+            reason = $"DRIFT_SL_TOO_FAR {riskPct:P2}";
+            return false;
+        }
+
+        if (signal.TakeProfits is { Count: > 0 })
+        {
+            decimal tp1 = signal.TakeProfits[0];
+            decimal reward = isLong ? tp1 - livePrice : livePrice - tp1;
+            if (reward <= 0 || reward / risk < 1.15m)
+            {
+                reason = $"DRIFT_RR {(risk > 0 ? reward / risk : 0m):F2}";
+                return false;
+            }
+            signal.RRatio = reward / risk;
+        }
+
+        signal.EntryPrice = livePrice;
+        return true;
+    }
+
+    private static (bool ok, string reason) PassParabolic(List<BinanceFuturesUsdtKline> h1, bool isLong)
     {
         int n = h1.Count;
-        var win = h1.Skip(Math.Max(0, n - 24)).ToList();
-        decimal hi = win.Max(x => x.HighPrice);
-        decimal lo = win.Min(x => x.LowPrice);
-        decimal span = hi - lo;
-        if (span <= 0) return (true, "");
-
-        decimal pos = (close - lo) / span;
-        if (isLong && pos >= 0.80m)
-            return (false, $"SANITY_PARABOLIC_TOP pos={pos:F2}");
-        if (!isLong && pos <= 0.20m)
-            return (false, $"SANITY_PARABOLIC_BOTTOM pos={pos:F2}");
-
         var w12 = h1.Skip(Math.Max(0, n - 12)).ToList();
+        if (w12.Count < 4) return (true, "");
         decimal c0 = w12[0].OpenPrice;
-        if (c0 > 0)
-        {
-            decimal move = (w12[^1].ClosePrice - c0) / c0;
-            if (isLong && move >= 0.10m)
-            {
-                decimal impulseHigh = w12.Max(x => x.HighPrice);
-                decimal retrace = impulseHigh > c0 ? (impulseHigh - close) / (impulseHigh - c0) : 0m;
-                if (retrace < 0.28m)
-                    return (false, $"SANITY_PARABOLIC_LONG move={move:P1} retrace={retrace:F2}");
-            }
-            if (!isLong && move <= -0.10m)
-            {
-                decimal impulseLow = w12.Min(x => x.LowPrice);
-                decimal retrace = c0 > impulseLow ? (close - impulseLow) / (c0 - impulseLow) : 0m;
-                if (retrace < 0.28m)
-                    return (false, $"SANITY_PARABOLIC_SHORT move={move:P1} retrace={retrace:F2}");
-            }
-        }
+        decimal close = h1[^1].ClosePrice;
+        if (c0 <= 0 || close <= 0) return (true, "");
 
-        int sameDir = 0;
-        for (int i = Math.Max(0, n - 3); i < n; i++)
+        decimal hi = w12.Max(x => x.HighPrice);
+        decimal lo = w12.Min(x => x.LowPrice);
+        decimal move = (w12[^1].ClosePrice - c0) / c0;
+
+        if (isLong && move >= 0.10m && hi > c0)
         {
-            var b = h1[i];
-            if (isLong && b.ClosePrice > b.OpenPrice) sameDir++;
-            if (!isLong && b.ClosePrice < b.OpenPrice) sameDir++;
+            decimal retrace = (hi - close) / (hi - c0);
+            if (retrace < 0.20m)
+                return (false, $"SANITY_PARABOLIC_LONG move={move:P1} retrace={retrace:F2}");
         }
-        if (isLong && sameDir >= 3 && pos >= 0.68m)
-            return (false, "SANITY_3GREEN_TOP");
-        if (!isLong && sameDir >= 3 && pos <= 0.32m)
-            return (false, "SANITY_3RED_BOTTOM");
+        if (!isLong && move <= -0.10m && c0 > lo)
+        {
+            decimal retrace = (close - lo) / (c0 - lo);
+            if (retrace < 0.20m)
+                return (false, $"SANITY_PARABOLIC_SHORT move={move:P1} retrace={retrace:F2}");
+        }
 
         return (true, "");
     }
@@ -205,12 +244,12 @@ public static class EntrySanityGate
         decimal px = k[^1].ClosePrice;
         decimal wPos = (px - wLo) / wSpan;
         bool anyImpulse = win.Any(b => (b.HighPrice - b.LowPrice) >= atr * 1.20m);
-        if (isLong && anyImpulse && wPos >= 0.86m)
+        if (isLong && anyImpulse && wPos >= 0.92m)
         {
             reason = $"SANITY_IMPULSE_TOP pos={wPos:F2}";
             return false;
         }
-        if (!isLong && anyImpulse && wPos <= 0.14m)
+        if (!isLong && anyImpulse && wPos <= 0.08m)
         {
             reason = $"SANITY_IMPULSE_BOT pos={wPos:F2}";
             return false;

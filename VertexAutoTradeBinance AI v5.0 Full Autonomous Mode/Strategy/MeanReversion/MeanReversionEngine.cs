@@ -275,10 +275,20 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
 
             decimal risk = Math.Abs(entry - stopLoss);
             decimal reward = Math.Abs(takeProfit - entry);
-            if (risk <= 0m) return null;
+            if (risk <= 0m || entry <= 0m) return null;
 
-            // Reject setups with poor risk/reward — if the mean is too close
-            // to the entry relative to the stop distance, it's not worth it.
+            // Align with EntrySanityGate range band. Widen a noise stop; never
+            // pull a wide structural stop inward (that is a guaranteed stop-out).
+            decimal minDist = entry * VertexAutoTradeBinance8.Strategy.EntrySanityGate.RangeMinRiskPct;
+            decimal maxDist = entry * VertexAutoTradeBinance8.Strategy.EntrySanityGate.RangeMaxRiskPct;
+            if (risk > maxDist)
+                return null;
+            if (risk < minDist)
+            {
+                stopLoss = longSetup ? entry - minDist : entry + minDist;
+                risk = minDist;
+            }
+
             if (reward / risk < _opt.MinRewardRiskRatio)
                 return null;
 
