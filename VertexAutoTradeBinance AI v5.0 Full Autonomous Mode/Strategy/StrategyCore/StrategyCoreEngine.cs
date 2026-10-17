@@ -54,7 +54,7 @@ public sealed class StrategyCoreEngine
     private const decimal Tp2Rr = 2.50m;
     private const decimal Tp3Rr = 3.50m;
     private const decimal MinRr = 1.50m;       // reject if TP1/risk < 1.5
-    private const decimal MinAtrPct = 0.0015m;
+    private const decimal MinAtrPct = 0.0008m;
     private const decimal MaxAtrPct = 0.060m;
     // Structure SL: swing ± pad; hard caps prevent 4%+ "lottery" stops
     // Risk measured vs 15m ATR for geometry checks; actual SL comes from 1H swing (often 1–3%).
@@ -75,7 +75,7 @@ public sealed class StrategyCoreEngine
     private const int Donchian = 20;
     private const int QualityTopN = 28; // combat: fewer REST/CPU targets
     private const int MinBars = 55;
-    private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(15);
     private static readonly KlineInterval Tf = KlineInterval.FifteenMinutes;
 
     public StrategyCoreEngine(
@@ -149,7 +149,7 @@ public sealed class StrategyCoreEngine
             var batch = majors
                 .Concat(_qualitySymbols.OrderBy(_ => Guid.NewGuid()))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(15)
+                .Take(28)
                 .ToList();
 
             int evaluated = 0, emitted = 0, thin = 0, sameBar = 0, cooldown = 0, noSetup = 0;

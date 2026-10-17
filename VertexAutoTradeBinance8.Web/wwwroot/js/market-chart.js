@@ -1568,13 +1568,10 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
                 }
             }
 
-            // Per direct performance audit: the Entry/Liq/BE pills'
-            // positions get finalized by the repositionAllPills call
-            // inside showTpSlLines, which always runs right after this
-            // (via RefreshPositionLines, now that TP/SL shows by
-            // default) - calling it here too was pure redundant work,
-            // immediately made stale by that second call on every
-            // single position switch.
+            // Entry / Liq / BE pills must land even when TP/SL is not open yet.
+            this.repositionAllPills(containerId, s._lastPnlFor);
+            const selfPos = this;
+            setTimeout(() => selfPos.repositionAllPills(containerId, s._lastPnlFor), 90);
         },
 
         repositionEntryButtons(containerId) {
@@ -2014,13 +2011,8 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             });
 
             this.repositionAllPills(containerId, pnlFor);
-
-            // One-shot rAF. The previous version scheduled a loop that never
-            // stopped (a new one on every showTpSlLines) and then threw
-            // because `container` was not in scope, so the resize observer
-            // never attached and Blazor saw a failed interop on every draw.
-            // Crosshair was also marking pills dirty on every mouse pixel
-            // even though the lines do not move with the cursor.
+            const selfTp = this;
+            setTimeout(() => selfTp.repositionAllPills(containerId, s._lastPnlFor), 120);
             const container = document.getElementById(containerId);
             if (!s.tpSlPillRangeSub) {
                 const self = this;
@@ -2190,11 +2182,17 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
                 if (entries[i].y < needed) entries[i].y = needed;
             }
 
-            // 4. Apply positions and refresh text.
+            let chartH = 400;
+            try { chartH = document.getElementById(containerId)?.clientHeight || 400; } catch (e) {}
+            const yMin = 12, yMax = Math.max(24, chartH - 12);
+
+            // 4. Apply positions and refresh text. Clamp so a line off-scale
+            // does not park its pill on top of the price axis or off the canvas.
             for (const e of entries) {
+                const y = Math.max(yMin, Math.min(yMax, e.y));
                 e.pill.style.display  = 'flex';
                 e.pill.style.right    = rightOffset + 'px';
-                e.pill.style.top      = e.y + 'px';
+                e.pill.style.top      = y + 'px';
                 e.pill._priceRow.textContent = fmtPrice(e.price);
                 if (e.showPnl && pnlFor) {
                     const pnl = pnlFor(e.price);

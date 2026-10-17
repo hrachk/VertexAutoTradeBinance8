@@ -1,8 +1,19 @@
-# Institutional TREND v3 — coherent pullback
+# Institutional TREND v4 — EMA bias, real trigger
 
-## Why v2 emitted almost nothing
+v3 still slept. Three things were true at once:
 
-v2 required all of these at once:
+- bias required a fresh higher-low pivot AND the EMA stack
+- the 15m trigger required a green candle through EMA21
+- worker MinExecute was 0.58 and the score was 0.58, so any 4H penalty made it watch-only
+
+v4:
+
+- bias is the 1H EMA21/50 stack. Structure is a bonus, and a missing fractal falls back to the last 24×1H range
+- trigger is an EMA21 touch in the last 6 bars plus a close back on the trend side of the EMA (candle color is not required)
+- retrace 8–80%, volume floor 0.40
+- score starts at 0.62 / 0.68 so a valid setup clears the 0.52 CORE execute floor
+- scan covers 28 names, cooldown 15 minutes
+- mean-reversion is allowed on majors when BTC is range or unknown
 
 - bullish structure (price making higher highs — so price is high in the swing)
 - price in the **lower 42%** of that same swing

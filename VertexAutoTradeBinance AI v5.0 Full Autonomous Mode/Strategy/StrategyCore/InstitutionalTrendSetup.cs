@@ -21,14 +21,14 @@ namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
 /// </summary>
 public static class InstitutionalTrendSetup
 {
-    public const decimal MinConfidence = 0.56m;
-    public const decimal MinRr = 1.35m;
+    public const decimal MinConfidence = 0.52m;
+    public const decimal MinRr = 1.25m;
     public const decimal MaxRiskPct = 0.028m;
     public const decimal MinRiskPct = 0.009m;
     public const decimal Atr1hPad = 0.35m;
     public const decimal Atr15Pad = 0.90m;
-    public const decimal MinRetrace = 0.15m;
-    public const decimal MaxRetrace = 0.72m;
+    public const decimal MinRetrace = 0.08m;
+    public const decimal MaxRetrace = 0.80m;
 
     public readonly record struct Result(bool Ok, TradeSignal? Signal, string Reason);
 
@@ -55,7 +55,7 @@ public static class InstitutionalTrendSetup
         if (h4Raw != null && h4Raw.Count >= 30)
             h4 = ClosedBars(h4Raw, barMinutes: 240);
 
-        var st1 = ReadStructure(h1);
+        var st1 = ReadStructure(h1) ?? SyntheticSwing(h1);
         if (st1 == null)
             return Fail("no_1h_structure");
 
@@ -65,22 +65,23 @@ public static class InstitutionalTrendSetup
         int i1 = c1.Count - 1;
         decimal px1 = c1[i1], ema21 = e21[i1], ema50 = e50[i1];
 
-        bool higherLows = st1.LastSwingLow >= st1.PrevSwingLow * 0.9975m;
-        bool higherHighs = st1.LastSwingHigh >= st1.PrevSwingHigh * 0.9975m;
-        bool lowerHighs = st1.LastSwingHigh <= st1.PrevSwingHigh * 1.0025m;
-        bool lowerLows = st1.LastSwingLow <= st1.PrevSwingLow * 1.0025m;
+        bool higherLows = st1.LastSwingLow >= st1.PrevSwingLow * 0.995m;
+        bool higherHighs = st1.LastSwingHigh >= st1.PrevSwingHigh * 0.995m;
+        bool lowerHighs = st1.LastSwingHigh <= st1.PrevSwingHigh * 1.005m;
+        bool lowerLows = st1.LastSwingLow <= st1.PrevSwingLow * 1.005m;
 
-        // Uptrend = EMA stack + defended higher low. A fresh HH is a bonus, not a requirement:
-        // the trade IS the pullback before the next high.
-        bool upTrend = ema21 >= ema50 * 0.997m
-                       && higherLows
+        // Bias is the EMA stack. A defended swing is a bonus, not a second
+        // requirement that cancels the stack. The old AND killed every
+        // pullback that had not yet printed a fresh higher-low pivot.
+        bool upTrend = ema21 >= ema50 * 0.995m
+                       && px1 >= ema50 * 0.985m
                        && px1 > st1.LastSwingLow * 1.001m
-                       && px1 >= ema50 * 0.988m
+                       && px1 >= ema21 * 0.97m
                        && !(st1.IsBearish && px1 < ema21);
-        bool downTrend = ema21 <= ema50 * 1.003m
-                         && lowerHighs
+        bool downTrend = ema21 <= ema50 * 1.005m
+                         && px1 <= ema50 * 1.015m
                          && px1 < st1.LastSwingHigh * 0.999m
-                         && px1 <= ema50 * 1.012m
+                         && px1 <= ema21 * 1.03m
                          && !(st1.IsBullish && px1 > ema21);
         if (upTrend && downTrend)
         {
@@ -100,9 +101,9 @@ public static class InstitutionalTrendSetup
                 return Fail("btc_against_short");
         }
 
-        // Pullbacks are quiet. 0.82 killed the exact bars we want. 0.55 still rejects a dead tape.
+        // Pullbacks are quiet. A 0.55 floor still rejected the exact bars we want.
         decimal volR = VolRatio(h1, 8, 20);
-        if (volR < 0.55m)
+        if (volR < 0.40m)
             return Fail($"dead_1h_volume:{volR:F2}");
 
         decimal swingHi = st1.LastSwingHigh;
@@ -251,37 +252,39 @@ public static class InstitutionalTrendSetup
         strongReject = false;
         int i = m15.Count - 1;
         if (i < 4 || emaFast.Count != m15.Count) return false;
-        int from = i - 3;
+        int from = Math.Max(0, i - 5);
         bool touched = false;
         for (int j = from; j <= i; j++)
         {
             var b = m15[j];
-            decimal zone = Math.Max(atr15 * 0.55m, b.ClosePrice * 0.0022m);
+            decimal zone = Math.Max(atr15 * 0.70m, b.ClosePrice * 0.0030m);
             decimal rng = b.HighPrice - b.LowPrice;
             if (forLong)
             {
-                if (b.LowPrice <= emaFast[j] + zone && b.ClosePrice >= emaFast[j] - zone)
+                if (b.LowPrice <= emaFast[j] + zone && b.ClosePrice >= emaFast[j] - zone * 1.4m)
                     touched = true;
-                if (rng > 0 && b.ClosePrice > b.OpenPrice
-                    && (b.ClosePrice - b.LowPrice) >= rng * 0.55m
+                if (rng > 0 && b.ClosePrice >= b.OpenPrice
+                    && (b.ClosePrice - b.LowPrice) >= rng * 0.50m
                     && b.LowPrice <= emaFast[j] + zone)
                     strongReject = true;
             }
             else
             {
-                if (b.HighPrice >= emaFast[j] - zone && b.ClosePrice <= emaFast[j] + zone)
+                if (b.HighPrice >= emaFast[j] - zone && b.ClosePrice <= emaFast[j] + zone * 1.4m)
                     touched = true;
-                if (rng > 0 && b.ClosePrice < b.OpenPrice
-                    && (b.HighPrice - b.ClosePrice) >= rng * 0.55m
+                if (rng > 0 && b.ClosePrice <= b.OpenPrice
+                    && (b.HighPrice - b.ClosePrice) >= rng * 0.50m
                     && b.HighPrice >= emaFast[j] - zone)
                     strongReject = true;
             }
         }
 
         var cur = m15[i];
+        // Reclaim is "close is back on the trend side of EMA21", not
+        // "this exact candle is green". A flat hold after the touch is a trigger.
         bool reclaim = forLong
-            ? cur.ClosePrice >= emaFast[i] && cur.ClosePrice > cur.OpenPrice
-            : cur.ClosePrice <= emaFast[i] && cur.ClosePrice < cur.OpenPrice;
+            ? cur.ClosePrice >= emaFast[i] - atr15 * 0.15m
+            : cur.ClosePrice <= emaFast[i] + atr15 * 0.15m;
         return touched && (strongReject || reclaim);
     }
 
@@ -443,7 +446,7 @@ public static class InstitutionalTrendSetup
 
     private static decimal Score(decimal volR, bool reject, decimal retrace, bool fullStructure)
     {
-        decimal c = fullStructure ? 0.64m : 0.58m;
+        decimal c = fullStructure ? 0.68m : 0.62m;
         if (volR >= 0.90m) c += 0.03m;
         if (volR >= 1.20m) c += 0.03m;
         if (reject) c += 0.04m;
@@ -523,6 +526,22 @@ public static class InstitutionalTrendSetup
         public decimal LastSwingHigh, PrevSwingHigh, LastSwingLow, PrevSwingLow;
         public bool IsBullish => LastSwingHigh > PrevSwingHigh && LastSwingLow > PrevSwingLow;
         public bool IsBearish => LastSwingHigh < PrevSwingHigh && LastSwingLow < PrevSwingLow;
+    }
+
+    private static Struct? SyntheticSwing(List<BinanceFuturesUsdtKline> k)
+    {
+        if (k == null || k.Count < 12) return null;
+        int from = Math.Max(0, k.Count - 24);
+        decimal hi = k.Skip(from).Max(x => x.HighPrice);
+        decimal lo = k.Skip(from).Min(x => x.LowPrice);
+        if (hi <= lo || lo <= 0) return null;
+        return new Struct
+        {
+            LastSwingHigh = hi,
+            PrevSwingHigh = hi,
+            LastSwingLow = lo,
+            PrevSwingLow = lo
+        };
     }
 
     private static Struct? ReadStructure(List<BinanceFuturesUsdtKline> k)

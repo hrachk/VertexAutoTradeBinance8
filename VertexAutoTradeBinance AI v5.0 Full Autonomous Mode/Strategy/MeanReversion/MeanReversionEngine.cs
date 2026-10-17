@@ -164,13 +164,12 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             if (klines == null || klines.Count < Math.Max(_opt.Window, 60))
                 return null;
 
-            // Majors: no spread / mean-reversion (TREND leg only)
-            if (ExecutableStrategyPolicy.IsCoreMajorSymbol(symbol))
-                return null;
-
-            // DualMode: CHAOS → no fade. TREND → still allow micro-scalp (Router tags SCALP_PARALLEL + size cut).
-            // Previously TREND hard-blocked here while Router expected parallel scalp → dead leg.
+            // Majors are trend-first, but when BTC is range/unknown the trend
+            // leg is quiet and the fade is the only setup that exists.
             var btcMode = _dualMode?.CurrentBtcMode ?? DualMarketMode.Unknown;
+            if (ExecutableStrategyPolicy.IsCoreMajorSymbol(symbol)
+                && btcMode == DualMarketMode.Trend)
+                return null;
             if (btcMode == DualMarketMode.Chaos)
             {
                 _logger.LogDebug("[MEANREV] skip {sym} — BTC dual=CHAOS", symbol);

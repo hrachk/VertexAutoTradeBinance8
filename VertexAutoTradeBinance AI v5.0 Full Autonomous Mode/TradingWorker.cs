@@ -1047,6 +1047,12 @@ namespace VertexAutoTradeBinance8
                 // RANGE/spread conf is statistical (often 0.45–0.55) — not CORE structure score
                 if (VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy.IsRangeLeg(signal.Reason))
                     minExec = Math.Min(minExec, 0.42m);
+                // CORE already scored structure, R:R and the 15m trigger.
+                // Default 0.58 sat on top of a 0.58 score, so a 4H penalty
+                // turned every real setup into watch-only and the bot slept.
+                if ((signal.Reason ?? "").Contains("CORE_INST", StringComparison.OrdinalIgnoreCase)
+                    || (signal.Setup ?? "").Contains("CORE_INST", StringComparison.OrdinalIgnoreCase))
+                    minExec = Math.Min(minExec, 0.52m);
                 double sigConf = (double)(signal.Confidence ?? 0m); // 0..1 scale
                 if (sigConf < (double)minExec)
                 {
