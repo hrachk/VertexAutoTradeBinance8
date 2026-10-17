@@ -798,8 +798,18 @@
             try { c.chart.unsubscribeCrosshairMove(st.crossSub); } catch {}
         }
 
-        st.rangeSub = () => redraw(id);
-        st.crossSub = () => redraw(id);
+        const schedule = () => {
+            if (st._raf) return;
+            st._raf = requestAnimationFrame(() => {
+                st._raf = 0;
+                redraw(id);
+            });
+        };
+        // Scroll and zoom move price→pixel. Crosshair does not, except while
+        // a draft line is following the cursor. Rebuilding the SVG on every
+        // mouse pixel was a large part of /market feeling heavy.
+        st.rangeSub = schedule;
+        st.crossSub = () => { if (state(id).draft) schedule(); };
         c.chart.timeScale().subscribeVisibleLogicalRangeChange(st.rangeSub);
         c.chart.subscribeCrosshairMove(st.crossSub);
     }
@@ -1013,6 +1023,7 @@
 
         dispose(id) {
             const st = state(id);
+            if (st._raf) { cancelAnimationFrame(st._raf); st._raf = 0; }
             if (st._ac) st._ac.abort();
             const c = cs(id);
             if (c) {

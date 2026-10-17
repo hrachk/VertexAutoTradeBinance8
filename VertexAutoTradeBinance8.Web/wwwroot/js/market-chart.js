@@ -431,11 +431,11 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             if (!container) return false;
 
             const colors = {
-                bg: '#0a0d12', text: '#94a3b8', grid: '#1a1f2e',
-                up: '#00ff9c', down: '#ff4d6a',
-                tpNeon: '#00ff9c', slNeon: '#ff6b35', trailNeon: '#3b9eff',
-                ema21: '#3b82f6', ema55: '#a855f7',
-                rsi: '#3b82f6', rsiOb: '#ef4444', rsiOs: '#22c55e',
+                bg: '#0b0e13', text: '#8ea0b5', grid: '#1c2636',
+                up: '#3dd68c', down: '#ff5d73',
+                tpNeon: '#3dd68c', slNeon: '#ff8a4a', trailNeon: '#7cc4ff',
+                ema21: '#7cc4ff', ema55: '#a78bfa',
+                rsi: '#7cc4ff', rsiOb: '#ff5d73', rsiOs: '#3dd68c',
             };
 
             const chart = LightweightCharts.createChart(container, {

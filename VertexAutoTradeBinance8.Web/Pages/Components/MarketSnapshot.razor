@@ -8557,12 +8557,22 @@ sealed class RealTradeRow
                         return string.Equals(v.GetString(), "true", StringComparison.OrdinalIgnoreCase);
                     return false;
                 }
-                string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
-                long GetLong(string name) =>
-                    o.TryGetProperty(name, out var v)
-                        ? (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetInt64(out var l) ? l
-                           : long.TryParse(v.GetString(), out var l2) ? l2 : 0L)
-                        : 0L;
+                string GetStr(string name)
+                {
+                    if (!o.TryGetProperty(name, out var v)) return "";
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.String) return v.GetString() ?? "";
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.Number) return v.GetRawText();
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.True) return "true";
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.False) return "false";
+                    return "";
+                }
+                long GetLong(string name)
+                {
+                    if (!o.TryGetProperty(name, out var v)) return 0L;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetInt64(out var l)) return l;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.String && long.TryParse(v.GetString(), out var l2)) return l2;
+                    return 0L;
+                }
 
                 result.Add(new OpenOrderRow
                 {

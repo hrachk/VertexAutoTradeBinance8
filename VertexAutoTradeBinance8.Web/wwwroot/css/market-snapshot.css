@@ -143,26 +143,22 @@
 
 /* PROMO HUD — Market page neon TP/SL */
 .mk-stats {
-  background: linear-gradient(180deg, #070d16 0%, #05080f 100%) !important;
-  border-bottom: 1px solid #132033 !important;
-  box-shadow: inset 0 -1px 0 rgba(0,255,156,0.06);
+  background: #0b0e13 !important;
+  border-bottom: 1px solid #243044 !important;
+  box-shadow: none;
 }
-.mk-s { background: transparent !important; border-right: 1px solid #101c2c !important; }
-.mk-sl { color: #3d5a78 !important; letter-spacing: 0.8px !important; }
-.mk-sv { color: #c8e6ff !important; text-shadow: 0 0 18px rgba(59,158,255,0.15); }
-.mk-sv.up, .up { color: #00ff9c !important; text-shadow: 0 0 12px rgba(0,255,156,0.35); }
-.mk-sv.dn, .dn { color: #ff4d6a !important; }
-.mk-charts-area, .chart-box, [id^="chartContainer-"] { background: #03060c !important; }
-.mk-body-grid { background: #03060c; }
+.mk-s { background: transparent !important; border-right: 1px solid #1c2636 !important; }
+.mk-sl { color: #8ea0b5 !important; letter-spacing: 0.6px !important; }
+.mk-sv { color: #e7eef8 !important; text-shadow: none; }
+.mk-sv.up, .up { color: #3dd68c !important; text-shadow: none; }
+.mk-sv.dn, .dn { color: #ff5d73 !important; }
+.mk-charts-area, .chart-box, [id^="chartContainer-"] { background: #0b0e13 !important; }
+.mk-body-grid { background: #0b0e13; }
 .mk-chart-head {
-  background: linear-gradient(90deg, #070d16, #0a121f) !important;
-  border-bottom: 1px solid #132033 !important;
+  background: #121722 !important;
+  border-bottom: 1px solid #243044 !important;
 }
-.mk-sys-metrics {
-  display: flex; align-items: stretch; gap: 0; margin: 0; padding: 0;
-  background: #060b14; border-bottom: 1px solid #132033;
-  min-height: 44px; overflow-x: auto; scrollbar-width: none;
-}
+.mk-sys-metrics { display: none !important; }
 .mk-sys-metrics::-webkit-scrollbar { display: none; }
 .mk-sys-card {
   flex: 1 1 120px; min-width: 110px; padding: 6px 12px;

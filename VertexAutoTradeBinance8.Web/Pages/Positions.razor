@@ -1808,14 +1808,40 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
 
             foreach (var o in doc.RootElement.EnumerateArray())
             {
-                decimal GetDec(string name) =>
-                    o.TryGetProperty(name, out var v) && decimal.TryParse(v.GetString(), System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0m;
-                string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
-                long GetLong(string name) =>
-                    o.TryGetProperty(name, out var v)
-                        ? (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetInt64(out var l) ? l
-                           : long.TryParse(v.GetString(), out var l2) ? l2 : 0L)
-                        : 0L;
+                decimal GetDec(string name)
+                {
+                    if (!o.TryGetProperty(name, out var v)) return 0m;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetDecimal(out var n)) return n;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.String &&
+                        decimal.TryParse(v.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var d))
+                        return d;
+                    return 0m;
+                }
+                string GetStr(string name)
+                {
+                    if (!o.TryGetProperty(name, out var v)) return "";
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.String) return v.GetString() ?? "";
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.Number) return v.GetRawText();
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.True) return "true";
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.False) return "false";
+                    return "";
+                }
+                bool GetBool(string name)
+                {
+                    if (!o.TryGetProperty(name, out var v)) return false;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.True) return true;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.False) return false;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.String)
+                        return string.Equals(v.GetString(), "true", StringComparison.OrdinalIgnoreCase);
+                    return false;
+                }
+                long GetLong(string name)
+                {
+                    if (!o.TryGetProperty(name, out var v)) return 0L;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetInt64(out var l)) return l;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.String && long.TryParse(v.GetString(), out var l2)) return l2;
+                    return 0L;
+                }
 
                 result.Add(new OrdRow(
                     Id: GetLong("algoId"),
@@ -1827,7 +1853,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
                     StopPrice: GetDec("triggerPrice"),
                     OrigQty: GetDec("quantity"),
                     ExecutedQty: GetDec("executedQty"),
-                    ReduceOnly: o.TryGetProperty("reduceOnly", out var ro) && ro.GetBoolean(),
+                    ReduceOnly: GetBool("reduceOnly"),
                     Time: DateTime.UtcNow)
                 { IsAlgo = true });
             }
@@ -1865,7 +1891,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
             var algo = await FetchAlgoOrdersRawAsync();
 
             _openOrders = regular.Concat(algo)
-                .GroupBy(o => o.Id)
+                .GroupBy(o => $"{o.IsAlgo}|{o.Id}|{o.Symbol}|{o.Type}|{o.Price}|{o.Side}")
                 .Select(g => g.First())
                 .OrderBy(o => o.Symbol)
                 .ToList();

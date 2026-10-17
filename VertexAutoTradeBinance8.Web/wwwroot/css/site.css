@@ -3630,5 +3630,39 @@ compact-card {
 .mk-legend-os { color: #10b981 !important; font-size: 9.5px !important; }
 
 
-/* Hide Market Intelligence header — не нужен */
-.mk-header { display: none !important; }
+/* Balance stays. The "MARKET INTELLIGENCE" title duplicated the chart head. */
+.mk-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  padding: 0 12px !important;
+  background: #0b0e13 !important;
+  border-bottom: 1px solid #243044 !important;
+}
+.mk-title-block { display: none !important; }
+.mk-hright { margin-left: auto !important; }
+.mk-hbal-strip {
+  display: flex !important;
+  align-items: center !important;
+  gap: 14px !important;
+}
+.mk-hbal-l { color: #8ea0b5 !important; font-size: 10px !important; letter-spacing: .4px !important; }
+.mk-hbal-v, .mk-hbal-v-main { color: #e7eef8 !important; font-size: 13px !important; }
+
+/* Promo HUD (OPERATIONAL / fake latency) is not market data. */
+.mk-sys-metrics { display: none !important; }
+
+.mk-stats, .mk-s, .mk-charts-area, .chart-box, [id^="chartContainer-"] {
+  background: #0b0e13 !important;
+  box-shadow: none !important;
+}
+.mk-sv, .mk .mk-sv.up, .mk .mk-sv.dn, .mk .up, .mk .dn { text-shadow: none !important; }
+.mk .up { color: #3dd68c !important; }
+.mk .dn { color: #ff5d73 !important; }
+.mk-tf-on {
+  background: rgba(124,196,255,.12) !important;
+  color: #7cc4ff !important;
+  border-color: rgba(124,196,255,.35) !important;
+}
