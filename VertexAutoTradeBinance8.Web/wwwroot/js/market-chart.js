@@ -77,6 +77,10 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub); } catch (e) {}
             s.tpSlPillRangeSub = null;
         }
+        if (s.tpSlCrosshairSub && s.chart) {
+            try { s.chart.unsubscribeCrosshairMove(s.tpSlCrosshairSub); } catch (e) {}
+            s.tpSlCrosshairSub = null;
+        }
         try { s.chart.remove(); } catch (e) { /* already gone */ }
         sessions.delete(containerId);
     }
@@ -1429,29 +1433,27 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             // full setData call, which this method exists specifically
             // to avoid doing on every single tick).
             if (s.lastKlinesRaw && s.lastKlinesRaw.length > 0) {
-                const candle = toCandle(k);
-                const lastIdx = s.lastKlinesRaw.length - 1;
-                if (s.lastKlinesRaw[lastIdx].openTime === k.openTime) {
-                    s.lastKlinesRaw[lastIdx] = k; // same bar still forming — replace
+                let idx = s.lastKlinesRaw.length - 1;
+                if (s.lastKlinesRaw[idx].openTime === k.openTime) {
+                    s.lastKlinesRaw[idx] = k;
                 } else {
-                    s.lastKlinesRaw.push(k); // genuinely new bar closed — append
+                    s.lastKlinesRaw.push(k);
+                    idx = s.lastKlinesRaw.length - 1;
                 }
                 if (s.rawKlineByTime) s.rawKlineByTime.set(candle.time, k);
 
-                // Recompute EMA21/EMA55/RSI for just the tail of the
-                // series — full recalculation is cheap enough at typical
-                // bar counts (hundreds to low thousands) to just redo it
-                // over the whole lastKlinesRaw array each tick, rather
-                // than maintaining incremental EMA/RSI state by hand.
+                // Full recompute is fine at bar counts we actually hold, but the
+                // index must be the bar we just wrote. Using the pre-push index
+                // stamped the previous EMA onto the new candle.
                 const closes = s.lastKlinesRaw.map(x => x.close);
                 const ema21Vals = ema(closes, 21);
                 const ema55Vals = ema(closes, 55);
                 const rsiVals = rsi(closes, 14);
                 const lastTime = candle.time;
-                if (ema21Vals[lastIdx] != null) s.ema21Series.update({ time: lastTime, value: ema21Vals[lastIdx] });
-                if (ema55Vals[lastIdx] != null) s.ema55Series.update({ time: lastTime, value: ema55Vals[lastIdx] });
-                if (rsiVals[lastIdx] != null) {
-                    s.rsiSeries.update({ time: lastTime, value: rsiVals[lastIdx] });
+                if (ema21Vals[idx] != null) s.ema21Series.update({ time: lastTime, value: ema21Vals[idx] });
+                if (ema55Vals[idx] != null) s.ema55Series.update({ time: lastTime, value: ema55Vals[idx] });
+                if (rsiVals[idx] != null) {
+                    s.rsiSeries.update({ time: lastTime, value: rsiVals[idx] });
                     s.rsiObLine.update({ time: lastTime, value: 70 });
                     s.rsiOsLine.update({ time: lastTime, value: 30 });
                 }
@@ -1482,6 +1484,8 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             s.entryPrice = entry;
             s.side = side;
             s.qty = qty;
+            s.liqPrice = liqPrice > 0 ? liqPrice : 0;
+            s.bePrice = breakEvenPrice > 0 ? breakEvenPrice : 0;
             // Seed LIVE PnL panel immediately (ticks may lag a few hundred ms)
             try {
                 const seed = (s.lastPnlPrice && s.lastPnlPrice > 0) ? s.lastPnlPrice : entry;
@@ -1984,6 +1988,7 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             s._lastPnlFor = pnlFor; // store for drag mousemove access
 
             if (sl > 0) {
+                s.slPrice = sl;
                 s.slLine = s.candleSeries.createPriceLine({
                     price: sl, color: '#ff6b35', lineWidth: 2,
                     lineStyle: LightweightCharts.LineStyle.Dashed,
@@ -2004,46 +2009,35 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
                 });
                 const label = tpList.length > 1 ? `◎ TP${i + 1}` : '◎ TAKE-PROFIT';
                 const pill = this.makeLevelPill(containerId, '#00ff9c', label, 'tp', i);
-                s.tpLines.push({ line, index: i, price: tpPrice });
+                s.tpLines.push({ line, index: i, price: tpPrice, pill });
                 s.tpPills.push(pill);
             });
 
             this.repositionAllPills(containerId, pnlFor);
 
+            // One-shot rAF. The previous version scheduled a loop that never
+            // stopped (a new one on every showTpSlLines) and then threw
+            // because `container` was not in scope, so the resize observer
+            // never attached and Blazor saw a failed interop on every draw.
+            // Crosshair was also marking pills dirty on every mouse pixel
+            // even though the lines do not move with the cursor.
+            const container = document.getElementById(containerId);
             if (!s.tpSlPillRangeSub) {
                 const self = this;
-
-                // PERF: dirty-flag + RAF loop.
-                // Previously: subscribeVisibleLogicalRangeChange and subscribeCrosshairMove
-                // called repositionAllPills() synchronously on every scroll pixel and every
-                // mouse movement (~60/s each). This caused layout thrashing.
-                // Now: events only set a dirty flag; actual repositioning happens in the
-                // next animation frame — at most once per frame, only when needed.
-                let pillDirty = true;
-                const pillLoop = () => {
-                    s._pillRafId = requestAnimationFrame(pillLoop);
-                    if (!sessions.has(containerId)) {
-                        cancelAnimationFrame(s._pillRafId); s._pillRafId = null; return;
-                    }
-                    if (pillDirty) {
-                        pillDirty = false;
-                        self.repositionAllPills(containerId, pnlFor);
-                    }
+                const markDirty = () => {
+                    if (s._pillRafId) return;
+                    s._pillRafId = requestAnimationFrame(() => {
+                        s._pillRafId = null;
+                        if (!sessions.has(containerId)) return;
+                        self.repositionAllPills(containerId, s._lastPnlFor);
+                    });
                 };
-                s._pillRafId = requestAnimationFrame(pillLoop);
-
-                // Scroll / zoom / crosshair → mark dirty (no work done here)
-                s.tpSlPillRangeSub = () => { pillDirty = true; };
+                s.tpSlPillRangeSub = markDirty;
                 s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub);
-
-                s.tpSlPriceScaleSub = s.tpSlPillRangeSub;
-                try { s.chart.priceScale('right').subscribePriceRangeChange(s.tpSlPriceScaleSub); } catch(e) {}
-
-                s.tpSlCrosshairSub = () => { pillDirty = true; };
-                s.chart.subscribeCrosshairMove(s.tpSlCrosshairSub);
-
-                if (!s._pillResizeObs) {
-                    s._pillResizeObs = new ResizeObserver(() => { pillDirty = true; });
+                s.tpSlPriceScaleSub = markDirty;
+                try { s.chart.priceScale('right').subscribePriceRangeChange(s.tpSlPriceScaleSub); } catch (e) {}
+                if (container && !s._pillResizeObs) {
+                    s._pillResizeObs = new ResizeObserver(markDirty);
                     s._pillResizeObs.observe(container);
                 }
             }
@@ -2159,6 +2153,16 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             const entries = [];
             const allPills = [];
 
+            const linePrice = (line, fallback) => {
+                try {
+                    if (line && typeof line.options === 'function') {
+                        const p = line.options().price;
+                        if (typeof p === 'number' && isFinite(p) && p > 0) return p;
+                    }
+                } catch (e) {}
+                return fallback;
+            };
+
             const collect = (pill, price, showPnl) => {
                 if (!pill) return;
                 allPills.push(pill);
@@ -2167,12 +2171,12 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
                 entries.push({ pill, price, showPnl, trueY: y, y });
             };
 
-            collect(s.entryPill, s.entryLine?.options().price, false);
-            collect(s.liqPill,   s.liqLine?.options().price,   false);
-            collect(s.bePill,    s.beLine?.options().price,     false);
-            collect(s.slPill,    s.slLine?.options().price,     true);
+            collect(s.entryPill, linePrice(s.entryLine, s.entryPrice), false);
+            collect(s.liqPill,   linePrice(s.liqLine, s.liqPrice),   false);
+            collect(s.bePill,    linePrice(s.beLine, s.bePrice),     false);
+            collect(s.slPill,    linePrice(s.slLine, s.slPrice),     true);
             for (const tp of (s.tpLines || [])) {
-                collect(s.tpPills?.[tp.index], tp.price, true);
+                collect(tp.pill || s.tpPills?.[tp.index], tp.line ? linePrice(tp.line, tp.price) : tp.price, true);
             }
 
             if (entries.length === 0) return;
@@ -2226,6 +2230,7 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             // must not erase lines or the drag looks like it failed.
             if (s._tpSlHideFreezeUntil && Date.now() < s._tpSlHideFreezeUntil) return;
             if (s.slLine) { try { s.candleSeries.removePriceLine(s.slLine); } catch (e) {} s.slLine = null; }
+            s.slPrice = 0;
             for (const tp of (s.tpLines || [])) {
                 try { s.candleSeries.removePriceLine(tp.line); } catch (e) {}
             }
@@ -2235,8 +2240,9 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
                 try { pill.remove(); } catch (e) {}
             }
             s.tpPills = [];
+            if (s._pillRafId) { try { cancelAnimationFrame(s._pillRafId); } catch (e) {} s._pillRafId = null; }
             if (s.tpSlPillRangeSub) { try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub); } catch (e) {} s.tpSlPillRangeSub = null; }
-            // tpSlCrosshairSub was removed from performance refactor — no unsub needed
+            if (s.tpSlCrosshairSub) { try { s.chart.unsubscribeCrosshairMove(s.tpSlCrosshairSub); } catch (e) {} s.tpSlCrosshairSub = null; }
             if (s._pillResizeObs) { s._pillResizeObs.disconnect(); s._pillResizeObs = null; }
             try { if (s.tpSlPriceScaleSub) s.chart.priceScale('right').unsubscribePriceRangeChange(s.tpSlPriceScaleSub); } catch(e) {}
             s.tpSlPriceScaleSub = null;
@@ -2499,13 +2505,24 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             const posColor = color;
             const borderCol = pnl >= 0 ? 'rgba(0,255,156,.45)' : 'rgba(255,77,106,.45)';
             const bgCol = pnl >= 0 ? 'rgba(5,14,12,.92)' : 'rgba(14,6,10,.92)';
+            const text = sign + pnl.toFixed(2);
+            // Rewriting innerHTML on every tick destroyed the node the user was dragging
+            // and forced a style recalc. Build once, then patch the number.
+            if (!s.pnlLabelEl.querySelector('[data-pnl-val]')) {
+                s.pnlLabelEl.innerHTML =
+                    '<div style="font-size:8px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#5a7a96;margin-bottom:2px;cursor:grab;">Current PnL</div>' +
+                    '<div data-pnl-val style="font-size:14px;font-weight:800;cursor:grab;"></div>';
+            }
             s.pnlLabelEl.style.background = bgCol;
             s.pnlLabelEl.style.border = '1px solid ' + borderCol;
             s.pnlLabelEl.style.boxShadow = '0 0 16px ' + (pnl >= 0 ? 'rgba(0,255,156,.2)' : 'rgba(255,77,106,.2)');
-            s.pnlLabelEl.innerHTML =
-                '<div style="font-size:8px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#5a7a96;margin-bottom:2px;cursor:grab;">Current PnL</div>' +
-                '<div style="font-size:14px;font-weight:800;color:' + posColor + ';text-shadow:0 0 12px ' + posColor + '55;cursor:grab;">' +
-                sign + pnl.toFixed(2) + ' <span style="font-size:9px;opacity:.85">USDT</span></div>';
+            const valEl = s.pnlLabelEl.querySelector('[data-pnl-val]');
+            if (valEl && valEl.dataset.v !== text) {
+                valEl.dataset.v = text;
+                valEl.style.color = posColor;
+                valEl.style.textShadow = '0 0 12px ' + posColor + '55';
+                valEl.innerHTML = text + ' <span style="font-size:9px;opacity:.85">USDT</span>';
+            }
 
             this.repositionEntryButtons(containerId);
 

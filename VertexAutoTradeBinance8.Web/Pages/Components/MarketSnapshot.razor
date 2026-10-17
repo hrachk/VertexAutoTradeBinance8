@@ -7011,9 +7011,23 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             .OrderBy(o => o.OrderId)
             .Select(o => $"{o.OrderId}:{o.Price}"));
 
-        var sl = _openOrders.FirstOrDefault(o => MatchesPosition(o) && o.Type.Contains("STOP"))?.Price ?? 0m;
+        static bool IsStopOrder(string? type)
+        {
+            if (string.IsNullOrEmpty(type)) return false;
+            var t = type.ToUpperInvariant();
+            return t.Contains("STOP") && !t.Contains("TAKE_PROFIT") && !t.Contains("TAKEPROFIT");
+        }
+        static bool IsTpOrder(string? type)
+        {
+            if (string.IsNullOrEmpty(type)) return false;
+            var t = type.ToUpperInvariant();
+            return t.Contains("TAKE_PROFIT") || t.Contains("TAKEPROFIT");
+        }
+
+        var slCandidates = _openOrders.Where(o => MatchesPosition(o) && IsStopOrder(o.Type) && o.Price > 0).ToList();
+        var sl = (slCandidates.FirstOrDefault(o => o.ReduceOnly) ?? slCandidates.FirstOrDefault())?.Price ?? 0m;
         var tps = _openOrders
-            .Where(o => MatchesPosition(o) && o.Type.Contains("TAKE_PROFIT"))
+            .Where(o => MatchesPosition(o) && IsTpOrder(o.Type) && o.Price > 0)
             .OrderBy(o => pos.Side == "LONG" ? o.Price : -o.Price)
             .Select(o => o.Price)
             .ToArray();
@@ -8525,8 +8539,24 @@ sealed class RealTradeRow
 
             foreach (var o in doc.RootElement.EnumerateArray())
             {
-                decimal GetDec(string name) =>
-                    o.TryGetProperty(name, out var v) && decimal.TryParse(v.GetString(), System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0m;
+                decimal GetDec(string name)
+                {
+                    if (!o.TryGetProperty(name, out var v)) return 0m;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetDecimal(out var n)) return n;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.String &&
+                        decimal.TryParse(v.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var d))
+                        return d;
+                    return 0m;
+                }
+                bool GetBool(string name)
+                {
+                    if (!o.TryGetProperty(name, out var v)) return false;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.True) return true;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.False) return false;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.String)
+                        return string.Equals(v.GetString(), "true", StringComparison.OrdinalIgnoreCase);
+                    return false;
+                }
                 string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
                 long GetLong(string name) =>
                     o.TryGetProperty(name, out var v)
@@ -8543,10 +8573,10 @@ sealed class RealTradeRow
                     // Real field name confirmed via docs is "orderType"
                     // (e.g. "TAKE_PROFIT"/"STOP"), not "type".
                     Type       = GetStr("orderType"),
-                    Price      = GetDec("triggerPrice"),
+                    Price      = GetDec("triggerPrice") > 0 ? GetDec("triggerPrice") : GetDec("stopPrice"),
                     Qty        = GetDec("quantity"),
                     Filled     = GetDec("executedQty"),
-                    ReduceOnly = o.TryGetProperty("reduceOnly", out var ro) && ro.GetBoolean(),
+                    ReduceOnly = GetBool("reduceOnly"),
                     IsAlgo     = true,
                 });
             }
