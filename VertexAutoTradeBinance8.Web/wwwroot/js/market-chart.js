@@ -156,6 +156,52 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
         return out;
     }
 
+    // Seed is the bar BEFORE the forming one, so a live tick restates
+    // that bar instead of compounding EMA/RSI on every price.
+    function indicatorSeed(closes) {
+        const n = closes.length;
+        const empty = { ready: false };
+        if (n < 16) return empty;
+        const e21 = ema(closes, 21);
+        const e55 = ema(closes, 55);
+        const period = 14;
+        let gainSum = 0, lossSum = 0;
+        for (let i = 1; i <= period; i++) {
+            const diff = closes[i] - closes[i - 1];
+            if (diff >= 0) gainSum += diff; else lossSum -= diff;
+        }
+        let avgGain = gainSum / period, avgLoss = lossSum / period;
+        for (let i = period + 1; i < n - 1; i++) {
+            const diff = closes[i] - closes[i - 1];
+            const gain = diff > 0 ? diff : 0;
+            const loss = diff < 0 ? -diff : 0;
+            avgGain = (avgGain * (period - 1) + gain) / period;
+            avgLoss = (avgLoss * (period - 1) + loss) / period;
+        }
+        return {
+            ready: true,
+            ema21Before: e21[n - 2],
+            ema55Before: e55[n - 2],
+            closeBefore: closes[n - 2],
+            avgGainBefore: avgGain,
+            avgLossBefore: avgLoss,
+            lastClose: closes[n - 1]
+        };
+    }
+
+    function stepIndicators(seed, close) {
+        const k21 = 2 / 22, k55 = 2 / 56, period = 14;
+        const ema21 = close * k21 + seed.ema21Before * (1 - k21);
+        const ema55 = close * k55 + seed.ema55Before * (1 - k55);
+        const diff = close - seed.closeBefore;
+        const gain = diff > 0 ? diff : 0;
+        const loss = diff < 0 ? -diff : 0;
+        const avgGain = (seed.avgGainBefore * (period - 1) + gain) / period;
+        const avgLoss = (seed.avgLossBefore * (period - 1) + loss) / period;
+        const rsiVal = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+        return { ema21, ema55, rsi: rsiVal, avgGain, avgLoss, close };
+    }
+
         function applyTradeMarkers(s) {
         if (!s || !s.candleSeries) return;
         try {
@@ -1340,6 +1386,7 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             // OHLCV, not this extra field.
             s.rawKlineByTime = new Map(candles.map((c, i) => [c.time, klines[i]]));
             s.lastKlinesRaw = klines;
+            s._ind = indicatorSeed(closes);
 
             // Only reset the "no more history" flag when this is
             // genuinely a different series (earliest bar changed) — not
@@ -1434,7 +1481,8 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             // to avoid doing on every single tick).
             if (s.lastKlinesRaw && s.lastKlinesRaw.length > 0) {
                 let idx = s.lastKlinesRaw.length - 1;
-                if (s.lastKlinesRaw[idx].openTime === k.openTime) {
+                const sameBar = s.lastKlinesRaw[idx].openTime === k.openTime;
+                if (sameBar) {
                     s.lastKlinesRaw[idx] = k;
                 } else {
                     s.lastKlinesRaw.push(k);
@@ -1442,20 +1490,28 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
                 }
                 if (s.rawKlineByTime) s.rawKlineByTime.set(candle.time, k);
 
-                // Full recompute is fine at bar counts we actually hold, but the
-                // index must be the bar we just wrote. Using the pre-push index
-                // stamped the previous EMA onto the new candle.
-                const closes = s.lastKlinesRaw.map(x => x.close);
-                const ema21Vals = ema(closes, 21);
-                const ema55Vals = ema(closes, 55);
-                const rsiVals = rsi(closes, 14);
-                const lastTime = candle.time;
-                if (ema21Vals[idx] != null) s.ema21Series.update({ time: lastTime, value: ema21Vals[idx] });
-                if (ema55Vals[idx] != null) s.ema55Series.update({ time: lastTime, value: ema55Vals[idx] });
-                if (rsiVals[idx] != null) {
-                    s.rsiSeries.update({ time: lastTime, value: rsiVals[idx] });
-                    s.rsiObLine.update({ time: lastTime, value: 70 });
-                    s.rsiOsLine.update({ time: lastTime, value: 30 });
+                if (!s._ind || !s._ind.ready) {
+                    s._ind = indicatorSeed(s.lastKlinesRaw.map(x => x.close));
+                }
+                if (s._ind && s._ind.ready) {
+                    if (!sameBar && s._ind.lastClose != null) {
+                        const closed = stepIndicators(s._ind, s._ind.lastClose);
+                        s._ind.ema21Before = closed.ema21;
+                        s._ind.ema55Before = closed.ema55;
+                        s._ind.closeBefore = closed.close;
+                        s._ind.avgGainBefore = closed.avgGain;
+                        s._ind.avgLossBefore = closed.avgLoss;
+                    }
+                    const stepped = stepIndicators(s._ind, k.close);
+                    s._ind.lastClose = k.close;
+                    const lastTime = candle.time;
+                    if (stepped.ema21 != null) s.ema21Series.update({ time: lastTime, value: stepped.ema21 });
+                    if (stepped.ema55 != null) s.ema55Series.update({ time: lastTime, value: stepped.ema55 });
+                    if (stepped.rsi != null) {
+                        s.rsiSeries.update({ time: lastTime, value: stepped.rsi });
+                        s.rsiObLine.update({ time: lastTime, value: 70 });
+                        s.rsiOsLine.update({ time: lastTime, value: 30 });
+                    }
                 }
             }
         },
@@ -2029,7 +2085,15 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
                 s.tpSlPriceScaleSub = markDirty;
                 try { s.chart.priceScale('right').subscribePriceRangeChange(s.tpSlPriceScaleSub); } catch (e) {}
                 if (container && !s._pillResizeObs) {
-                    s._pillResizeObs = new ResizeObserver(markDirty);
+                    s._pillResizeObs = new ResizeObserver(() => {
+                        const el = document.getElementById(containerId);
+                        if (!el) return;
+                        const w = el.clientWidth, h = el.clientHeight;
+                        if (w === s._obsW && h === s._obsH) return;
+                        s._obsW = w;
+                        s._obsH = h;
+                        markDirty();
+                    });
                     s._pillResizeObs.observe(container);
                 }
             }
@@ -2442,8 +2506,11 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             // Keep chart PnL in lockstep with Blazor position table (same qty/side/mark)
             if (qtyOpt != null && qtyOpt > 0) s.qty = Number(qtyOpt);
             if (sideOpt) s.side = String(sideOpt).toUpperCase().indexOf('LONG') >= 0 ? 'LONG' : 'SHORT';
-            s.candleSeries.applyOptions({ priceLineVisible: false });
-            s.lastPnlPrice = currentPrice; // for the scroll/zoom subscription below to reposition without waiting for the next tick
+            s.lastPnlPrice = currentPrice;
+
+            if (!s._priceLineHidden) {
+                try { s.candleSeries.applyOptions({ priceLineVisible: false }); s._priceLineHidden = true; } catch (e) {}
+            }
 
             const dir = s.side === 'LONG' ? 1 : -1;
             const q = (s.qty > 0) ? s.qty : 0;

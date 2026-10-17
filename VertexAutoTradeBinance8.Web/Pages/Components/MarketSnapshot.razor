@@ -4036,9 +4036,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (_chartInitDone && Selected != null && Selected.Klines.Count >= 5)
         {
             var lastK = Selected.Klines[^1];
-            // Include last bar's OHLCV so live price ticks trigger a redraw,
-            // not just when a brand new bar/candle count appears
-            var key = $"{Selected.Symbol}:{Selected.Timeframe}:{Selected.Klines.Count}:{lastK.OpenTime}:{lastK.Close}:{lastK.High}:{lastK.Low}:{lastK.Volume}";
+            // Live OHLC must NOT be in this key. Including Close made every
+            // price tick (via the 1.2s UI paint) rebuild the chart through
+            // JS interop and stall the Blazor circuit.
+            var key = $"{Selected.Symbol}:{Selected.Timeframe}:{Selected.Klines.Count}:{lastK.OpenTime}";
             if (key != _lastRenderedKey)
             {
                 _lastRenderedKey = key;
@@ -5419,8 +5420,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 // Ordinary live tick — just update the last bar in-place.
                 // _mergedKlines is a SortedDictionary so .Last() is O(log n),
                 // far cheaper than ToList()[^1] which was O(n) every tick.
-                var lastKey = _mergedKlines.Keys.Max();
-                var lastKline = ToJsKline(lastKey, _mergedKlines[lastKey]);
+                var lastKey = Selected.Klines[^1].OpenTime;
+                if (!_mergedKlines.TryGetValue(lastKey, out var lastBar))
+                    lastBar = _mergedKlines[_mergedKlines.Keys.Last()];
+                var lastKline = ToJsKline(lastKey, lastBar);
                 await JS.InvokeVoidAsync("marketChart.updateLastBar", $"chartContainer-{_chartInstanceId}", lastKline);
             }
         }
