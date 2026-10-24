@@ -7,8 +7,9 @@ using VertexAutoTradeBinance8.Web.Services.Auth;
 namespace VertexAutoTradeBinance8.Web.Services;
 
 /// <summary>
-/// Parallel DEMO: prefer Engine approved_entries; if none, open from live_signals
-/// sized on Demo equity only (never requires Binance balance).
+/// Paper book. Opens only from approved_entries — the same decision the
+/// engine just sent to the exchange (or the paper-only decision when the
+/// live wallet is empty). Raw live_signals are watch-list, not entries.
 /// </summary>
 public sealed class DemoAutoTradeService : BackgroundService
 {
@@ -57,7 +58,7 @@ public sealed class DemoAutoTradeService : BackgroundService
             _log.LogWarning(ex, "[DEMO-AUTO][RECONCILE] skipped");
         }
         _log.LogInformation(
-            "[DEMO-AUTO] started (approved + live_signals fallback) at {t:o} shared={root}",
+            "[DEMO-AUTO] started (approved_entries only, same decision as Live) at {t:o} shared={root}",
             _startedUtc, _sharedRoot);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -115,10 +116,7 @@ public sealed class DemoAutoTradeService : BackgroundService
             return;
         }
 
-        int opened = 0;
-        opened += await ProcessApprovedAsync(clients, ct);
-        if (opened == 0)
-            opened += await ProcessLiveSignalsFallbackAsync(clients, ct);
+        int opened = await ProcessApprovedAsync(clients, ct);
 
         SaveSeenKeys();
         if (_seen.Count > 5000)
@@ -146,91 +144,6 @@ public sealed class DemoAutoTradeService : BackgroundService
             }
         }
         return n;
-    }
-
-    private async Task<int> ProcessLiveSignalsFallbackAsync(List<ClientRecord> clients, CancellationToken ct)
-    {
-        var path = Path.Combine(_sharedRoot, "live_signals.json");
-        if (!File.Exists(path)) return 0;
-
-        List<LiveSigRow> signals;
-        try
-        {
-            var json = await File.ReadAllTextAsync(path, ct);
-            signals = JsonSerializer.Deserialize<List<LiveSigRow>>(json) ?? new();
-        }
-        catch { return 0; }
-
-        var cutoff = DateTime.UtcNow.AddMinutes(-40);
-        var notBefore = _startedUtc.AddMinutes(-2);
-        var candidates = signals
-            .Where(s => s.Time >= cutoff && s.Time >= notBefore && s.Entry > 0 && s.StopLoss > 0
-                        && !string.IsNullOrWhiteSpace(s.Symbol) && s.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(s => s.Confidence)
-            .Take(30)
-            .ToList();
-
-        int n = 0;
-        foreach (var s in candidates)
-        {
-            var key = $"live|{s.Symbol}|{s.Side}|{s.Time:yyyyMMddHHmm}";
-            if (!_seen.TryAdd(key, 0)) continue;
-
-            foreach (var client in clients)
-            {
-                try
-                {
-                    _demo.BindClient(client.Id);
-                    var avail = _demo.GetAvailableForClient(client.Id);
-                    if (avail <= 0) avail = _demo.GetEquityForClient(client.Id);
-                    if (avail <= 0)
-                    {
-                        _log.LogWarning("[DEMO-AUTO] client {id} demo balance 0 — skip", client.Id);
-                        continue;
-                    }
-
-                    decimal qty = Size1R(s, avail);
-                    if (qty <= 0) continue;
-
-                    var tps = s.TakeProfits ?? new List<decimal>();
-                    if (TryOpen(client.Id, s.Symbol, s.Side, s.Entry, qty, 10, s.StopLoss, tps,
-                            Math.Abs(s.Entry - s.StopLoss), s.Reason ?? "LIVE_SIGNAL_FALLBACK"))
-                        n++;
-                }
-                catch (Exception ex)
-                {
-                    _log.LogDebug(ex, "[DEMO-AUTO] fallback {sym}", s.Symbol);
-                }
-            }
-        }
-        if (n > 0)
-            _log.LogInformation("[DEMO-AUTO] live_signals fallback opened {n} (approved empty/stale)", n);
-        return n;
-    }
-
-    private static decimal Size1R(LiveSigRow s, decimal available)
-    {
-        decimal entry = s.Entry;
-        decimal sl = s.StopLoss;
-        if (entry <= 0 || sl <= 0) return 0;
-        decimal slDist = Math.Abs(entry - sl);
-        if (slDist <= 0) return 0;
-        string sym = (s.Symbol ?? "").ToUpperInvariant();
-        bool major = sym is "BTCUSDT" or "ETHUSDT" or "BNBUSDT" or "SOLUSDT"
-                     || sym.StartsWith("BTC") || sym.StartsWith("ETH");
-        decimal riskFrac = major ? 0.0075m : 0.0060m;
-        decimal budget = available * riskFrac;
-        decimal hardCap = major
-            ? Math.Min(150m, Math.Max(40m, available * 0.012m))
-            : Math.Min(55m, Math.Max(18m, available * 0.0075m));
-        if (budget > hardCap) budget = hardCap;
-        decimal qty = budget / slDist;
-        // min notional ~$5
-        if (qty * entry < 5m && entry > 0)
-            qty = 5m / entry;
-        if (qty * slDist > budget * 2.5m)
-            return 0;
-        return Math.Round(qty, 6);
     }
 
     private bool TryOpen(
@@ -325,17 +238,5 @@ public sealed class DemoAutoTradeService : BackgroundService
             File.Move(tmp, _seenFilePath, overwrite: true);
         }
         catch { }
-    }
-
-    private sealed class LiveSigRow
-    {
-        public string Symbol { get; set; } = "";
-        public string Side { get; set; } = "";
-        public DateTime Time { get; set; }
-        public decimal Entry { get; set; }
-        public decimal StopLoss { get; set; }
-        public List<decimal>? TakeProfits { get; set; }
-        public decimal Confidence { get; set; }
-        public string? Reason { get; set; }
     }
 }
