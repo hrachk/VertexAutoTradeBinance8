@@ -492,27 +492,15 @@ namespace VertexAutoTradeBinance8
             // Подключаем RealtimeMomentumDetector к WS
             _marketDataFacade.SetMomentumDetector(_momentum);
 
-            // При обнаружении импульса — немедленно запускаем анализ символа
-            _momentum.MomentumDetected += async (symbol, sig) =>
+            // Impulse is context only. It is not an entry.
+            // Demo and Live both open from the strategy channel (ApprovedEntry),
+            // never from this momentum hook. The old call landed in
+            // ProcessSymbolWithUniverseSide → NOT_IN_ACTIVE_LONG and placed nothing.
+            _momentum.MomentumDetected += (symbol, sig) =>
             {
-                try
-                {
-                    _logger.LogInformation(
-                        "[MOMENTUM→STRATEGY] {symbol} {dir} strength={str:F2}×ATR — triggering immediate analysis",
-                        symbol, sig.IsLong ? "LONG" : "SHORT", sig.Strength);
-
-                    var tf = KlineInterval.FiveMinutes;
-                    var ctx = await _marketContext.GetContextAsync(symbol, CancellationToken.None);
-
-                    // Запускаем анализ только для стороны импульса
-                    var side = sig.IsLong ? SignalSide.Buy : SignalSide.Sell;
-                    if (ctx.Allows(side, 0m))
-                        await ProcessSymbolWithUniverseSide(symbol, tf, side, CancellationToken.None);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[MOMENTUM→STRATEGY] Error processing {symbol}", symbol);
-                }
+                _logger.LogDebug(
+                    "[MOMENTUM] {symbol} {dir} strength={str:F2}×ATR — not an entry",
+                    symbol, sig.IsLong ? "LONG" : "SHORT", sig.Strength);
             };
 
             // Подписываем FundingRateService на активные символы
@@ -708,10 +696,7 @@ namespace VertexAutoTradeBinance8
                     _currentSymbol = symbol;
 
                     var selectedTf = await ResolveTimeframeSafeAsync(symbol, ct);  // можно для аналитики/логов
-                    var tradeTf = KlineInterval.FiveMinutes; // жестко   // либо маппинг из _options.TimeframeMinutes -> KlineInterval
-
-
-                    var ctx = await _marketContext.GetContextAsync(symbol, ct);
+                    var tradeTf = KlineInterval.FiveMinutes;
 
                     var state = _engineStateBuilder.Build(
                         symbol: symbol,
@@ -729,11 +714,9 @@ namespace VertexAutoTradeBinance8
 
                     _engineStateSnapshot.Save(state);
 
-                    if (ctx.Allows(SignalSide.Buy, 0m))
-                        await ProcessSymbolWithUniverseSide(symbol, tradeTf, SignalSide.Buy, ct);
-
-                    if (ctx.Allows(SignalSide.Sell, 0m))
-                        await ProcessSymbolWithUniverseSide(symbol, tradeTf, SignalSide.Sell, ct);
+                    // Entries are not decided here. ProcessSymbol is disabled and
+                    // UNIVERSE_SIDE only logged NOT_IN_ACTIVE_*. Strategy → ApprovedEntry
+                    // is the single path for Demo paper and Live orders.
 
                     ConsoleSymbolTableFormatter.UpdateTf(symbol, tradeTf, $"TF={tradeTf} (sel={selectedTf})", "...");
 
@@ -1605,16 +1588,24 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
-            // Live path may use smaller qty if live equity is lower than demo
-            decimal qtyLive = qty;
-            if (liveBalance > 0 && demoBalance > 0 && liveBalance < demoBalance * 0.98m)
+            // Same signal for both books. Paper qty is sized on demo equity,
+            // live qty on the futures wallet. Levels (entry/SL/TP) stay identical.
+            decimal qtyLive = 0m;
+            if (liveBalance > 0)
             {
-                var q2 = _risk.GetPropDeskQtyFinal(signal, liveBalance, step, minQty, riskMult, trading, dualLev);
-                if (q2 > 0) qtyLive = q2;
-            }
-            else if (liveBalance <= 0)
-            {
-                qtyLive = 0; // force DEMO-ONLY execution below
+                if (demoBalance > 0 && liveBalance < demoBalance * 0.98m)
+                {
+                    var q2 = _risk.GetPropDeskQtyFinal(signal, liveBalance, step, minQty, riskMult, trading, dualLev);
+                    if (q2 > 0)
+                        qtyLive = q2;
+                    else if (demoBalance > 0 && step > 0)
+                    {
+                        var scaled = Math.Floor((qty * (liveBalance / demoBalance)) / step) * step;
+                        if (scaled >= minQty) qtyLive = scaled;
+                    }
+                }
+                else
+                    qtyLive = qty;
             }
             // =====================================================
             // 7) SL / TP — CORE keeps signal levels (1:1 with DEMO)
@@ -1703,7 +1694,64 @@ namespace VertexAutoTradeBinance8
                 _logger.LogWarning(ex1m, "[PROC] 1m confirm error {sym} — soft pass", symbol);
             }
 
-            // 8b) Publish approved entry for Demo (RiskManager qty + all filters passed)
+            // One decision, two books.
+            // Live wallet present → real order first. Demo paper is published only
+            // after that order is accepted, so paper cannot open a trade the
+            // exchange refused. No live wallet → paper only, and we do not send
+            // a demo-sized order and then ignore the result.
+            _exchangeRouter.LogRouting(signal);
+            bool wantBinance = _exchangeRouter.ShouldExecuteOnBinance();
+            bool wantBybit   = _exchangeRouter.ShouldExecuteOnBybit();
+            bool liveVenue = (wantBinance || wantBybit) && liveBalance > 0;
+
+            if (liveVenue && qtyLive <= 0)
+            {
+                await RejectAsync(signal, symbol, tf, "RISK",
+                    $"QTY_LIVE_ZERO live={liveBalance:F2} demoQty={qty}", ct);
+                return;
+            }
+
+            OrderResult? binanceResult = null;
+            OrderResult? bybitResult = null;
+
+            if (liveVenue && wantBinance)
+            {
+                binanceResult = await _executor.ExecuteAsync(signal, qtyLive, ct, leverage);
+                if (!binanceResult.Success)
+                    _logger.LogWarning("[EXEC] Binance failed {sym}: {err}", symbol, binanceResult.Error);
+            }
+
+            if (liveVenue && wantBybit)
+            {
+                try
+                {
+                    bybitResult = await _bybitExecutor.ExecuteAsync(signal, qtyLive, leverage, ct);
+                    if (!bybitResult.Success)
+                        _logger.LogWarning("[EXEC] Bybit failed {sym}: {err}", symbol, bybitResult.Error);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[EXEC] Bybit exception {sym}", symbol);
+                    bybitResult = new OrderResult { Success = false, Error = ex.Message };
+                }
+            }
+
+            bool liveOk = !liveVenue ||
+                (wantBinance && binanceResult?.Success == true) ||
+                (wantBybit && bybitResult?.Success == true);
+
+            if (liveVenue && !liveOk)
+            {
+                var err = string.Join(" | ",
+                    new[]
+                    {
+                        wantBinance ? $"Binance:{binanceResult?.Error}" : null,
+                        wantBybit ? $"Bybit:{bybitResult?.Error}" : null
+                    }.Where(x => x != null));
+                await RejectAsync(signal, symbol, tf, "EXEC", "EXECUTION_FAILED", ct, extra: err);
+                return;
+            }
+
             try
             {
                 decimal riskPx = signal.StopLoss > 0
@@ -1726,8 +1774,6 @@ namespace VertexAutoTradeBinance8
                     SizeMultiplier = signal.SizeMultiplier,
                     InitialRiskPrice = riskPx
                 });
-                _tradeJournal?.LogSignal(symbol, "PROC", "APPROVED",
-                    $"qty={qty} lev={leverage} src=LivePipe");
             }
             catch (Exception exPub)
             {
@@ -1736,80 +1782,23 @@ namespace VertexAutoTradeBinance8
 
             _dataDbFeed?.NotifyExecution(signal.Symbol);
 
-            // ── Multi-exchange (phase-2): Binance and/or Bybit ──────────
-            _exchangeRouter.LogRouting(signal);
-            bool wantBinance = _exchangeRouter.ShouldExecuteOnBinance();
-            bool wantBybit   = _exchangeRouter.ShouldExecuteOnBybit();
-
-            OrderResult? binanceResult = null;
-            OrderResult? bybitResult = null;
-
-            if (wantBinance)
-            {
-                binanceResult = await _executor.ExecuteAsync(signal, qtyLive > 0 ? qtyLive : qty, ct, leverage);
-                if (!binanceResult.Success)
-                    _logger.LogWarning("[EXEC] Binance failed {sym}: {err}", symbol, binanceResult.Error);
-            }
-
-            if (wantBybit)
-            {
-                try
-                {
-                    bybitResult = await _bybitExecutor.ExecuteAsync(signal, qtyLive > 0 ? qtyLive : qty, leverage, ct);
-                    if (!bybitResult.Success)
-                        _logger.LogWarning("[EXEC] Bybit failed {sym}: {err}", symbol, bybitResult.Error);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[EXEC] Bybit exception {sym}", symbol);
-                    bybitResult = new OrderResult { Success = false, Error = ex.Message };
-                }
-            }
-
-            bool ok =
-                (wantBinance && qtyLive > 0 && binanceResult?.Success == true)
-                || (wantBybit && qtyLive > 0 && bybitResult?.Success == true);
-
-            // Live wallet empty but Demo sized → paper only
-            if ((wantBinance || wantBybit) && qtyLive <= 0 && qty > 0)
+            if (!liveVenue)
             {
                 _logger.LogInformation(
-                    "[PROC][{symbol}] DEMO-ONLY (live balance empty, demo qty={q})",
-                    symbol, qty);
-                _tradeJournal?.LogSignal(symbol, "PROC", "EXECUTE_DEMO_ONLY", "live balance empty");
+                    "[ENTRY-SYNC] DEMO-ONLY {symbol} {side} qty={q} entry={e} sl={sl} (liveBal={bal:F2})",
+                    symbol, signal.Side, qty, signal.EntryPrice, signal.StopLoss, liveBalance);
+                _tradeJournal?.LogSignal(symbol, "PROC", "EXECUTE_DEMO_ONLY",
+                    liveBalance <= 0 ? "live balance empty" : "no exchange enabled");
                 MarkTrade(symbol);
                 TrackSymbol(symbol, keepAlive: true);
                 return;
             }
 
-            // Nothing enabled → Demo-only: entry already published to approved_entries
-            if (!wantBinance && !wantBybit)
-            {
-                _logger.LogInformation(
-                    "[PROC][{symbol}] DEMO-ONLY path (no exchange) — approved entry published",
-                    symbol);
-                _tradeJournal?.LogSignal(symbol, "PROC", "EXECUTE_DEMO_ONLY", "no exchange enabled");
-                MarkTrade(symbol);
-                TrackSymbol(symbol, keepAlive: true);
-                return;
-            }
-
-            if (!ok)
-            {
-                var err = string.Join(" | ",
-                    new[]
-                    {
-                        wantBinance ? $"Binance:{binanceResult?.Error}" : null,
-                        wantBybit ? $"Bybit:{bybitResult?.Error}" : null
-                    }.Where(x => x != null));
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "EXEC",
-                    "EXECUTION_FAILED",
-                    ct,
-                    extra: err);
-                return;
-            }
+            _logger.LogInformation(
+                "[ENTRY-SYNC] LIVE+DEMO {symbol} {side} qtyLive={ql} qtyDemo={qd} entry={e} sl={sl}",
+                symbol, signal.Side, qtyLive, qty, signal.EntryPrice, signal.StopLoss);
+            _tradeJournal?.LogSignal(symbol, "PROC", "EXECUTE_LIVE",
+                $"qtyLive={qtyLive} qtyDemo={qty} lev={leverage}");
 
             // =====================================================
             // 9) SUCCESS
@@ -1824,7 +1813,7 @@ namespace VertexAutoTradeBinance8
             ConsoleSymbolTableFormatter.UpdateTf(
                 symbol, tf,
                 "🟩 OK",
-                $"{signal.Side} qty={qty:F4}");
+                $"{signal.Side} qty={qtyLive:F4}");
         }
 
 
