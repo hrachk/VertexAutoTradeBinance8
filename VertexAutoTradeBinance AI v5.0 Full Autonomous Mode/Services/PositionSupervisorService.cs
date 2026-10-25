@@ -1011,18 +1011,62 @@ namespace VertexAutoTradeBinance8.Services
                     : Math.Round((last - stepP) / tick) * tick);
             }
 
-            decimal[] fracs = { 0.40m, 0.30m, 0.30m };
-            decimal placed = 0m;
-            int okN = 0;
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+            decimal minQty = filters.minQty > 0 ? filters.minQty : step;
 
-            for (int i = 0; i < tps.Count && i < 3; i++)
+            // Сколько полных minQty можно разместить
+            int maxLevels = (int)Math.Floor(qty / minQty);
+            if (maxLevels < 1)
             {
-                decimal q = qty * fracs[i];
-                if (i == 2) q = qty - placed;
-                q = Math.Floor(q / step) * step;
-                if (q < filters.minQty) continue;
-                placed += q;
+                _logger.LogWarning("[SUPERVISOR][{symbol}] qty={qty} < minQty={min} — TP ladder skipped", symbol, qty, minQty);
+                return false;
+            }
+
+            // Выбираем сколько уровней реально ставим (3 → 2 → 1)
+            int levels = Math.Min(3, Math.Min(tps.Count, maxLevels));
+            if (levels < 1) levels = 1;
+
+            // Распределение: 40/30/30, но с учётом minQty и remainder на последний
+            decimal[] targetFracs = levels switch
+            {
+                1 => new[] { 1.0m },
+                2 => new[] { 0.55m, 0.45m },
+                _ => new[] { 0.40m, 0.30m, 0.30m }
+            };
+
+            var qtys = new List<decimal>();
+            decimal remaining = qty;
+            for (int i = 0; i < levels; i++)
+            {
+                decimal q;
+                if (i == levels - 1)
+                {
+                    q = Math.Floor(remaining / step) * step;
+                }
+                else
+                {
+                    q = Math.Floor((qty * targetFracs[i]) / step) * step;
+                    if (q < minQty) q = minQty;
+                    if (q > remaining - minQty * (levels - i - 1))
+                        q = Math.Floor((remaining - minQty * (levels - i - 1)) / step) * step;
+                }
+                if (q < minQty) q = 0;
+                qtys.Add(q);
+                remaining -= q;
+            }
+
+            // Если после распределения что-то осталось — добавить к последнему
+            if (remaining > 0 && qtys.Count > 0)
+            {
+                var last = qtys[^1] + Math.Floor(remaining / step) * step;
+                qtys[^1] = last;
+            }
+
+            int okN = 0;
+            for (int i = 0; i < qtys.Count; i++)
+            {
+                decimal q = qtys[i];
+                if (q < minQty) continue;
 
                 try
                 {
@@ -1040,8 +1084,8 @@ namespace VertexAutoTradeBinance8.Services
                     {
                         okN++;
                         _logger.LogInformation(
-                            "[SUPERVISOR][{symbol}] TP{n} OK trigger={tp} qty={q}",
-                            symbol, i + 1, tps[i], q);
+                            "[SUPERVISOR][{symbol}] TP{n}/{lvl} OK trigger={tp} qty={q} (levels={levels})",
+                            symbol, i + 1, levels, tps[i], q, levels);
                     }
                     else
                         _logger.LogError("[SUPERVISOR][{symbol}] TP{n} FAIL: {err}", symbol, i + 1, res.Error);
@@ -1051,6 +1095,10 @@ namespace VertexAutoTradeBinance8.Services
                     _logger.LogError(ex, "[SUPERVISOR][{symbol}] TP{n} EX", symbol, i + 1);
                 }
             }
+
+            if (okN == 0)
+                _logger.LogWarning("[SUPERVISOR][{symbol}] no TP placed (qty={qty}, minQty={min}, levels={lvl})", symbol, qty, minQty, levels);
+
             return okN > 0;
         }
 
