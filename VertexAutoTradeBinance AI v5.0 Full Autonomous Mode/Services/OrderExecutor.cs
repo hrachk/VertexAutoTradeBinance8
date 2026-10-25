@@ -1325,35 +1325,28 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
 
             bool useMarket = breakoutMarket || reclaimMarket || emergencyMarket;
 
-            // =====================================================
-            // СКАЛЬПИНГ: 1M/5M — всегда Market
-            // Limit на быстрых таймфреймах не успевает заполниться
-            // =====================================================
+            // 1m/5m used to force a market chase on every signal, including
+            // a pullback whose stop was sized off the planned close.
+            // Structured setups stay limit. Market remains for a real impulse.
             var signalTf = signal.Timeframe ?? "";
-            if (signalTf is "OneMinute" or "FiveMinutes" or "1m" or "5m")
+            bool structured =
+                (signal.Reason ?? "").Contains("CORE", StringComparison.OrdinalIgnoreCase)
+                || (signal.Reason ?? "").Contains("TREND", StringComparison.OrdinalIgnoreCase)
+                || (signal.Reason ?? "").Contains("MEANREV", StringComparison.OrdinalIgnoreCase)
+                || (signal.Reason ?? "").Contains("RANGE", StringComparison.OrdinalIgnoreCase)
+                || (signal.Reason ?? "").Contains("PULLBACK", StringComparison.OrdinalIgnoreCase)
+                || (signal.Setup ?? "").Contains("CORE", StringComparison.OrdinalIgnoreCase);
+
+            if (!structured && signalTf is "OneMinute" or "FiveMinutes" or "1m" or "5m")
                 useMarket = true;
 
-            // Momentum паттерны → Market (уже на движении)
             if (signal.Reason is "IMPULSE_CONTINUATION" or "EARLY_TREND_JOIN")
                 useMarket = true;
 
-            // Range паттерны → Limit (цена у границы канала)
             if (signal.Reason is "RANGE_BOUND_LONG" or "RANGE_BOUND_SHORT")
                 useMarket = false;
 
-            // ── PHASE 2: Pullback signals → Limit Order ──────────────
-            // Market orders at c0.Close buy the TOP of the rejection
-            // candle. Limit order at EntryPrice (= c0.Close) with the
-            // aggressive limit logic below gives us fill at or BELOW
-            // close — a better entry that improves RR by 0.3-0.5 points.
-            // The existing aggrLimitPrice calc already handles bid/ask
-            // offset for Limit, and there's a Market fallback at L1700
-            // if the Limit doesn't fill within 10s.
-            if (signal.Reason != null && signal.Reason.Contains("PULLBACK_EMA21"))
-                useMarket = false;
-
-            // MeanReversion → also Limit (entering at extremes, no chase)
-            if (signal.Reason != null && signal.Reason.Contains("MEANREV"))
+            if (structured)
                 useMarket = false;
 
             FuturesOrderType entryType = useMarket ? FuturesOrderType.Market : FuturesOrderType.Limit;
@@ -2755,24 +2748,23 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                 decimal slPrice = tick > 0 ? Math.Round(signal.StopLoss / tick) * tick : signal.StopLoss;
                 var slSide = signal.Side == SignalSide.Buy ? OrderSide.Sell : OrderSide.Buy;
 
-                // Валидация: SL должен быть НИЖЕ mark для лонга, ВЫШЕ для шорта
-                // (opposite direction from the TP validation above)
+                decimal slQty = Math.Floor(quantity / step) * step;
+                slQty = Math.Max(slQty, filters.minQty);
+
                 bool slValid = markPrice <= 0 ||
                     (isLong && slPrice < markPrice) ||
                     (!isLong && slPrice > markPrice);
 
                 if (!slValid)
                 {
-                    slPrice = isLong
-                        ? markPrice - tick * 10
-                        : markPrice + tick * 10;
-                    _logger.LogWarning(
-                        "[SL_ADJUSTED][{symbol}] SL invalid vs mark={mark} → adjusted to {sl}",
-                        signal.Symbol, markPrice, slPrice);
+                    // A 10-tick "fix" is not a stop. It either tags out instantly
+                    // or, if the place fails, leaves the position naked.
+                    _logger.LogError(
+                        "[SL_INVALID][{symbol}] SL {sl} is through mark {mark}. Flattening the fill.",
+                        signal.Symbol, slPrice, markPrice);
+                    await FlattenUnprotectedAsync(client, signal, posSide, isHedge, slQty, ct);
+                    return;
                 }
-
-                decimal slQty = Math.Floor(quantity / step) * step;
-                slQty = Math.Max(slQty, filters.minQty);
 
                 _logger.LogInformation(
                     "[SL_PLACE][{symbol}] price={sl} qty={qty} mark={mark} entry={entry}",
@@ -2783,15 +2775,51 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                         "STOP_MARKET", slPrice, slQty, ct, "SL"))
                 {
                     _logger.LogError(
-                        "[SL_FAIL][{symbol}] Algo+legacy failed — Supervisor will place emergency SL",
+                        "[SL_FAIL][{symbol}] stop was not accepted. Flattening so the fill cannot run without a stop.",
                         signal.Symbol);
+                    await FlattenUnprotectedAsync(client, signal, posSide, isHedge, slQty, ct);
                 }
             }
             else
             {
-                _logger.LogWarning(
-                    "[SL_MISSING][{symbol}] signal.StopLoss is 0/unset — no Stop Loss placed at entry; Supervisor will place an emergency one",
+                _logger.LogError(
+                    "[SL_MISSING][{symbol}] no stop on the signal. Flattening the fill.",
                     signal.Symbol);
+                await FlattenUnprotectedAsync(client, signal, posSide, isHedge, quantity, ct);
+            }
+        }
+
+        /// <summary>
+        /// Reduce-only market close. Used only when a fill has no valid stop.
+        /// A position without a stop is how a single error drains the wallet.
+        /// </summary>
+        private async Task FlattenUnprotectedAsync(
+            BinanceRestClient client,
+            TradeSignal signal,
+            PositionSide posSide,
+            bool isHedge,
+            decimal qty,
+            CancellationToken ct)
+        {
+            if (qty <= 0 || string.IsNullOrWhiteSpace(signal.Symbol)) return;
+            var side = signal.Side == SignalSide.Buy ? OrderSide.Sell : OrderSide.Buy;
+            try
+            {
+                var res = await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol: signal.Symbol,
+                    side: side,
+                    type: FuturesOrderType.Market,
+                    quantity: qty,
+                    positionSide: isHedge ? posSide : null,
+                    reduceOnly: isHedge ? null : true,
+                    ct: ct));
+                _logger.LogError(
+                    "[FLATTEN][{symbol}] unprotected close ok={ok} qty={qty} err={err}",
+                    signal.Symbol, res.Success, qty, res.Error?.Message);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[FLATTEN][{symbol}] close failed — position may be unprotected", signal.Symbol);
             }
         }
 

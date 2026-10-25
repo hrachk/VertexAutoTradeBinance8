@@ -992,10 +992,10 @@ namespace VertexAutoTradeBinance8
                 }
                 catch (Exception exDual)
                 {
-                    // Fail-closed: do not execute without dual-mode capital check
-                    _logger.LogWarning(exDual, "[DUAL-MODE] evaluate failed — fail-CLOSED for {sym}", symbol);
-                    await RejectAsync(signal, symbol, tf, "DUAL", "DUAL_EVAL_ERROR", ct);
-                    return;
+                    // A failed classifier is not a reason to delete the setup.
+                    // Fail-closed here zeroed both books whenever the rank call threw.
+                    _logger.LogWarning(exDual, "[DUAL-MODE] evaluate failed — size×0.60, not a veto {sym}", symbol);
+                    signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.60m, 0.20m, 1m);
                 }
             }
 
@@ -1165,12 +1165,20 @@ namespace VertexAutoTradeBinance8
             var riskMult = _riskScaler.Scale(ai.Grade);
             if (riskMult <= 0)
             {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "RISK",
-                    "RISK_MULT_ZERO",
-                    ct);
-                return;
+                if (VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy.IsLiveExecutable(signal.Setup ?? signal.Reason))
+                {
+                    riskMult = 0.50m;
+                    _logger.LogInformation("[PROC][{symbol}] risk scaler was 0 — floor 0.50 for executable setup", symbol);
+                }
+                else
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "RISK",
+                        "RISK_MULT_ZERO",
+                        ct);
+                    return;
+                }
             }
 
             // =====================================================
@@ -1644,14 +1652,16 @@ namespace VertexAutoTradeBinance8
 
 
             // Live price may replace the planned close only when SL side, risk band and TP1 R:R still hold.
+            // A drift reject used to drop the whole trade. Keep the planned limit instead.
             if (_price.TryGet(symbol, out var realtimePrice) && realtimePrice > 0
                 && realtimePrice != signal.EntryPrice)
             {
                 if (!VertexAutoTradeBinance8.Strategy.EntrySanityGate.AllowPriceUpdate(
                         signal, realtimePrice, out var driftWhy))
                 {
-                    await RejectAsync(signal, symbol, tf, "ENTRY_DRIFT", driftWhy, ct);
-                    return;
+                    _logger.LogInformation(
+                        "[PROC][{symbol}] entry stays planned {px} — live {live} rejected ({why})",
+                        symbol, signal.EntryPrice, realtimePrice, driftWhy);
                 }
             }
 
@@ -1694,34 +1704,33 @@ namespace VertexAutoTradeBinance8
                 _logger.LogWarning(ex1m, "[PROC] 1m confirm error {sym} — soft pass", symbol);
             }
 
-            // One decision, two books.
-            // Live wallet present → real order first. Demo paper is published only
-            // after that order is accepted, so paper cannot open a trade the
-            // exchange refused. No live wallet → paper only, and we do not send
-            // a demo-sized order and then ignore the result.
+            // Same decision for both books. Paper is published for every setup
+            // that passed risk. Live is sent with the same levels when the
+            // wallet can size it. An exchange reject must not also delete
+            // the paper trade — that is what left both books empty.
             _exchangeRouter.LogRouting(signal);
             bool wantBinance = _exchangeRouter.ShouldExecuteOnBinance();
             bool wantBybit   = _exchangeRouter.ShouldExecuteOnBybit();
-            bool liveVenue = (wantBinance || wantBybit) && liveBalance > 0;
+            bool attemptedLive = (wantBinance || wantBybit) && liveBalance > 0 && qtyLive > 0;
 
-            if (liveVenue && qtyLive <= 0)
+            if ((wantBinance || wantBybit) && liveBalance > 0 && qtyLive <= 0)
             {
-                await RejectAsync(signal, symbol, tf, "RISK",
-                    $"QTY_LIVE_ZERO live={liveBalance:F2} demoQty={qty}", ct);
-                return;
+                _logger.LogWarning(
+                    "[PROC][{symbol}] live qty 0 with balance {bal:F2} — paper only",
+                    symbol, liveBalance);
             }
 
             OrderResult? binanceResult = null;
             OrderResult? bybitResult = null;
 
-            if (liveVenue && wantBinance)
+            if (attemptedLive && wantBinance)
             {
                 binanceResult = await _executor.ExecuteAsync(signal, qtyLive, ct, leverage);
                 if (!binanceResult.Success)
                     _logger.LogWarning("[EXEC] Binance failed {sym}: {err}", symbol, binanceResult.Error);
             }
 
-            if (liveVenue && wantBybit)
+            if (attemptedLive && wantBybit)
             {
                 try
                 {
@@ -1736,21 +1745,9 @@ namespace VertexAutoTradeBinance8
                 }
             }
 
-            bool liveOk = !liveVenue ||
-                (wantBinance && binanceResult?.Success == true) ||
-                (wantBybit && bybitResult?.Success == true);
-
-            if (liveVenue && !liveOk)
-            {
-                var err = string.Join(" | ",
-                    new[]
-                    {
-                        wantBinance ? $"Binance:{binanceResult?.Error}" : null,
-                        wantBybit ? $"Bybit:{bybitResult?.Error}" : null
-                    }.Where(x => x != null));
-                await RejectAsync(signal, symbol, tf, "EXEC", "EXECUTION_FAILED", ct, extra: err);
-                return;
-            }
+            bool liveOk = attemptedLive && (
+                (wantBinance && binanceResult?.Success == true)
+                || (wantBybit && bybitResult?.Success == true));
 
             try
             {
@@ -1782,13 +1779,29 @@ namespace VertexAutoTradeBinance8
 
             _dataDbFeed?.NotifyExecution(signal.Symbol);
 
-            if (!liveVenue)
+            if (!liveOk)
             {
-                _logger.LogInformation(
-                    "[ENTRY-SYNC] DEMO-ONLY {symbol} {side} qty={q} entry={e} sl={sl} (liveBal={bal:F2})",
-                    symbol, signal.Side, qty, signal.EntryPrice, signal.StopLoss, liveBalance);
-                _tradeJournal?.LogSignal(symbol, "PROC", "EXECUTE_DEMO_ONLY",
-                    liveBalance <= 0 ? "live balance empty" : "no exchange enabled");
+                if (attemptedLive)
+                {
+                    var err = string.Join(" | ",
+                        new[]
+                        {
+                            wantBinance ? $"Binance:{binanceResult?.Error}" : null,
+                            wantBybit ? $"Bybit:{bybitResult?.Error}" : null
+                        }.Where(x => x != null));
+                    _logger.LogWarning(
+                        "[ENTRY-SYNC] PAPER ONLY {symbol} {side} — live rejected: {err}",
+                        symbol, signal.Side, err);
+                    _tradeJournal?.LogSignal(symbol, "PROC", "EXECUTION_FAILED", err);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "[ENTRY-SYNC] DEMO-ONLY {symbol} {side} qty={q} entry={e} sl={sl} (liveBal={bal:F2})",
+                        symbol, signal.Side, qty, signal.EntryPrice, signal.StopLoss, liveBalance);
+                    _tradeJournal?.LogSignal(symbol, "PROC", "EXECUTE_DEMO_ONLY",
+                        liveBalance <= 0 ? "live balance empty" : "live qty or venue unavailable");
+                }
                 MarkTrade(symbol);
                 TrackSymbol(symbol, keepAlive: true);
                 return;

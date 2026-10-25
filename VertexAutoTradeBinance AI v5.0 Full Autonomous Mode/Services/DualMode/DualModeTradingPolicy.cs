@@ -323,8 +323,31 @@ public sealed class DualModeTradingPolicy
 
         if (mode == DualMarketMode.Trend)
         {
-            if (tier != UniverseTier.CoreMajor && tier != UniverseTier.TrendLiquid)
+            bool trendLeg = VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
+                .IsTrendLeg(signal.Setup ?? signal.Reason);
+
+            if (tier == UniverseTier.Blocked)
                 return Reject(mode, tier, $"TREND_TOP_LIQUID_ONLY ({rankInfo})");
+
+            if (tier != UniverseTier.CoreMajor && tier != UniverseTier.TrendLiquid)
+            {
+                // Empty 24h rank, or the name sits outside the top band.
+                // A setup that already passed structure is sized down, not deleted.
+                // Deleting it here is why Demo and Live both stayed flat.
+                if (trendLeg)
+                {
+                    decimal off = Math.Clamp(o.TrendSizeMult * 0.45m, 0.20m, 0.55m);
+                    if (!flowOk || !volOk)
+                        off = Math.Min(off, 0.35m);
+                    int offLev = ClampLev(o.TrendLeverageMin, Math.Min(o.TrendLeverageMax, 8), preferHigh: false);
+                    _log.LogInformation(
+                        "[DUAL-MODE] TREND off-tier {sym} tier={tier} size×{sz:F2} lev={lev} {flow}",
+                        symbol, tier, off, offLev, flow.Summarize());
+                    return new DualModeDecision(true, mode, tier, offLev, off,
+                        $"TREND_OFF_TIER {rankInfo} " + flow.Summarize(), flowOk && volOk);
+                }
+                return Reject(mode, tier, $"TREND_TOP_LIQUID_ONLY ({rankInfo})");
+            }
 
             decimal size = o.TrendSizeMult;
             var flowNote = flow.Summarize();
