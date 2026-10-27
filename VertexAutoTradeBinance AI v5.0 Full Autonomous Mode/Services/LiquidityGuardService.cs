@@ -52,6 +52,13 @@ public sealed class LiquidityGuardService
         if (klines == null || klines.Count < 30)
             return SetDanger(false, LiquidityGuardReason.None, false, "insufficient klines");
 
+        // The exchange returns the forming candle last. Its volume is a
+        // fraction of a closed bar, so volRatio stayed under 0.12 and every
+        // alt was rejected as EXTREME LOW VOLUME. Signals stayed on screen,
+        // positions never opened.
+        if (klines.Count > 31)
+            klines = klines.Take(klines.Count - 1).ToList();
+
         bool isMajor = symbol is "BTCUSDT" or "ETHUSDT";
         var last = klines[^1];
         var window = klines.Skip(Math.Max(0, klines.Count - 20)).ToList();

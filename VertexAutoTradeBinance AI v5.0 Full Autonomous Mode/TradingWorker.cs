@@ -982,8 +982,19 @@ namespace VertexAutoTradeBinance8
                         symbol, dual.Allow, dual.Mode, dual.Tier, dual.LeverageCap, dual.SizeMult, dual.FlowConfirmed, dual.Reason);
                     if (!dual.Allow)
                     {
-                        await RejectAsync(signal, symbol, tf, "DUAL", dual.Reason, ct, extra: dual.Mode.ToString());
-                        return;
+                        if (VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
+                            .IsLiveExecutable(signal.Setup ?? signal.Reason))
+                        {
+                            signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.40m, 0.15m, 1m);
+                            _logger.LogInformation(
+                                "[DUAL-MODE] {sym} not vetoed ({r}) — size×0.40",
+                                symbol, dual.Reason);
+                        }
+                        else
+                        {
+                            await RejectAsync(signal, symbol, tf, "DUAL", dual.Reason, ct, extra: dual.Mode.ToString());
+                            return;
+                        }
                     }
                     signal.Leverage = dual.LeverageCap;
                     signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * dual.SizeMult, 0.15m, 1.0m);
@@ -1037,7 +1048,9 @@ namespace VertexAutoTradeBinance8
                     || (signal.Setup ?? "").Contains("CORE_INST", StringComparison.OrdinalIgnoreCase))
                     minExec = Math.Min(minExec, 0.52m);
                 double sigConf = (double)(signal.Confidence ?? 0m); // 0..1 scale
-                if (sigConf < (double)minExec)
+                bool executable = VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
+                    .IsLiveExecutable(signal.Setup ?? signal.Reason);
+                if (sigConf < (double)minExec && !executable)
                 {
                     await RejectAsync(signal, symbol, tf, "CONF", "WATCH_ONLY",
                         ct, extra: $"conf={sigConf:F2} < minExec={minExec:F2} — shown in UI only");
@@ -1152,12 +1165,22 @@ namespace VertexAutoTradeBinance8
             var ctx = await _marketContext.GetContextAsync(symbol, ct);
             if (!ctx.Allows(signal.Side, ai.Score))
             {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "UNIVERSE_SIDE",
-                    "SIDE_NOT_ALLOWED",
-                    ct);
-                return;
+                if (VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
+                    .IsLiveExecutable(signal.Setup ?? signal.Reason))
+                {
+                    signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.70m, 0.20m, 1m);
+                    _logger.LogInformation(
+                        "[PROC][{symbol}] HTF bias disagrees — setup kept, size×0.70", symbol);
+                }
+                else
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "UNIVERSE_SIDE",
+                        "SIDE_NOT_ALLOWED",
+                        ct);
+                    return;
+                }
             }
             // =====================================================
             // 4) RISK SCALING
@@ -1322,12 +1345,23 @@ namespace VertexAutoTradeBinance8
 
             if (liq.Block)
             {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "LIQUIDITY",
-                    $"LIQUIDITY_{liq.Reason}",
-                    ct);
-                return;
+                if (VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
+                    .IsLiveExecutable(signal.Setup ?? signal.Reason))
+                {
+                    signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.50m, 0.20m, 1m);
+                    _logger.LogInformation(
+                        "[PROC][{symbol}] liquidity {r} — setup kept, size×0.50",
+                        symbol, liq.Reason);
+                }
+                else
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "LIQUIDITY",
+                        $"LIQUIDITY_{liq.Reason}",
+                        ct);
+                    return;
+                }
             }
 
             // Dynamic liquidity sizing: SOFT LOW VOLUME → cut SizeMultiplier (not full skip)
@@ -1391,13 +1425,12 @@ namespace VertexAutoTradeBinance8
 
                 if (flow.Block)
                 {
-                    await RejectAsync(
-                        signal, symbol, tf,
-                        "SMARTFLOW",
-                        flow.Reason,
-                        ct,
-                        extra: flow.Details);
-                    return;
+                    signal.SizeMultiplier = Math.Clamp(
+                        signal.SizeMultiplier * Math.Min(flow.SizeMult > 0 ? flow.SizeMult : 0.50m, 0.50m),
+                        0.20m, 1.0m);
+                    _logger.LogInformation(
+                        "[SMARTFLOW][{symbol}] {reason} — not a veto, size×{sz:F2}",
+                        symbol, flow.Reason, signal.SizeMultiplier);
                 }
 
                 if (flow.SizeMult > 0m && flow.SizeMult < 1m)
@@ -1408,27 +1441,24 @@ namespace VertexAutoTradeBinance8
                 }
 
                 // Only WIDEN stop (never tighten) — safe vs CORE 1:1 policy
-                if (flow.WiderStopLoss is decimal wsl && wsl > 0)
+                if (flow.WiderStopLoss is decimal wsl && wsl > 0 && signal.EntryPrice > 0)
                 {
-                    if (signal.Side == SignalSide.Buy && wsl < signal.StopLoss)
-                        signal.StopLoss = wsl;
-                    else if (signal.Side == SignalSide.Sell && wsl > signal.StopLoss)
-                        signal.StopLoss = wsl;
-
-                    if (signal.EntryPrice > 0)
+                    bool widen = (signal.Side == SignalSide.Buy && wsl < signal.StopLoss)
+                                 || (signal.Side == SignalSide.Sell && wsl > signal.StopLoss);
+                    if (widen)
                     {
-                        decimal rp = Math.Abs(signal.EntryPrice - signal.StopLoss) / signal.EntryPrice;
+                        decimal rp = Math.Abs(signal.EntryPrice - wsl) / signal.EntryPrice;
                         bool rangeLeg = VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
                             .IsRangeLeg(signal.Setup ?? signal.Reason);
                         decimal cap = rangeLeg
                             ? VertexAutoTradeBinance8.Strategy.EntrySanityGate.RangeMaxRiskPct
                             : VertexAutoTradeBinance8.Strategy.EntrySanityGate.MaxRiskPct;
-                        if (rp > cap)
-                        {
-                            await RejectAsync(signal, symbol, tf, "SMARTFLOW",
-                                $"SL_TOO_WIDE_AFTER_FLOW {rp:P2}", ct);
-                            return;
-                        }
+                        if (rp <= cap)
+                            signal.StopLoss = wsl;
+                        else
+                            _logger.LogInformation(
+                                "[SMARTFLOW][{symbol}] skip widen {rp:P2} > cap {cap:P1}",
+                                symbol, rp, cap);
                     }
                 }
             }
@@ -1560,9 +1590,21 @@ namespace VertexAutoTradeBinance8
                     });
                     if (!inst.Allowed)
                     {
-                        await RejectAsync(signal, symbol, tf, "INST_" + inst.RejectLayer,
-                            $"{inst.RejectCode}: {inst.Message}", ct);
-                        return;
+                        bool accountStop = inst.RejectLayer is "HardRisk" or "AntiTilt";
+                        if (!accountStop && VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
+                            .IsLiveExecutable(signal.Setup ?? signal.Reason))
+                        {
+                            signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.55m, 0.20m, 1m);
+                            _logger.LogInformation(
+                                "[INST] {sym} {layer} {code} — setup kept, size×0.55",
+                                symbol, inst.RejectLayer, inst.RejectCode);
+                        }
+                        else
+                        {
+                            await RejectAsync(signal, symbol, tf, "INST_" + inst.RejectLayer,
+                                $"{inst.RejectCode}: {inst.Message}", ct);
+                            return;
+                        }
                     }
                     if (inst.SizeMult > 0m && inst.SizeMult < 1m)
                         signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * inst.SizeMult, 0.15m, 1m);

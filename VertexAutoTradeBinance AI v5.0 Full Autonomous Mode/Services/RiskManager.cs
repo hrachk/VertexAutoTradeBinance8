@@ -306,6 +306,15 @@ namespace VertexAutoTradeBinance8.Services
                                     ProbeEntryTracker.MarkOpened(signal.Symbol);
                                     // keep going — do not return 0
                                 }
+                                else if (ExecutableStrategyPolicy.IsLiveExecutable(signal.Reason) || ExecutableStrategyPolicy.IsLiveExecutable(signal.Setup))
+                                {
+                                    decimal probe = 0.35m;
+                                    qty1R = Math.Floor(qty1R * probe / step) * step;
+                                    if (qty1R < minQty) qty1R = minQty;
+                                    _logger.LogWarning(
+                                        "[RISK-MEM] {sym} soft-skip is a size cut ×{sm:F2}, not a block ({note})",
+                                        signal.Symbol, probe, adj.Note);
+                                }
                                 else
                                 {
                                     LastRejectReason = "MEMORY_SOFT_SKIP: " + (adj.Note ?? "offline expectancy");
