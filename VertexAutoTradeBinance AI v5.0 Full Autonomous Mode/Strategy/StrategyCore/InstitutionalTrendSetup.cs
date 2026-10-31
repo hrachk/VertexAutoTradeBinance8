@@ -47,9 +47,11 @@ public static class InstitutionalTrendSetup
             return Fail("m15_thin");
 
         var h1 = ClosedBars(h1Raw, barMinutes: 60);
-        var m15 = m15Raw.OrderBy(x => x.OpenTime).ToList();
+        var m15 = ClosedBars(m15Raw, barMinutes: 15);
         if (h1.Count < 55)
             return Fail("htf_1h_thin");
+        if (m15.Count < 40)
+            return Fail("m15_thin");
 
         List<BinanceFuturesUsdtKline>? h4 = null;
         if (h4Raw != null && h4Raw.Count >= 30)
@@ -70,19 +72,15 @@ public static class InstitutionalTrendSetup
         bool lowerHighs = st1.LastSwingHigh <= st1.PrevSwingHigh * 1.005m;
         bool lowerLows = st1.LastSwingLow <= st1.PrevSwingLow * 1.005m;
 
-        // Bias is the EMA stack. A defended swing is a bonus, not a second
-        // requirement that cancels the stack. The old AND killed every
-        // pullback that had not yet printed a fresh higher-low pivot.
-        bool upTrend = ema21 >= ema50 * 0.995m
+        // Direction is the 1H EMA stack only. A dip under EMA21 is the pullback
+        // we want to buy, not a reason to flip short. The old rule did that flip
+        // whenever the synthetic swing was marked both bullish and bearish.
+        bool upTrend = ema21 > ema50
                        && px1 >= ema50 * 0.985m
-                       && px1 > st1.LastSwingLow * 1.001m
-                       && px1 >= ema21 * 0.97m
-                       && !(st1.IsBearish && px1 < ema21);
-        bool downTrend = ema21 <= ema50 * 1.005m
+                       && px1 > st1.LastSwingLow * 1.001m;
+        bool downTrend = ema21 < ema50
                          && px1 <= ema50 * 1.015m
-                         && px1 < st1.LastSwingHigh * 0.999m
-                         && px1 <= ema21 * 1.03m
-                         && !(st1.IsBullish && px1 > ema21);
+                         && px1 < st1.LastSwingHigh * 0.999m;
         if (upTrend && downTrend)
         {
             if (ema21 >= ema50) downTrend = false;
@@ -532,15 +530,19 @@ public static class InstitutionalTrendSetup
     {
         if (k == null || k.Count < 12) return null;
         int from = Math.Max(0, k.Count - 24);
-        decimal hi = k.Skip(from).Max(x => x.HighPrice);
-        decimal lo = k.Skip(from).Min(x => x.LowPrice);
+        var win = k.Skip(from).ToList();
+        decimal hi = win.Max(x => x.HighPrice);
+        decimal lo = win.Min(x => x.LowPrice);
         if (hi <= lo || lo <= 0) return null;
+        // One direction only. Equal pivots used to set IsBullish and IsBearish
+        // at the same time, so a dip in an uptrend was sold.
+        bool rising = win[^1].ClosePrice >= win[0].OpenPrice;
         return new Struct
         {
-            LastSwingHigh = hi,
-            PrevSwingHigh = hi,
-            LastSwingLow = lo,
-            PrevSwingLow = lo
+            LastSwingHigh = rising ? hi : hi * 0.997m,
+            PrevSwingHigh = rising ? hi * 0.997m : hi,
+            LastSwingLow = rising ? lo : lo * 0.997m,
+            PrevSwingLow = rising ? lo * 0.997m : lo
         };
     }
 

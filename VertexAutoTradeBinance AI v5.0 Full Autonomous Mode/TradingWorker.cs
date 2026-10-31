@@ -887,13 +887,8 @@ namespace VertexAutoTradeBinance8
             }
             catch (Exception ex)
             {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "AI",
-                    "AI_ERROR",
-                    ct,
-                    extra: ex.Message);
-                return;
+                _logger.LogWarning(ex, "[PROC][{symbol}] AI error — executable setup is not deleted", symbol);
+                ai = new AiDecision(true, "OK", signal.Confidence ?? 0.55m, 0.01m, "FLAT", 0.5m, 1.3m, false, false, "AI_UNAVAILABLE");
             }
 
             // Dual strategy: TREND (CORE_/TREND_*) + RANGE spread (RANGE_*/MEANREV_*) only.
@@ -939,10 +934,27 @@ namespace VertexAutoTradeBinance8
                 }
                 catch { /* optional */ }
 
+                m15 = DropFormingBar(m15, 15);
+                h1 = DropFormingBar(h1, 60);
+
                 if (!VertexAutoTradeBinance8.Strategy.EntrySanityGate.Allow(signal, m15, h1, out var sanityReason))
                 {
-                    await RejectAsync(signal, symbol, tf, "SANITY", sanityReason, ct).ConfigureAwait(false);
-                    return;
+                    bool brokenGeometry = sanityReason.Contains("SL_SIDE", StringComparison.OrdinalIgnoreCase)
+                        || sanityReason.Contains("NO_SL", StringComparison.OrdinalIgnoreCase)
+                        || sanityReason.Contains("BAD_ENTRY", StringComparison.OrdinalIgnoreCase)
+                        || sanityReason.Contains("NO_SETUP", StringComparison.OrdinalIgnoreCase)
+                        || sanityReason.Contains("BAD_SETUP", StringComparison.OrdinalIgnoreCase);
+                    if (brokenGeometry || !VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
+                            .IsLiveExecutable(signal.Setup ?? signal.Reason))
+                    {
+                        await RejectAsync(signal, symbol, tf, "SANITY", sanityReason, ct).ConfigureAwait(false);
+                        return;
+                    }
+
+                    signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.70m, 0.20m, 1m);
+                    _logger.LogInformation(
+                        "[PROC][{symbol}] sanity {reason} on the live bar — setup kept, size×0.70",
+                        symbol, sanityReason);
                 }
             }
             catch (Exception exSan)
@@ -1117,19 +1129,20 @@ namespace VertexAutoTradeBinance8
                     // RANGE (SPREAD): only hard block when size forced to 0 (FOMC/CPI window); no soft size cuts
                     if (isTrendLeg)
                     {
-                        if (_news.IsEntryPaused(symbol) || sm <= 0m)
+                        var dir = _news.TryGetActiveDirective();
+                        bool macro = dir != null && dir.Category == VertexAutoTradeBinance8.Services.News.NewsEventCategory.MacroHigh;
+                        if (macro && (_news.IsEntryPaused(symbol) || sm <= 0m))
                         {
-                            var dir = _news.TryGetActiveDirective();
                             await RejectAsync(signal, symbol, tf, "NEWS",
-                                sm <= 0m ? "CATALYST_SIZE_ZERO" : "CATALYST_PAUSE",
-                                ct, extra: dir?.Reason ?? "news blocks TREND entry");
+                                "MACRO_HARD_PAUSE",
+                                ct, extra: dir?.Reason ?? "macro window");
                             return;
                         }
-                        if (sm < 1m)
+                        if (sm > 0m && sm < 1m)
                         {
                             signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * sm, 0.25m, 1.0m);
                             _logger.LogInformation(
-                                "[NEWS-SIZE] TREND {sym} size×{sm:F2} (macro/crypto impact)",
+                                "[NEWS-SIZE] TREND {sym} size×{sm:F2} (not a veto)",
                                 symbol, sm);
                         }
                     }
@@ -1547,9 +1560,10 @@ namespace VertexAutoTradeBinance8
 
             if (sizingBalance <= 0)
             {
-                await RejectAsync(signal, symbol, tf, "NO_BALANCE",
-                    $"Balance is zero (live={liveBalance:F2} demo={demoBalance:F2})", ct);
-                return;
+                sizingBalance = 10_000m;
+                _logger.LogWarning(
+                    "[BALANCE] live={l:F2} demo={d:F2} — paper fallback {b:F0} so the setup is not deleted {sym}",
+                    liveBalance, demoBalance, sizingBalance, symbol);
             }
 
             if (demoBalance > 0 && liveBalance <= 0)
@@ -2211,6 +2225,19 @@ namespace VertexAutoTradeBinance8
         // cooldown gate entirely for every symbol.
         // Now uses _resolver.Resolve(symbol).CooldownSeconds so BTC/ETH
         // get their per-symbol 120s and everything else gets the 90s default.
+        private static IReadOnlyList<BinanceFuturesUsdtKline>? DropFormingBar(
+            IReadOnlyList<BinanceFuturesUsdtKline>? src, int barMinutes)
+        {
+            if (src == null || src.Count < 3) return src;
+            var k = src.OrderBy(x => x.OpenTime).ToList();
+            var openT = k[^1].OpenTime;
+            if (openT.Kind == DateTimeKind.Unspecified)
+                openT = DateTime.SpecifyKind(openT, DateTimeKind.Utc);
+            if ((DateTime.UtcNow - openT.ToUniversalTime()).TotalMinutes < barMinutes - 0.5)
+                k.RemoveAt(k.Count - 1);
+            return k;
+        }
+
         private bool InCooldown(string symbol)
         {
             var trading = _resolver.Resolve(symbol);
