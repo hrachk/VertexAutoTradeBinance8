@@ -329,6 +329,14 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
+            // Запрет усреднения / повторного входа на той же стороне
+            if (await HasOpenPositionOnSideAsync(symbol, signal.Side, ct))
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏸ POS", "Already open on side");
+                _logger.LogInformation("[TRADE][{symbol}] skip — already has open position on {side}", symbol, signal.Side);
+                return;
+            }
+
             // ------------------ 2. AI CONFIRM ------------------------
             var ai = _predict.Decide(symbol, tf, klines, signal);
             if (!ai.Allow)
@@ -513,6 +521,33 @@ namespace VertexAutoTradeBinance8
             {
                 _logger.LogWarning(ex, "[TRADE] CountOpenPositions failed — allow entry (fail-open)");
                 return 0;
+            }
+        }
+
+
+        /// <summary>
+        /// Проверяет, есть ли уже открытая позиция на этой стороне по символу.
+        /// Один вход на сторону — без усреднения.
+        /// </summary>
+        private async Task<bool> HasOpenPositionOnSideAsync(string symbol, SignalSide side, CancellationToken ct)
+        {
+            try
+            {
+                using var client = _factory.CreateRestClient();
+                var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
+                if (!res.Success || res.Data == null)
+                    return false;
+
+                var wantSide = side == SignalSide.Buy ? PositionSide.Long : PositionSide.Short;
+                return res.Data.Any(p =>
+                    p.Symbol == symbol &&
+                    (p.PositionSide == wantSide || p.PositionSide == PositionSide.Both) &&
+                    Math.Abs(p.Quantity) > 0);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[TRADE] HasOpenPositionOnSide failed for {symbol} — allow entry (fail-open)", symbol);
+                return false;
             }
         }
 

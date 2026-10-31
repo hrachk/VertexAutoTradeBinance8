@@ -408,9 +408,19 @@ namespace VertexAutoTradeBinance8.Strategy
 
             var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(interval);
 
+            // Менее спешный вход: требуем подтверждение отката
+            // - касание EMA
+            // - закрытие выше EMA
+            // - тело не микро
+            // - close достаточно далеко от low (отказ от минимума ≥ 0.25 ATR)
+            // - предыдущая свеча тоже была в зоне отката (low <= ema * 1.002)
+            bool prevTouched = prev.LowPrice <= ema * 1.002m;
+            decimal rejection = c.ClosePrice - c.LowPrice;
             bool bull = c.ClosePrice > c.OpenPrice &&
                         c.LowPrice <= ema &&
-                        c.ClosePrice > ema;
+                        c.ClosePrice > ema &&
+                        rejection >= atr * 0.25m &&
+                        prevTouched;
 
             if (bull)
             {
@@ -439,9 +449,13 @@ namespace VertexAutoTradeBinance8.Strategy
                 return s;
             }
 
+            bool prevTouchedBear = prev.HighPrice >= ema * 0.998m;
+            decimal rejectionBear = c.HighPrice - c.ClosePrice;
             bool bear = c.ClosePrice < c.OpenPrice &&
                         c.HighPrice >= ema &&
-                        c.ClosePrice < ema;
+                        c.ClosePrice < ema &&
+                        rejectionBear >= atr * 0.25m &&
+                        prevTouchedBear;
 
             if (bear)
             {
