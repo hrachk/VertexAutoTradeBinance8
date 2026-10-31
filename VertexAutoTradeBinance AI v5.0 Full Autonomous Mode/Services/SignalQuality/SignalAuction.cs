@@ -79,13 +79,27 @@ public sealed class SignalAuction
                 AuctionResult = result
             });
 
+            bool executable = VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
+                .IsLiveExecutable(s.Setup ?? s.Reason);
+
             if (q.Composite < minQ)
             {
+                if (!executable)
+                {
+                    _log.LogInformation(
+                        "  {rank}. {sym} ({side}) | CompositeScore: {sc:F1}% [{br}] -> REJECTED (Below MinQualityThreshold {min}%)",
+                        i, s.Symbol, side, q.Composite, q.Summary, minQ);
+                    Tel("BELOW_THRESHOLD");
+                    continue;
+                }
+
+                // A CORE/RANGE setup already passed structure, trigger and R:R.
+                // The 82 floor sat above every legal score (~55–70), so the
+                // signal stayed on screen and neither book ever opened.
+                s.SizeMultiplier = Math.Clamp(s.SizeMultiplier * 0.65m, 0.25m, 1.0m);
                 _log.LogInformation(
-                    "  {rank}. {sym} ({side}) | CompositeScore: {sc:F1}% [{br}] -> REJECTED (Below MinQualityThreshold {min}%)",
-                    i, s.Symbol, side, q.Composite, q.Summary, minQ);
-                Tel("BELOW_THRESHOLD");
-                continue;
+                    "  {rank}. {sym} ({side}) | CompositeScore: {sc:F1}% < {min}% — executable kept, size×{sz:F2}",
+                    i, s.Symbol, side, q.Composite, minQ, s.SizeMultiplier);
             }
 
             if (winners.Count >= availableSlots && availableSlots > 0)

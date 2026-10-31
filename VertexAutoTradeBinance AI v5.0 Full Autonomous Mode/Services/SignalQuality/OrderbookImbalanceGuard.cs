@@ -63,6 +63,19 @@ public sealed class OrderbookImbalanceGuard
 
         if (spreadPct > maxSpread)
         {
+            bool executable = VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
+                .IsLiveExecutable(signal.Setup ?? signal.Reason);
+            // 0.08% max rejected almost every alt. A real book is still tradable
+            // at a few tenths of a percent. Only a broken book is a hard skip.
+            if (executable && spreadPct <= 0.012m)
+            {
+                decimal cut = spreadPct > maxSpread * 4m ? 0.45m : 0.70m;
+                _log.LogInformation(
+                    "[OB-GUARD] {sym} spread={sp:P3} > {mx:P3} — size×{c:F2}, not a skip",
+                    signal.Symbol, spreadPct, maxSpread, cut);
+                return new OrderbookGuardResult(false, cut, spreadPct, 0m, $"SPREAD_SIZE:{spreadPct:P3}");
+            }
+
             _log.LogWarning(
                 "[OB-GUARD] REJECT {sym} spread={sp:P3} > max={mx:P3}",
                 signal.Symbol, spreadPct, maxSpread);

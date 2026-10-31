@@ -1781,9 +1781,17 @@ namespace VertexAutoTradeBinance8
 
             if (attemptedLive && wantBinance)
             {
-                binanceResult = await _executor.ExecuteAsync(signal, qtyLive, ct, leverage);
-                if (!binanceResult.Success)
-                    _logger.LogWarning("[EXEC] Binance failed {sym}: {err}", symbol, binanceResult.Error);
+                try
+                {
+                    binanceResult = await _executor.ExecuteAsync(signal, qtyLive, ct, leverage);
+                    if (!binanceResult.Success)
+                        _logger.LogWarning("[EXEC] Binance failed {sym}: {err}", symbol, binanceResult.Error);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[EXEC] Binance exception {sym} — paper still publishes", symbol);
+                    binanceResult = new OrderResult { Success = false, Error = ex.Message };
+                }
             }
 
             if (attemptedLive && wantBybit)
