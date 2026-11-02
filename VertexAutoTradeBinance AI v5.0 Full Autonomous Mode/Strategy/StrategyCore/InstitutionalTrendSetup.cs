@@ -7,9 +7,11 @@ namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
 /// Institutional TREND setup v3 — coherent pullback, not contradictory filters.
 ///
 /// Hierarchy:
-///   4H = permission (hard-block alts only when structure AND EMA disagree)
-///   1H = bias (EMA stack + higher-low / lower-high) and swing invalidation
-///  15m = trigger only (EMA21 touch + reclaim inside the last 4 closed bars)
+///   4H close must still be on the trade side of EMA21.
+///   1H direction is EMA21 vs EMA50, close vs EMA21, and the slope.
+///   A bearish swing (lower high and lower low) cancels a long even
+///   while EMA21 is still above EMA50 — that lag was the inverted entry.
+///  15m stack must agree, and the signal bar must close back through EMA21.
 ///
 /// Location is a retrace of the last 1H impulse (about 15–72%), NOT "price must
 /// sit in the bottom 42% of the swing" while also requiring an uptrend.
@@ -57,30 +59,31 @@ public static class InstitutionalTrendSetup
         if (h4Raw != null && h4Raw.Count >= 30)
             h4 = ClosedBars(h4Raw, barMinutes: 240);
 
-        var st1 = ReadStructure(h1) ?? SyntheticSwing(h1);
-        if (st1 == null)
-            return Fail("no_1h_structure");
+        var st1 = ReadStructure(h1);
 
         var c1 = h1.Select(x => x.ClosePrice).ToList();
         var e21 = Ema(c1, 21);
         var e50 = Ema(c1, 50);
         int i1 = c1.Count - 1;
         decimal px1 = c1[i1], ema21 = e21[i1], ema50 = e50[i1];
+        decimal ema21Prev = e21[Math.Max(0, i1 - 3)];
 
-        bool higherLows = st1.LastSwingLow >= st1.PrevSwingLow * 0.995m;
-        bool higherHighs = st1.LastSwingHigh >= st1.PrevSwingHigh * 0.995m;
-        bool lowerHighs = st1.LastSwingHigh <= st1.PrevSwingHigh * 1.005m;
-        bool lowerLows = st1.LastSwingLow <= st1.PrevSwingLow * 1.005m;
+        // EMA21>EMA50 alone is late. After a top the average stays "up"
+        // while price is already falling, and the old rule bought that fall.
+        // A long needs the close still above EMA21 and a rising average.
+        // A confirmed lower-high + lower-low cancels the long even if the
+        // average has not crossed yet — that lag is the inverted signal.
+        bool emaLong = ema21 > ema50 && px1 > ema21 && ema21 > ema21Prev;
+        bool emaShort = ema21 < ema50 && px1 < ema21 && ema21 < ema21Prev;
+        bool structBear = st1 != null && st1.IsBearish && !st1.IsBullish;
+        bool structBull = st1 != null && st1.IsBullish && !st1.IsBearish;
+        if (emaLong && structBear)
+            return Fail("ema_lag_downtrend");
+        if (emaShort && structBull)
+            return Fail("ema_lag_uptrend");
 
-        // Direction is the 1H EMA stack only. A dip under EMA21 is the pullback
-        // we want to buy, not a reason to flip short. The old rule did that flip
-        // whenever the synthetic swing was marked both bullish and bearish.
-        bool upTrend = ema21 > ema50
-                       && px1 >= ema50 * 0.985m
-                       && px1 > st1.LastSwingLow * 1.001m;
-        bool downTrend = ema21 < ema50
-                         && px1 <= ema50 * 1.015m
-                         && px1 < st1.LastSwingHigh * 0.999m;
+        bool upTrend = emaLong && !structBear;
+        bool downTrend = emaShort && !structBull;
         if (upTrend && downTrend)
         {
             if (ema21 >= ema50) downTrend = false;
@@ -89,6 +92,10 @@ public static class InstitutionalTrendSetup
         if (!upTrend && !downTrend)
             return Fail("no_clear_1h_bias");
 
+        bool higherLows = st1 != null && st1.LastSwingLow >= st1.PrevSwingLow * 0.995m;
+        bool higherHighs = st1 != null && st1.LastSwingHigh >= st1.PrevSwingHigh * 0.995m;
+        bool lowerHighs = st1 != null && st1.LastSwingHigh <= st1.PrevSwingHigh * 1.005m;
+        bool lowerLows = st1 != null && st1.LastSwingLow <= st1.PrevSwingLow * 1.005m;
         bool fullStructure = upTrend ? (higherHighs && higherLows) : (lowerHighs && lowerLows);
 
         if (btcBias01.HasValue && !IsMajor(symbol))
@@ -99,13 +106,23 @@ public static class InstitutionalTrendSetup
                 return Fail("btc_against_short");
         }
 
-        // Pullbacks are quiet. A 0.55 floor still rejected the exact bars we want.
         decimal volR = VolRatio(h1, 8, 20);
         if (volR < 0.40m)
             return Fail($"dead_1h_volume:{volR:F2}");
 
-        decimal swingHi = st1.LastSwingHigh;
-        decimal swingLo = st1.LastSwingLow;
+        decimal swingHi;
+        decimal swingLo;
+        if (st1 != null)
+        {
+            swingHi = st1.LastSwingHigh;
+            swingLo = st1.LastSwingLow;
+        }
+        else
+        {
+            var w = h1.TakeLast(16).ToList();
+            swingHi = w.Max(x => x.HighPrice);
+            swingLo = w.Min(x => x.LowPrice);
+        }
         if (swingHi <= swingLo || swingLo <= 0)
             return Fail("bad_swing_range");
         decimal swingSpan = swingHi - swingLo;
@@ -123,6 +140,27 @@ public static class InstitutionalTrendSetup
         decimal close = bar.ClosePrice;
         if (close <= 0)
             return Fail("bad_price");
+
+        // 15m stack against the 1H label means the execution trend already
+        // flipped. Buying that bounce is how a "long" becomes a short.
+        if (upTrend && eF[i] < eS[i])
+            return Fail("m15_stack_against_long");
+        if (downTrend && eF[i] > eS[i])
+            return Fail("m15_stack_against_short");
+
+        if (h4 != null && h4.Count >= 30)
+        {
+            var c4 = h4.Select(x => x.ClosePrice).ToList();
+            var e4 = Ema(c4, 21);
+            decimal px4 = c4[^1], ema4 = e4[^1];
+            if (ema4 > 0)
+            {
+                if (upTrend && px4 < ema4 * 0.997m)
+                    return Fail("h4_below_ema");
+                if (downTrend && px4 > ema4 * 1.003m)
+                    return Fail("h4_above_ema");
+            }
+        }
 
         decimal posInSwing = (close - swingLo) / swingSpan;
         decimal retrace = upTrend ? 1m - posInSwing : posInSwing;
@@ -278,12 +316,16 @@ public static class InstitutionalTrendSetup
         }
 
         var cur = m15[i];
-        // Reclaim is "close is back on the trend side of EMA21", not
-        // "this exact candle is green". A flat hold after the touch is a trigger.
-        bool reclaim = forLong
-            ? cur.ClosePrice >= emaFast[i] - atr15 * 0.15m
-            : cur.ClosePrice <= emaFast[i] + atr15 * 0.15m;
-        return touched && (strongReject || reclaim);
+        decimal rngCur = cur.HighPrice - cur.LowPrice;
+        // Close must finish back through EMA21. A close still under the
+        // average is a breakdown, not a long, even if the wick touched it.
+        bool through = forLong
+            ? cur.ClosePrice > emaFast[i]
+            : cur.ClosePrice < emaFast[i];
+        bool wonBar = rngCur <= 0 || (forLong
+            ? (cur.ClosePrice - cur.LowPrice) >= rngCur * 0.45m && cur.ClosePrice >= cur.OpenPrice
+            : (cur.HighPrice - cur.ClosePrice) >= rngCur * 0.45m && cur.ClosePrice <= cur.OpenPrice);
+        return touched && through && (strongReject || wonBar);
     }
 
     private static bool H4Against(bool forLong, List<BinanceFuturesUsdtKline>? h4, out decimal penalty)

@@ -212,6 +212,11 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             bool shortSetup = bands.ZScore >= _opt.EntrySigma;
             if (!longSetup && !shortSetup) return null;
 
+            // A -2σ print inside a downtrend is continuation, not a long.
+            // Fading it is the trade that "signals long and the market shorts".
+            if (IsTrendAgainstFade(klines, longSetup))
+                return null;
+
             // ── GATE 3: Volume confirmation ──
             if (!ZScoreCalculator.IsVolumeSurge(klines, _opt.VolumeAvgPeriod, _opt.VolumeSurgeMultiplier))
                 return null;
@@ -341,6 +346,31 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             decimal blended = zComponent * 0.65m + Math.Max(regimeConfidence, 0.35m) * 0.35m;
             // Floor so valid sigma entries are not killed by MinExecute (0.42 RANGE)
             return Math.Clamp(Math.Max(blended, 0.45m), 0.45m, 0.95m);
+        }
+
+        /// <summary>
+        /// True when the fade is against the live 15m trend.
+        /// EMA21 on the wrong side of EMA55 and price still on that side
+        /// means the extreme is the trend, not a range to fade.
+        /// </summary>
+        private static bool IsTrendAgainstFade(IReadOnlyList<BinanceFuturesUsdtKline> k, bool wantLong)
+        {
+            if (k == null || k.Count < 60) return false;
+            var src = k.Select(x => x.ClosePrice).ToList();
+            int n = src.Count;
+            decimal ema21 = src[0], ema55 = src[0];
+            decimal a21 = 2m / 22m, a55 = 2m / 56m;
+            for (int i = 1; i < n; i++)
+            {
+                ema21 = (src[i] - ema21) * a21 + ema21;
+                ema55 = (src[i] - ema55) * a55 + ema55;
+            }
+            decimal px = src[^1];
+            if (wantLong && ema21 < ema55 && px < ema21)
+                return true;
+            if (!wantLong && ema21 > ema55 && px > ema21)
+                return true;
+            return false;
         }
 
         /// <summary>True when current ATR is expanded vs its recent average (do not fade trend ignition).</summary>
