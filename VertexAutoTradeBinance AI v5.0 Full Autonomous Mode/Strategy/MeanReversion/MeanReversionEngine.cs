@@ -226,6 +226,9 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
                 !ZScoreCalculator.HasReversalConfirmation(klines, longSetup, _opt.ReversalLookback))
                 return null;
 
+            if (FadeWickIsFalse(klines, longSetup))
+                return null;
+
             // ── GATE 5: BTC correlation guard ──
             // Skip fading a move that's really just BTC dragging the whole
             // market with it — that's not a symbol-specific "anomaly" to
@@ -370,6 +373,23 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
                 return true;
             if (!wantLong && ema21 > ema55 && px > ema21)
                 return true;
+            return false;
+        }
+
+        /// <summary>
+        /// A green candle at the low with a dominant upper wick is not a
+        /// bounce. Same mirror for a red candle at the high with no upper wick.
+        /// </summary>
+        private static bool FadeWickIsFalse(IReadOnlyList<BinanceFuturesUsdtKline> k, bool wantLong)
+        {
+            if (k == null || k.Count < 2) return false;
+            var b = k[^1];
+            decimal rng = b.HighPrice - b.LowPrice;
+            if (rng <= 0) return false;
+            decimal upper = b.HighPrice - Math.Max(b.OpenPrice, b.ClosePrice);
+            decimal lower = Math.Min(b.OpenPrice, b.ClosePrice) - b.LowPrice;
+            if (wantLong && upper >= rng * 0.55m) return true;
+            if (!wantLong && lower >= rng * 0.55m) return true;
             return false;
         }
 

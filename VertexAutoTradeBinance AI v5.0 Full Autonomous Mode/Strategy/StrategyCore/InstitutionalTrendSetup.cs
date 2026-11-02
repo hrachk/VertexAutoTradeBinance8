@@ -162,6 +162,9 @@ public static class InstitutionalTrendSetup
             }
         }
 
+        if (!TrendConfirmed(h1, e21, e50, upTrend, out var trendWhy))
+            return Fail(trendWhy);
+
         decimal posInSwing = (close - swingLo) / swingSpan;
         decimal retrace = upTrend ? 1m - posInSwing : posInSwing;
 
@@ -175,6 +178,9 @@ public static class InstitutionalTrendSetup
 
         if (!ImpulseOk(m15, upTrend, atr15, out var imp))
             return Fail(imp);
+
+        if (FalseSignal(m15, eF, atr15, upTrend, out var fake))
+            return Fail(fake);
 
         if (upTrend)
         {
@@ -326,6 +332,137 @@ public static class InstitutionalTrendSetup
             ? (cur.ClosePrice - cur.LowPrice) >= rngCur * 0.45m && cur.ClosePrice >= cur.OpenPrice
             : (cur.HighPrice - cur.ClosePrice) >= rngCur * 0.45m && cur.ClosePrice <= cur.OpenPrice);
         return touched && through && (strongReject || wonBar);
+    }
+
+    /// <summary>
+    /// The label "uptrend" is not enough. Three of the last four 1H closes
+    /// must sit on the trade side of EMA21, EMA50 must point the same way,
+    /// and the path must actually be directional (not a chop above the average).
+    /// </summary>
+    private static bool TrendConfirmed(
+        List<BinanceFuturesUsdtKline> h1,
+        List<decimal> ema21,
+        List<decimal> ema50,
+        bool forLong,
+        out string why)
+    {
+        why = "";
+        int n = h1.Count;
+        if (n < 20 || ema21.Count != n || ema50.Count != n)
+        {
+            why = "trend_thin";
+            return false;
+        }
+
+        int onSide = 0;
+        for (int k = 0; k < 4; k++)
+        {
+            int idx = n - 1 - k;
+            bool ok = forLong
+                ? h1[idx].ClosePrice > ema21[idx]
+                : h1[idx].ClosePrice < ema21[idx];
+            if (ok) onSide++;
+        }
+        if (onSide < 3)
+        {
+            why = forLong ? "trend_unconfirmed_long" : "trend_unconfirmed_short";
+            return false;
+        }
+
+        int back = n - 6;
+        bool slowAgrees = forLong
+            ? ema50[n - 1] >= ema50[back]
+            : ema50[n - 1] <= ema50[back];
+        if (!slowAgrees)
+        {
+            why = forLong ? "ema50_still_falling" : "ema50_still_rising";
+            return false;
+        }
+
+        decimal er = Efficiency(h1, 14);
+        if (er < 0.18m)
+        {
+            why = $"chop_er:{er:F2}";
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Bars that look like a trigger and are not. A dominant wick against
+    /// the trade, a climax close in the wrong half, or a one-tick nick
+    /// back across EMA21 after a real break.
+    /// </summary>
+    private static bool FalseSignal(
+        List<BinanceFuturesUsdtKline> m15,
+        List<decimal> emaFast,
+        decimal atr,
+        bool forLong,
+        out string why)
+    {
+        why = "";
+        int i = m15.Count - 1;
+        if (i < 3 || atr <= 0 || emaFast.Count != m15.Count) return false;
+        var b = m15[i];
+        decimal rng = b.HighPrice - b.LowPrice;
+        if (rng <= 0) return false;
+
+        decimal upperWick = b.HighPrice - Math.Max(b.OpenPrice, b.ClosePrice);
+        decimal lowerWick = Math.Min(b.OpenPrice, b.ClosePrice) - b.LowPrice;
+        if (forLong && upperWick >= rng * 0.55m && upperWick > atr * 0.35m)
+        {
+            why = "false_long_upper_wick";
+            return true;
+        }
+        if (!forLong && lowerWick >= rng * 0.55m && lowerWick > atr * 0.35m)
+        {
+            why = "false_short_lower_wick";
+            return true;
+        }
+
+        if (rng >= atr * 2.2m)
+        {
+            decimal pos = (b.ClosePrice - b.LowPrice) / rng;
+            if (forLong && pos < 0.55m)
+            {
+                why = "false_long_climax";
+                return true;
+            }
+            if (!forLong && pos > 0.45m)
+            {
+                why = "false_short_climax";
+                return true;
+            }
+        }
+
+        var prev = m15[i - 1];
+        if (forLong
+            && prev.ClosePrice < emaFast[i - 1] - atr * 0.35m
+            && b.ClosePrice < emaFast[i] + atr * 0.12m)
+        {
+            why = "false_long_nick";
+            return true;
+        }
+        if (!forLong
+            && prev.ClosePrice > emaFast[i - 1] + atr * 0.35m
+            && b.ClosePrice > emaFast[i] - atr * 0.12m)
+        {
+            why = "false_short_nick";
+            return true;
+        }
+        return false;
+    }
+
+    private static decimal Efficiency(List<BinanceFuturesUsdtKline> k, int bars)
+    {
+        if (k.Count < bars + 1) return 0;
+        int end = k.Count - 1;
+        int start = end - bars;
+        decimal net = Math.Abs(k[end].ClosePrice - k[start].ClosePrice);
+        decimal path = 0;
+        for (int i = start + 1; i <= end; i++)
+            path += Math.Abs(k[i].ClosePrice - k[i - 1].ClosePrice);
+        return path <= 0 ? 0 : net / path;
     }
 
     private static bool H4Against(bool forLong, List<BinanceFuturesUsdtKline>? h4, out decimal penalty)
