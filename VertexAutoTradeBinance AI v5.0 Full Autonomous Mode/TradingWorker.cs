@@ -78,6 +78,7 @@ namespace VertexAutoTradeBinance8
         private readonly AiModelSnapshotService _snapshot;
 
         private readonly Dictionary<string, DateTime> _lastTrade = new();
+        private readonly Dictionary<string, (SignalSide Side, DateTime Utc)> _sameSideEntry = new();
         private readonly SymbolRegistryService _symbols;
         private readonly AiTimeframeSelectorService _tfSelector;
         private readonly EngineStateBuilder _engineStateBuilder;
@@ -869,6 +870,18 @@ namespace VertexAutoTradeBinance8
                     signal, symbol, tf,
                     "COOLDOWN",
                     "COOLDOWN_ACTIVE",
+                    ct);
+                return;
+            }
+
+            if (_sameSideEntry.TryGetValue(symbol, out var prevSide)
+                && prevSide.Side == signal.Side
+                && DateTime.UtcNow - prevSide.Utc < TimeSpan.FromHours(4))
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "COOLDOWN",
+                    "SAME_SIDE_REENTRY",
                     ct);
                 return;
             }
@@ -1835,6 +1848,7 @@ namespace VertexAutoTradeBinance8
                     SizeMultiplier = signal.SizeMultiplier,
                     InitialRiskPrice = riskPx
                 });
+                _sameSideEntry[symbol] = (signal.Side, DateTime.UtcNow);
             }
             catch (Exception exPub)
             {

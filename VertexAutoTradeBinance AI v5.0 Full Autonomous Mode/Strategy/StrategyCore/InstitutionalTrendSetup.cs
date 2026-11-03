@@ -39,7 +39,8 @@ public static class InstitutionalTrendSetup
         IReadOnlyList<BinanceFuturesUsdtKline> h1Raw,
         IReadOnlyList<BinanceFuturesUsdtKline> m15Raw,
         IReadOnlyList<BinanceFuturesUsdtKline>? h4Raw = null,
-        decimal? btcBias01 = null)
+        decimal? btcBias01 = null,
+        IReadOnlyList<BinanceFuturesUsdtKline>? d1Raw = null)
     {
         if (string.IsNullOrWhiteSpace(symbol))
             return Fail("no_symbol");
@@ -91,6 +92,35 @@ public static class InstitutionalTrendSetup
         }
         if (!upTrend && !downTrend)
             return Fail("no_clear_1h_bias");
+
+        // The journal: shorts while the last 1H closes were still rising
+        // (AAPL 326→335, MU, AMD), longs while they were still falling (ETH, XAG).
+        if (c1.Count >= 9)
+        {
+            bool rising = c1[^1] > c1[^4] && c1[^4] >= c1[^8];
+            bool falling = c1[^1] < c1[^4] && c1[^4] <= c1[^8];
+            if (downTrend && rising)
+                return Fail("short_into_rising_closes");
+            if (upTrend && falling)
+                return Fail("long_into_falling_closes");
+        }
+
+        if (d1Raw != null && d1Raw.Count >= 30)
+        {
+            var d1 = ClosedBars(d1Raw, barMinutes: 1440);
+            if (d1.Count >= 25)
+            {
+                var cd = d1.Select(x => x.ClosePrice).ToList();
+                var ed = Ema(cd, 21);
+                if (ed[^1] > 0)
+                {
+                    if (upTrend && cd[^1] < ed[^1])
+                        return Fail("daily_against_long");
+                    if (downTrend && cd[^1] > ed[^1])
+                        return Fail("daily_against_short");
+                }
+            }
+        }
 
         bool higherLows = st1 != null && st1.LastSwingLow >= st1.PrevSwingLow * 0.995m;
         bool higherHighs = st1 != null && st1.LastSwingHigh >= st1.PrevSwingHigh * 0.995m;

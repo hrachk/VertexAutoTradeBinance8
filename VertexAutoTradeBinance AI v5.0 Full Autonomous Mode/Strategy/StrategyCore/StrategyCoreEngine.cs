@@ -75,7 +75,7 @@ public sealed class StrategyCoreEngine
     private const int Donchian = 20;
     private const int QualityTopN = 28; // combat: fewer REST/CPU targets
     private const int MinBars = 55;
-    private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan Cooldown = TimeSpan.FromHours(4);
     private static readonly KlineInterval Tf = KlineInterval.FifteenMinutes;
 
     public StrategyCoreEngine(
@@ -286,12 +286,13 @@ public sealed class StrategyCoreEngine
             return (true, false, "htf_1h_thin");
 
         var h4 = await LoadKlinesTfAsync(symbol, KlineInterval.FourHour, 60).ConfigureAwait(false);
+        var d1 = await LoadKlinesTfAsync(symbol, KlineInterval.OneDay, 80).ConfigureAwait(false);
 
         decimal? btcBias = null;
         try { btcBias = await GetBtcH1BiasAsync().ConfigureAwait(false); }
         catch { /* neutral */ }
 
-        var built = InstitutionalTrendSetup.TryBuild(symbol, h1, slice, h4, btcBias);
+        var built = InstitutionalTrendSetup.TryBuild(symbol, h1, slice, h4, btcBias, d1);
         _lastSignalBarMs[symbol] = barKey;
         if (!built.Ok || built.Signal == null)
         {

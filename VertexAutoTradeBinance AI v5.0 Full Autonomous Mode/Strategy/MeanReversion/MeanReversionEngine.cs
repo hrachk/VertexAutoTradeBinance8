@@ -216,6 +216,8 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             // Fading it is the trade that "signals long and the market shorts".
             if (IsTrendAgainstFade(klines, longSetup))
                 return null;
+            if (ImpulseStillRunning(klines, longSetup))
+                return null;
 
             // ── GATE 3: Volume confirmation ──
             if (!ZScoreCalculator.IsVolumeSurge(klines, _opt.VolumeAvgPeriod, _opt.VolumeSurgeMultiplier))
@@ -377,8 +379,29 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
         }
 
         /// <summary>
-        /// A green candle at the low with a dominant upper wick is not a
-        /// bounce. Same mirror for a red candle at the high with no upper wick.
+        /// Z-score extreme in the direction of the last 8 bars is the move,
+        /// not a fade. Shorting that is the AAPL/MU loss. Longing it is ETH/XAG.
+        /// </summary>
+        private static bool ImpulseStillRunning(IReadOnlyList<BinanceFuturesUsdtKline> k, bool wantLong)
+        {
+            if (k == null || k.Count < 12) return false;
+            int last = k.Count - 1;
+            decimal atr = ZScoreCalculator.Atr(k, 14, last);
+            if (atr <= 0) return false;
+            decimal net = k[last].ClosePrice - k[last - 8].ClosePrice;
+            if (!wantLong && net > atr * 1.15m) return true;
+            if (wantLong && net < -atr * 1.15m) return true;
+
+            decimal rng = k[last].HighPrice - k[last].LowPrice;
+            decimal priorMax = 0m;
+            for (int i = last - 7; i < last; i++)
+                priorMax = Math.Max(priorMax, k[i].HighPrice - k[i].LowPrice);
+            return rng > 0 && priorMax > 0 && rng > priorMax * 1.25m;
+        }
+
+        /// <summary>
+        /// A green candle at the low with a dominant upper wick is not a bounce.
+        /// A red candle at the high with a dominant lower wick is not a rejection.
         /// </summary>
         private static bool FadeWickIsFalse(IReadOnlyList<BinanceFuturesUsdtKline> k, bool wantLong)
         {
