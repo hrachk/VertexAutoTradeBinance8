@@ -287,6 +287,8 @@ public sealed class StrategyCoreEngine
 
         var h4 = await LoadKlinesTfAsync(symbol, KlineInterval.FourHour, 60).ConfigureAwait(false);
         var d1 = await LoadKlinesTfAsync(symbol, KlineInterval.OneDay, 80).ConfigureAwait(false);
+        if (d1 == null || d1.Count < 30)
+            return (true, false, "no_daily");
 
         decimal? btcBias = null;
         try { btcBias = await GetBtcH1BiasAsync().ConfigureAwait(false); }

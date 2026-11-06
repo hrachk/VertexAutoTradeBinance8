@@ -29,7 +29,7 @@ public static class InstitutionalTrendSetup
     public const decimal MinRiskPct = 0.009m;
     public const decimal Atr1hPad = 0.35m;
     public const decimal Atr15Pad = 0.90m;
-    public const decimal MinRetrace = 0.08m;
+    public const decimal MinRetrace = 0.32m;
     public const decimal MaxRetrace = 0.80m;
 
     public readonly record struct Result(bool Ok, TradeSignal? Signal, string Reason);
@@ -105,21 +105,20 @@ public static class InstitutionalTrendSetup
                 return Fail("long_into_falling_closes");
         }
 
-        if (d1Raw != null && d1Raw.Count >= 30)
+        if (d1Raw == null || d1Raw.Count < 30)
+            return Fail("no_daily");
         {
             var d1 = ClosedBars(d1Raw, barMinutes: 1440);
-            if (d1.Count >= 25)
-            {
-                var cd = d1.Select(x => x.ClosePrice).ToList();
-                var ed = Ema(cd, 21);
-                if (ed[^1] > 0)
-                {
-                    if (upTrend && cd[^1] < ed[^1])
-                        return Fail("daily_against_long");
-                    if (downTrend && cd[^1] > ed[^1])
-                        return Fail("daily_against_short");
-                }
-            }
+            if (d1.Count < 25)
+                return Fail("no_daily");
+            var cd = d1.Select(x => x.ClosePrice).ToList();
+            var ed = Ema(cd, 21);
+            if (ed[^1] <= 0)
+                return Fail("no_daily");
+            if (upTrend && cd[^1] < ed[^1])
+                return Fail("daily_against_long");
+            if (downTrend && cd[^1] > ed[^1])
+                return Fail("daily_against_short");
         }
 
         bool higherLows = st1 != null && st1.LastSwingLow >= st1.PrevSwingLow * 0.995m;
@@ -128,11 +127,11 @@ public static class InstitutionalTrendSetup
         bool lowerLows = st1 != null && st1.LastSwingLow <= st1.PrevSwingLow * 1.005m;
         bool fullStructure = upTrend ? (higherHighs && higherLows) : (lowerHighs && lowerLows);
 
-        if (btcBias01.HasValue && !IsMajor(symbol))
+        if (btcBias01.HasValue && !symbol.StartsWith("BTC", StringComparison.OrdinalIgnoreCase))
         {
-            if (upTrend && btcBias01.Value < -0.50m)
+            if (upTrend && btcBias01.Value < 0m)
                 return Fail("btc_against_long");
-            if (downTrend && btcBias01.Value > 0.50m)
+            if (downTrend && btcBias01.Value > 0m)
                 return Fail("btc_against_short");
         }
 
@@ -263,7 +262,9 @@ public static class InstitutionalTrendSetup
     }
 
     /// <summary>
-    /// Structural stop. Widen to the 0.9% noise floor. Never tighten inside the swing.
+    /// Structural stop only. A stop pulled in to a 0.9% floor sits inside
+    /// noise: the journal then prints the same −1.05R on every name.
+    /// If the swing is closer than that, there is no trade.
     /// </summary>
     private static bool TryStop(
         bool isLong, decimal close, decimal swingInvalidation,
@@ -303,9 +304,8 @@ public static class InstitutionalTrendSetup
 
         if (structRisk < minDist)
         {
-            sl = isLong ? close - minDist : close + minDist;
-            risk = minDist;
-            return true;
+            why = $"stop_inside_noise:{structRisk / close:P2}";
+            return false;
         }
 
         sl = slStruct;

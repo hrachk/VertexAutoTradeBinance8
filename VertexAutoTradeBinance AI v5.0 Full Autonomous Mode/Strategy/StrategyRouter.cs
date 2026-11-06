@@ -201,65 +201,11 @@ namespace VertexAutoTradeBinance8.Strategy
         /// <summary>RANGE leg: Z-score mean-reversion / spread on non-majors only.</summary>
         private void OnMeanRevSignal(TradeSignal signal)
         {
-            if (signal == null) return;
-
-            var uiMode = _modeState.Current;
-            if (uiMode == StrategyMode.TrendOnly)
-            {
-                _logger.LogDebug("[ROUTER] MEANREV suppressed UI=TrendOnly");
-                return;
-            }
-
-            var regime = Regime();
-            if (_dualMode != null)
-            {
-                if (regime == DualMarketMode.Chaos)
-                {
-                    _logger.LogInformation("[ROUTER] SPREAD held {sym} — regime=CHAOS", signal.Symbol);
-                    return;
-                }
-                if (regime == DualMarketMode.Trend)
-                {
-                    // Parallel micro-scalp during trend (small size only)
-                    signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.28m, 0.15m, 0.40m);
-                    if (signal.Leverage is null or > 4)
-                        signal.Leverage = 3;
-                    _logger.LogInformation(
-                        "[ROUTER] SPREAD parallel TREND {sym} micro size×{sz:F2}",
-                        signal.Symbol, signal.SizeMultiplier);
-                }
-                else if (regime == DualMarketMode.Unknown)
-                {
-                    signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.40m, 0.18m, 0.55m);
-                    if (signal.Leverage is null or > 4)
-                        signal.Leverage = 4;
-                }
-            }
-
-            if (ExecutableStrategyPolicy.IsCoreMajorSymbol(signal.Symbol))
-            {
-                if (_modeState.Current != StrategyMode.MeanReversionOnly)
-                {
-                    _logger.LogDebug("[ROUTER] SPREAD skip major {sym}", signal.Symbol);
-                    return;
-                }
-            }
-
-            bool isLong = signal.Side == SignalSide.Buy;
-            string tag = regime == DualMarketMode.Trend ? "RANGE_SCALP" : "RANGE_SPREAD";
-            signal.Reason = isLong ? $"{tag}_LONG" : $"{tag}_SHORT";
-            signal.Setup = signal.Reason; // explicit Setup for History
-            if (signal.Leverage is null or > 5)
-                signal.Leverage = 4;
-
-            if (!ScalpPreTradeGate.Allow(signal, _marketData, out var scalpWhy))
-            {
-                _logger.LogInformation(
-                    "[ROUTER] SPREAD pre-trade skip {sym}: {why}", signal.Symbol, scalpWhy);
-                return;
-            }
-
-            Forward(signal, "SCALP/SPREAD");
+            // Fade entries are the book that longs a dump and shorts a rip.
+            // The journal's −1R cluster is that trade. Trend pullbacks only.
+            if (signal != null)
+                _logger.LogDebug("[ROUTER] MEANREV ignored {sym}", signal.Symbol);
+            return;
         }
     }
 }

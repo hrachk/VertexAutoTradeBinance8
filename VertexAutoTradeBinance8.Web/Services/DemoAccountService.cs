@@ -452,7 +452,8 @@ public sealed class DemoAccountService
     public (bool ok, string error) OpenMarketPositionForClient(
         string clientId,
         string symbol, string side, decimal qty, int leverage,
-        decimal currentPrice, decimal? stopLoss, List<DemoTpLevel>? takeProfits)
+        decimal currentPrice, decimal? stopLoss, List<DemoTpLevel>? takeProfits,
+        string? setupReason = null)
     {
         if (string.IsNullOrWhiteSpace(clientId))
             return (false, "clientId required");
@@ -524,6 +525,8 @@ public sealed class DemoAccountService
                     StopLoss = stopLoss,
                     InitialRiskPrice = (stopLoss.HasValue && stopLoss.Value > 0) ? Math.Abs(currentPrice - stopLoss.Value) : 0m,
                     TakeProfits = takeProfits ?? new(),
+                    SetupReason = CleanSetup(setupReason),
+                    StrategyLeg = LegOf(setupReason),
                 });
             }
 
@@ -612,7 +615,8 @@ public sealed class DemoAccountService
         var (ok, err) = OpenMarketPositionForClient(
             clientId, symbol, side, qty, leverage, fill,
             stopLoss > 0 ? stopLoss : null,
-            tps.Count > 0 ? tps : null);
+            tps.Count > 0 ? tps : null,
+            reason);
 
         if (ok)
         {
@@ -656,6 +660,28 @@ public sealed class DemoAccountService
                 reason);
         }
         return (ok, err);
+    }
+
+    private static string CleanSetup(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason)) return "";
+        var clean = reason.Trim();
+        int pipe = clean.IndexOf('|');
+        if (pipe > 0) clean = clean.Substring(0, pipe);
+        return clean;
+    }
+
+    private static string LegOf(string? reason)
+    {
+        var clean = CleanSetup(reason);
+        if (clean.Length == 0) return "";
+        if (clean.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase)
+            || clean.StartsWith("TREND_", StringComparison.OrdinalIgnoreCase))
+            return "TREND";
+        if (clean.StartsWith("RANGE_", StringComparison.OrdinalIgnoreCase)
+            || clean.StartsWith("MEANREV_", StringComparison.OrdinalIgnoreCase))
+            return "RANGE";
+        return "OTHER";
     }
 
 
