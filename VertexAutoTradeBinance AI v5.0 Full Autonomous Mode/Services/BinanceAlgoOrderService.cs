@@ -213,7 +213,7 @@ namespace VertexAutoTradeBinance8.Services
                     new("type",         type),
                     new("timestamp",    ts.ToString(CultureInfo.InvariantCulture)),
                     new("recvWindow",   "60000"),
-                    new("workingType",  string.IsNullOrWhiteSpace(workingType) ? "MARK_PRICE" : workingType),
+                    new("workingType",  string.IsNullOrWhiteSpace(workingType) ? "CONTRACT_PRICE" : workingType),
                     new("triggerPrice", D(triggerPrice)),
                     new("positionSide", positionSide.ToString().ToUpperInvariant()),
                     new("quantity",     D(quantity))

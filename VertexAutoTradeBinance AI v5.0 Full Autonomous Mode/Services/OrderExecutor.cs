@@ -2647,7 +2647,7 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                             "TAKE_PROFIT_MARKET", tpPrice, tpQty, ct, $"TP{i + 1}"))
                         continue;
 
-                    // Попытка 1: WorkingType.Mark (legacy, usually -4120)
+                    // Попытка 1: WorkingType.Contract (legacy, usually -4120)
                     var res = await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.PlaceOrderAsync(
                         symbol:       signal.Symbol,
                         side:         tpSide,
@@ -2656,7 +2656,7 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                         quantity:     tpQty,
                         reduceOnly:   isHedge ? null : true,
                         positionSide: isHedge ? posSide : null,
-                        workingType:  WorkingType.Mark,
+                        workingType:  WorkingType.Contract,
                         selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                         ct: ct));
 
@@ -2716,7 +2716,7 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                         type: "TAKE_PROFIT_MARKET",
                         quantity: tpQty,
                         triggerPrice: tpPrice,
-                        workingType: "MARK_PRICE",
+                        workingType: "CONTRACT_PRICE",
                         reduceOnly: isHedge ? null : true,
                         ct: ct);
 
@@ -3080,7 +3080,7 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                 type: algoType,
                 quantity: qty,
                 triggerPrice: triggerPrice,
-                workingType: "MARK_PRICE",
+                workingType: "CONTRACT_PRICE",
                 reduceOnly: isHedge ? null : true,
                 ct: ct);
 
@@ -3108,7 +3108,7 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                 quantity: qty,
                 reduceOnly: isHedge ? null : true,
                 positionSide: isHedge ? posSide : null,
-                workingType: WorkingType.Mark,
+                workingType: WorkingType.Contract,
                 selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                 ct: ct));
 

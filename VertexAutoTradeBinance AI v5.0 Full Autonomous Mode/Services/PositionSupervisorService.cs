@@ -1044,7 +1044,7 @@ namespace VertexAutoTradeBinance8.Services
                 quantity: qty,
                 positionSide: side,
                 triggerPrice: entryPrice,
-                workingType: WorkingType.Mark,
+                workingType: WorkingType.Contract,
                 clientOrderId: clientOrderId,
                 priceProtect: true,
                 ct: ct
@@ -1066,7 +1066,7 @@ namespace VertexAutoTradeBinance8.Services
                         quantity: qty,
                         positionSide: side,
                         triggerPrice: currentStop,
-                        workingType: WorkingType.Mark,
+                        workingType: WorkingType.Contract,
                         clientOrderId: $"{BE_PREFIX}{symbol}_{side}_rb_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
                         priceProtect: true,
                         ct: ct
@@ -2101,7 +2101,7 @@ namespace VertexAutoTradeBinance8.Services
                     type: "STOP_MARKET",
                     quantity: qty,
                     triggerPrice: targetSl,
-                    workingType: "MARK_PRICE",
+                    workingType: "CONTRACT_PRICE",
                     reduceOnly: true,
                     ct: ct,
                     clientAlgoId: $"{SL_PREFIX}REC_{symbol}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}").ConfigureAwait(false);
@@ -2131,7 +2131,7 @@ namespace VertexAutoTradeBinance8.Services
                     type: "TAKE_PROFIT_MARKET",
                     quantity: tpQty,
                     triggerPrice: tp1,
-                    workingType: "MARK_PRICE",
+                    workingType: "CONTRACT_PRICE",
                     reduceOnly: true,
                     ct: ct,
                     clientAlgoId: $"{TP_PREFIX}REC1_{symbol}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}").ConfigureAwait(false);
@@ -2216,7 +2216,7 @@ namespace VertexAutoTradeBinance8.Services
                 quantity: qty,
                 stopPrice: slPrice,
                 positionSide: side,
-                workingType: WorkingType.Mark,
+                workingType: WorkingType.Contract,
                 reduceOnly: null,
                 selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                 ct: ct);
@@ -2236,7 +2236,7 @@ namespace VertexAutoTradeBinance8.Services
                     "[SUPERVISOR][EMERGENCY] requires ALGO (-4120) -> RAW /fapi/v1/algoOrder {symbol} {side}",
                     symbol, side);
 
-                // workingType: "MARK_PRICE" чтобы совпасть с WorkingType.Mark
+                // workingType: "CONTRACT_PRICE" чтобы совпасть с WorkingType.Contract
                 var ok = await _algoRaw.PlaceConditionalAsync(
                     symbol: symbol,
                     side: orderSide,
@@ -2244,7 +2244,7 @@ namespace VertexAutoTradeBinance8.Services
                     type: "STOP_MARKET",
                     quantity: qty,
                     triggerPrice: slPrice,
-                    workingType: "MARK_PRICE",
+                    workingType: "CONTRACT_PRICE",
                     reduceOnly: null,
                     ct: ct,
                     clientAlgoId: $"{SL_PREFIX}{symbol}_{side}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
@@ -3293,6 +3293,7 @@ namespace VertexAutoTradeBinance8.Services
                         quantity: closeQty,
                         positionSide: side,
                         stopPrice: sl,
+                        workingType: WorkingType.Contract,
                         reduceOnly: null,
                         selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                         ct: ct);
@@ -3702,7 +3703,7 @@ namespace VertexAutoTradeBinance8.Services
         /// - Place new SL via NORMAL endpoint
         /// - If -4120 -> ALGO-RAW
         /// - NO reduceOnly (важно для Hedge/ошибок -1106)
-        /// - WorkingType.Mark используем осторожно: сначала пробуем, если Binance ругается — повтор без него
+        /// - WorkingType.Contract используем осторожно: сначала пробуем, если Binance ругается — повтор без него
         /// </summary>
         private Task<bool> UpdateSL_ProAsync(
          BinanceRestClient client,
@@ -3772,7 +3773,7 @@ namespace VertexAutoTradeBinance8.Services
                         quantity: qty,
                         stopPrice: s,
                         positionSide: side,
-                        workingType: WorkingType.Mark,
+                        workingType: WorkingType.Contract,
                         selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                         ct: token);
 
