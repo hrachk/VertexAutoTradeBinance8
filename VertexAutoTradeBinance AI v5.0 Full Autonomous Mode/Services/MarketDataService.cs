@@ -126,6 +126,21 @@ public class MarketDataService
         return Array.Empty<BinanceFuturesUsdtKline>();
     }
 
+    /// <summary>Returns the open time of the most recent fully closed candle.</summary>
+    public async Task<DateTime?> GetLatestClosedBarOpenTimeAsync(
+        string symbol,
+        KlineInterval interval,
+        CancellationToken ct = default)
+    {
+        var candles = await _md.GetKlinesAsync(symbol, interval, 3, ct).ConfigureAwait(false);
+        var now = DateTime.UtcNow;
+        var latest = candles
+            .Where(c => c.CloseTime <= now)
+            .OrderByDescending(c => c.OpenTime)
+            .FirstOrDefault();
+        return latest?.OpenTime;
+    }
+
     // ============================================================
     // 3) EMA
     // ============================================================

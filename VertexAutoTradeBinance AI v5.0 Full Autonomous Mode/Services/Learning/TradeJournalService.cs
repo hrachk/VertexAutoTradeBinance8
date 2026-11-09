@@ -10,6 +10,8 @@ namespace VertexAutoTradeBinance8.Services.Learning;
 
 public sealed class TradeJournalService
 {
+    public event Action<TradeJournalEntry>? TradeClosed;
+
     private readonly ILogger<TradeJournalService> _log;
     private readonly IConfiguration _cfg;
     private readonly string _enginesRoot;
@@ -144,6 +146,11 @@ public sealed class TradeJournalService
                 _tg?.Exit(e.Symbol, e.RealizedR, e.RealizedPnl, e.CloseReason ?? "");
             }
             catch { }
+
+            // Risk state is independent of journal persistence so an account
+            // circuit breaker still sees a close if notification/DD reporting fails.
+            try { TradeClosed?.Invoke(e); }
+            catch (Exception ex) { _log.LogError(ex, "[RISK] close event handler failed {s}", e.Symbol); }
         }
         catch (Exception ex)
         {

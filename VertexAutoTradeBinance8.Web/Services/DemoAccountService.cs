@@ -242,23 +242,25 @@ public sealed class DemoAccountService
     /// Equity for any client id (reads that client's demo-account.json without rebinding session).
     /// Used by parallel DEMO auto-trade sizing.
     /// </summary>
-    public decimal GetEquityForClient(string clientId)
+    public decimal GetEquityForClient(string clientId, decimal fallbackBalance = 10_000m)
     {
-        if (string.IsNullOrWhiteSpace(clientId)) return 10_000m;
+        if (string.IsNullOrWhiteSpace(clientId)) return 0m;
         if (string.Equals(_clientId, clientId, StringComparison.OrdinalIgnoreCase))
-            return GetEquity();
+        {
+            lock (_lock) return Math.Max(0m, _state.Balance);
+        }
 
         try
         {
             var path = Path.Combine(_accountsDir, $"client_{clientId}", "demo-account.json");
-            if (!File.Exists(path)) return 10_000m;
+            if (!File.Exists(path)) return Math.Max(0m, fallbackBalance);
             var state = System.Text.Json.JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path));
-            if (state == null) return 10_000m;
-            return state.Balance > 0 ? state.Balance : 10_000m;
+            if (state == null) return 0m;
+            return Math.Max(0m, state.Balance);
         }
         catch
         {
-            return 10_000m;
+            return 0m;
         }
     }
 

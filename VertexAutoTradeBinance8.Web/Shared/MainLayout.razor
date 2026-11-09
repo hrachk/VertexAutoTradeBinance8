@@ -104,31 +104,36 @@
             <a class="vx-login-topbtn" href="/login">Войти</a>
         }
 
-        <!-- LIVE / DEMO toggle -->
-        <button class="vx-chip @(_demoModeEnabled ? "vx-chip-demo" : "vx-chip-live")"
-                @onclick="ToggleDemoModeHeader"
-                title="@(_demoModeEnabled ? "Demo trading active. Click to return to Live." : "Switch to Demo trading (risk-free)")">
-            <span class="vx-dot @(_demoModeEnabled ? "vx-dot-yel" : "vx-dot-grn")"></span>
-            @(_demoModeEnabled ? "DEMO" : "LIVE")
-        </button>
+        @if (Auth.IsAuthenticated)
+        {
+            <!-- Web account credential mode; this is separate from Binance testnet, Parallel Demo, and Engine execution. -->
+            <button class="vx-chip @(_demoModeEnabled ? "vx-chip-demo" : "vx-chip-live")"
+                    @onclick="ToggleDemoModeHeader"
+                    title="@(_demoModeEnabled ? "Web account credential mode is DEMO. This is not Binance testnet and does not change the Engine-wide execution switch or Parallel Demo." : "Web account credential mode is LIVE. Engine-wide execution and Parallel Demo are controlled separately.")">
+                <span class="vx-dot @(_demoModeEnabled ? "vx-dot-yel" : "vx-dot-grn")"></span>
+                Web keys @(_demoModeEnabled ? "DEMO" : "LIVE")
+            </button>
 
-        <!-- AutoTrade toggle -->
-        <button class="vx-chip @(_autoTradeEnabled ? "vx-chip-autoon" : "vx-chip-autooff")"
-                @onclick="ToggleAutoTrade"
-                title="@(_autoTradeEnabled ? "AutoTrade ON: real Binance orders. Parallel DEMO is independent." : "AutoTrade OFF: no real orders. Parallel DEMO still trades if enabled.")">
-            <span class="vx-dot @(_autoTradeEnabled ? "vx-dot-grn" : "vx-dot-red")"></span>
-            AutoTrade @(_autoTradeEnabled ? "ON" : "OFF")
-        </button>
+            <button class="vx-chip @(_autoTradeEnabled ? "vx-chip-autoon" : "vx-chip-autooff")"
+                    @onclick="ToggleAutoTrade"
+                    title="@(_autoTradeEnabled ? "Global Engine AutoTrade ON: new real orders on configured exchange(s) are enabled. Open positions remain supervised. Parallel DEMO is independent." : "Global Engine AutoTrade OFF: no new real orders. Existing positions remain supervised; internal Parallel DEMO still trades if enabled.")">
+                <span class="vx-dot @(_autoTradeEnabled ? "vx-dot-grn" : "vx-dot-red")"></span>
+                AutoTrade @(_autoTradeEnabled ? "ON" : "OFF")
+            </button>
 
-        <!-- Strategy mode -->
-        <div class="vx-chip vx-chip-mode">
-            <span class="vx-chip-mode-icon">⚙</span>
-            <select class="vx-mode-select" title="Strategy Mode" value="@_strategyMode" @onchange="OnStrategyModeChanged">
-                <option value="Auto">Auto · Regime-based</option>
-                <option value="TrendOnly">Trend Only</option>
-                <option value="MeanReversionOnly">MeanReversion Only</option>
-            </select>
-        </div>
+            <div class="vx-chip vx-chip-mode">
+                <span class="vx-chip-mode-icon">⚙</span>
+                <select class="vx-mode-select" title="Strategy Mode" value="@_strategyMode" @onchange="OnStrategyModeChanged">
+                    <option value="Auto">CORE + Mean Reversion</option>
+                    <option value="StrategyCoreOnly">CORE only</option>
+                    <option value="MeanReversionOnly">Mean Reversion only</option>
+                </select>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(_logMsg))
+            {
+                <span role="status" style="color:#fca5a5;font-size:11px;max-width:240px;">@_logMsg</span>
+            }
+        }
     </div>
 </header>
 
@@ -364,8 +369,8 @@
 
     async Task ToggleDemoModeHeader()
     {
+        if (!Auth.IsAuthenticated) return;
         // Unified switch: AuthSession persists TradingMode + activates/clears LIVE keys
-        bool goDemo = !Auth.IsDemo; // currently live → switch to demo
         if (Auth.IsDemo)
         {
             // try go LIVE
@@ -406,31 +411,39 @@
 
     async Task OnStrategyModeChanged(ChangeEventArgs e)
     {
+        if (!Auth.IsAuthenticated) return;
+        var previousMode = _strategyMode;
         var newMode = e.Value?.ToString() ?? "Auto";
-        _strategyMode = newMode;
-        await StrategyModeService.SetModeAsync(newMode);
+        try
+        {
+            await StrategyModeService.SetModeAsync(newMode);
+            _strategyMode = newMode;
+            _logMsg = null;
+        }
+        catch (Exception ex)
+        {
+            _strategyMode = previousMode;
+            _logMsg = $"Strategy mode was not saved: {ex.Message}";
+        }
     }
 
     async Task ToggleAutoTrade()
     {
+        if (!Auth.IsAuthenticated) return;
         _autoTradeEnabled = !_autoTradeEnabled;
         try
         {
-            // One button controls both flags atomically:
-            //   ON  → Engine opens real positions + Supervisor manages TP
-            //   OFF → Engine dry-run only         + Supervisor leaves TP alone
-            //
-            // Path: Trading:EnableExecution (NOT the removed SignalOnlyMode section)
-            // Path: Trading:SupervisorManageTP
-            // Both written to appsettings.runtime.json via RuntimeConfigService.
-            // Engine picks up via reloadOnChange within seconds, no restart needed.
+            // This is the entry kill-switch only. Position supervision and TP
+            // management remain independent so switching OFF cannot strand
+            // existing positions without their configured management.
             await RuntimeCfg.SetValueAsync("Trading:EnableExecution",    _autoTradeEnabled);
-            await RuntimeCfg.SetValueAsync("Trading:SupervisorManageTP", _autoTradeEnabled);
+            _logMsg = null;
         }
-        catch
+        catch (Exception ex)
         {
             // Revert the optimistic UI flip if the write genuinely failed
             _autoTradeEnabled = !_autoTradeEnabled;
+            _logMsg = $"AutoTrade setting was not saved: {ex.Message}";
         }
     }
 

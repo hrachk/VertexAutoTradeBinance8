@@ -138,7 +138,16 @@ public sealed class DemoAutoTradeService : BackgroundService
             if (!_seen.TryAdd(key, 0)) continue;
             foreach (var client in clients)
             {
-                if (TryOpen(client.Id, e.Symbol, e.Side, e.Entry, e.Qty, e.Leverage, e.StopLoss, e.TakeProfits,
+                decimal clientEquity = _demo.GetEquityForClient(client.Id, client.DemoBalance > 0 ? client.DemoBalance : 10_000m);
+                decimal clientQty = ScaleApprovedQuantity(e, clientEquity);
+                if (clientQty <= 0m)
+                {
+                    _journal?.LogSignal(e.Symbol, "DEMO", "REJECT_DEMO",
+                        $"CLIENT_QTY_BELOW_MIN:{client.Id}; equity={clientEquity:F2}");
+                    continue;
+                }
+
+                if (TryOpen(client.Id, client.DemoBalance, e.Symbol, e.Side, e.Entry, clientQty, e.Leverage, e.StopLoss, e.TakeProfits,
                         e.InitialRiskPrice, e.Reason ?? "APPROVED"))
                     n++;
             }
@@ -146,13 +155,30 @@ public sealed class DemoAutoTradeService : BackgroundService
         return n;
     }
 
+    private static decimal ScaleApprovedQuantity(VertexAutoTradeBinance8.Services.Entry.ApprovedEntry entry,
+        decimal clientEquity)
+    {
+        if (clientEquity <= 0m || entry.Qty <= 0m || entry.Entry <= 0m) return 0m;
+
+        decimal qty = entry.Qty;
+        if (entry.SizingEquityUsd > 0m)
+            qty *= clientEquity / entry.SizingEquityUsd;
+
+        decimal step = entry.QuantityStep > 0m ? entry.QuantityStep : 0.00000001m;
+        qty = Math.Floor(qty / step) * step;
+
+        if (qty <= 0m || (entry.MinQty > 0m && qty < entry.MinQty)) return 0m;
+        if (entry.MinNotionalUsd > 0m && qty * entry.Entry < entry.MinNotionalUsd) return 0m;
+        return qty;
+    }
+
     private bool TryOpen(
-        string clientId, string symbol, string? sideRaw, decimal entry, decimal qty, decimal lev,
+        string clientId, decimal initialBalance, string symbol, string? sideRaw, decimal entry, decimal qty, decimal lev,
         decimal stopLoss, List<decimal>? tps, decimal riskPx, string reason)
     {
         try
         {
-            _demo.BindClient(clientId);
+            _demo.BindClient(clientId, initialBalance > 0m ? initialBalance : 10_000m);
             int openN = _demo.GetOpenPositionCountForClient(clientId);
             if (openN >= GetMaxDemoPositions())
             {

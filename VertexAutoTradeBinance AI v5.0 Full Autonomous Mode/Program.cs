@@ -298,6 +298,10 @@ public class Program
                     services.AddSingleton<VertexAutoTradeBinance8.Services.News.MacroCalendarService>();
                     // Institutional RiskEngine phases 1–5 (HardRisk, Regime, NewsMacro, ML, OI)
                     VertexAutoTrade.RiskEngine.ServiceCollectionExtensions.AddVertexRiskEngine(services);
+                    services.Configure<VertexAutoTrade.RiskEngine.Options.HardRiskOptions>(
+                        ctx.Configuration.GetSection("RiskEngine:Hard"));
+                    services.Configure<VertexAutoTrade.RiskEngine.Options.AntiTiltOptions>(
+                        ctx.Configuration.GetSection("RiskEngine:AntiTilt"));
                     services.Configure<VertexAutoTrade.RiskEngine.Options.InstitutionalGateOptions>(
                         ctx.Configuration.GetSection(VertexAutoTrade.RiskEngine.Options.InstitutionalGateOptions.SectionName));
                     // Back-compat: MlGate:EnableMlSkipGate also drives hard reject if Institutional missing
@@ -385,7 +389,7 @@ public class Program
                         // NOTE: uses "StrategyRouting:Mode", NOT "Strategy:Mode" —
                         // that path is already used by the existing pullback
                         // config (Strategy:Mode="Pullback"), unrelated to this
-                        // Auto/TrendOnly/MeanReversionOnly routing setting.
+                        // Auto/StrategyCoreOnly/MeanReversionOnly routing setting.
                         var startupMode = ctx.Configuration["StrategyRouting:Mode"];
                         var parsed = Enum.TryParse<StrategyMode>(startupMode, ignoreCase: true, out var m)
                             ? m

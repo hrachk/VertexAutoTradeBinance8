@@ -3,6 +3,7 @@ using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Bootstrap;
 using VertexAutoTradeBinance8.Services.HistoricalData;
+using VertexAutoTradeBinance8.Services.Recovery;
 
 public sealed class SupervisorBootstrapHostedService : BackgroundService
 {
@@ -13,6 +14,7 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
     private readonly HistoricalDataStore _historicalStore;
     private readonly ILogger<SupervisorBootstrapHostedService> _logger;
     private readonly IBootGate _bootGate;
+    private readonly IPositionRecoveryService _positionRecovery;
 
     public SupervisorBootstrapHostedService(
      SymbolRegistryService symbols,
@@ -21,6 +23,7 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
      KlineBufferPersistence persistence,
      HistoricalDataStore historicalStore,
      IBootGate bootGate,
+     IPositionRecoveryService positionRecovery,
      ILogger<SupervisorBootstrapHostedService> logger)
     {
         _symbols = symbols;
@@ -29,6 +32,7 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
         _persistence = persistence;
         _historicalStore = historicalStore;
         _bootGate = bootGate;
+        _positionRecovery = positionRecovery;
         _logger = logger;
     }
 
@@ -46,6 +50,7 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
         {
             _logger.LogWarning("[BOOT] No pinned symbols — skip REST bootstrap");
 
+            await RecoverPositionsBeforeTradingAsync(ct);
             _bootGate.MarkReady();
             _logger.LogWarning("[BOOT] BootGate READY (no pinned)");
 
@@ -214,10 +219,30 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
         _logger.LogInformation("[BOOT] REST bootstrap done");
 
         _logger.LogWarning("[BOOT] Supervisor bootstrap finished OK.");
+        await RecoverPositionsBeforeTradingAsync(ct);
         _bootGate.MarkReady();
         _logger.LogWarning("[BOOT] BootGate READY.");
 
 
+    }
+
+    private async Task RecoverPositionsBeforeTradingAsync(CancellationToken ct)
+    {
+        try
+        {
+            _logger.LogInformation("[BOOT][RECOVERY] reconciling open Binance positions before enabling entries");
+            await _positionRecovery.ReconcileAndProtectAsync(ct).ConfigureAwait(false);
+            _logger.LogInformation("[BOOT][RECOVERY] position reconciliation complete");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(ex, "[BOOT][RECOVERY] could not verify/protect existing positions; BootGate remains closed");
+            throw;
+        }
     }
     public override async Task StopAsync(CancellationToken ct)
     {

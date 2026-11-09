@@ -1,6 +1,8 @@
 using Bybit.Net.Clients;
 using Bybit.Net.Enums;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services;
@@ -14,11 +16,16 @@ public sealed class BybitOrderExecutor
 {
     private readonly BybitClientFactory _factory;
     private readonly ILogger<BybitOrderExecutor> _log;
+    private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
 
-    public BybitOrderExecutor(BybitClientFactory factory, ILogger<BybitOrderExecutor> log)
+    public BybitOrderExecutor(
+        BybitClientFactory factory,
+        ILogger<BybitOrderExecutor> log,
+        IOptionsMonitor<TradingOptions> tradingOptions)
     {
         _factory = factory;
         _log = log;
+        _tradingOptions = tradingOptions;
     }
 
     public async Task<OrderResult> ExecuteAsync(
@@ -29,12 +36,20 @@ public sealed class BybitOrderExecutor
     {
         if (signal == null)
             return Fail("null signal");
+        if (!_tradingOptions.CurrentValue.EnableExecution)
+            return Fail("EXECUTION_DISABLED");
         if (qty <= 0)
             return Fail("qty <= 0");
 
         var symbol = (signal.Symbol ?? "").Trim().ToUpperInvariant();
         if (string.IsNullOrEmpty(symbol))
             return Fail("empty symbol");
+
+        bool isLong = signal.Side == SignalSide.Buy;
+        if (signal.EntryPrice <= 0 || signal.StopLoss <= 0 ||
+            (isLong && signal.StopLoss >= signal.EntryPrice) ||
+            (!isLong && signal.StopLoss <= signal.EntryPrice))
+            return Fail("INVALID_PROTECTIVE_STOP");
 
         BybitRestClient client;
         try
@@ -86,8 +101,17 @@ public sealed class BybitOrderExecutor
         else if (signal.TakeProfit is decimal tp && tp > 0)
             takeProfit = tp;
 
+        if (takeProfit is decimal target &&
+            ((isLong && target <= signal.EntryPrice) || (!isLong && target >= signal.EntryPrice)))
+            return Fail("INVALID_TAKE_PROFIT");
+
         try
         {
+            // Re-read immediately before order submission so a runtime OFF switch
+            // blocks entries even if it changed while leverage was being set.
+            if (!_tradingOptions.CurrentValue.EnableExecution)
+                return Fail("EXECUTION_DISABLED");
+
             // Market entry on linear USDT perp (one-way mode positionIdx=0)
             var orderRes = await client.V5Api.Trading.PlaceOrderAsync(
                 category: Category.Linear,

@@ -7,6 +7,8 @@
 @inject VertexAutoTradeBinance8.Web.Services.HistoricalDataReaderService DataArchive
 @inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
 @inject VertexAutoTradeBinance8.Web.Services.RealDcaHistoryReader RealDcaHistory
+@inject VertexAutoTradeBinance8.Web.Services.Auth.AuthSessionService Auth
+@inject NavigationManager Nav
 
 <PageTitle>Settings — Vertex AI</PageTitle>
 
@@ -279,14 +281,14 @@
                 <div class="st-card-title">Strategy Routing Mode</div>
                 <span class="st-live-pill">● live</span>
             </div>
-            <div class="st-card-sub">Decides whether the trend-following engine, the mean-reversion engine, or both (regime-based) generate trade signals.</div>
+            <div class="st-card-sub">Selects which validated Engine signal families may reach the shared risk and execution pipeline. Binance testnet selection is independent of these strategy modes.</div>
 
             <div class="st-mode-grid">
                 @foreach (var (val, label, desc) in new[]
                 {
-                    ("Auto", "Auto (Regime-based)", "Trend engine fires in Trend/StrongTrend regimes, Mean-Reversion fires in Range/Squeeze. Recommended default."),
-                    ("TrendOnly", "Trend Only", "Only the original trend-following engine runs. Mean-Reversion is fully disabled — identical to pre-v9 behavior."),
-                    ("MeanReversionOnly", "Mean-Reversion Only", "Only the Z-Score mean-reversion engine runs, regardless of detected regime.")
+                    ("Auto", "CORE + Mean Reversion", "CORE trend setups and mean-reversion setups that pass their own market, reversal, volume, and risk filters."),
+                    ("StrategyCoreOnly", "CORE only", "Only CORE trend/pullback setups. Mean-reversion signals are disabled."),
+                    ("MeanReversionOnly", "Mean Reversion only", "Only mean-reversion setups. Shared CHAOS, liquidity, entry geometry, and risk checks still apply.")
                 })
                 {
                     <div class="st-mode-option @(_strategyMode == val ? "st-mode-on" : "")" @onclick="() => SetStrategyMode(val)">
@@ -1457,7 +1459,7 @@
         <div class="st-card">
             <div class="st-card-head"><div class="st-card-title">🔁 AutoTrade — Order Execution</div></div>
             <div class="st-card-sub">
-                Controls whether the Engine places real orders on Binance.
+                Controls whether the Engine places real orders on its configured exchange(s).
                 When OFF — signals are generated and logged as missed trades,
                 but no real orders are sent. Applies within seconds, no restart needed.
                 Writes to <code>Trading:EnableExecution</code> in appsettings.runtime.json.
@@ -2001,6 +2003,7 @@
 
     private void ConfirmDemoReset()
     {
+        if (!RequireAuthenticatedSession()) return;
         DemoAccount.ResetAccount(_demoResetBalance);
         _demoResetConfirm = false;
     }
@@ -2176,14 +2179,17 @@
 
     private async Task SetStrategyMode(string mode)
     {
-        _strategyMode = mode;
+        if (!RequireAuthenticatedSession()) return;
+        var previousMode = _strategyMode;
         try
         {
             await StrategyModeSvc.SetModeAsync(mode);
+            _strategyMode = mode;
             ShowToast($"Strategy mode → {mode}");
         }
         catch (Exception ex)
         {
+            _strategyMode = previousMode;
             ShowToast($"Failed to set mode: {ex.Message}", isError: true);
         }
     }
@@ -2196,6 +2202,8 @@
 
     protected override async Task OnInitializedAsync()
     {
+        if (!RequireAuthenticatedSession()) return;
+        _strategyMode = await StrategyModeSvc.ReadCurrentModeAsync();
         _demoResetBalance = DemoAccount.GetSnapshot().InitialBalance;
         await ReloadAsync();
     }
@@ -2307,6 +2315,7 @@
 
     private async Task SetAsync(string path, object? value)
     {
+        if (!RequireAuthenticatedSession()) return;
         try
         {
             await Cfg.SetValueAsync(path, value);
@@ -2321,6 +2330,13 @@
         }
     }
 
+    private bool RequireAuthenticatedSession()
+    {
+        if (Auth.IsAuthenticated) return true;
+        Nav.NavigateTo("/login", replace: true);
+        return false;
+    }
+
     // CRITICAL: separate from SetAsync above on purpose — that method's
     // parameter is statically typed object?, so passing a JsonArray/
     // JsonObject through it resolves to SetValueAsync's SCALAR overload
@@ -2330,6 +2346,7 @@
     // JsonNode? overload explicitly instead.
     private async Task SetJsonAsync(string path, JsonNode? value)
     {
+        if (!RequireAuthenticatedSession()) return;
         try
         {
             await Cfg.SetValueAsync(path, value);
@@ -2344,6 +2361,7 @@
 
     private async Task SetListAsync(string path, List<string> items)
     {
+        if (!RequireAuthenticatedSession()) return;
         try
         {
             await Cfg.SetArrayAsync(path, items);

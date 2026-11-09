@@ -20,6 +20,10 @@ public sealed class ApprovedEntry
     public string Strategy { get; set; } = "";
     public decimal SizeMultiplier { get; set; } = 1m;
     public decimal InitialRiskPrice { get; set; }
+    public decimal SizingEquityUsd { get; set; }
+    public decimal QuantityStep { get; set; }
+    public decimal MinQty { get; set; }
+    public decimal MinNotionalUsd { get; set; }
 }
 
 public interface IApprovedEntryPublisher

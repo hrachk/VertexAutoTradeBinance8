@@ -469,6 +469,21 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
        decimal quantity,
        CancellationToken ct = default, decimal leverage = 1m)
         {
+            if (signal == null)
+                return OrderResult.Fail("INVALID_SIGNAL");
+
+            // This executor may be called outside TradingWorker in future
+            // integrations. Enforce the runtime live switch before any
+            // account read or mutation (notably leverage synchronization).
+            if (!_tradingOptions.CurrentValue.EnableExecution)
+                return OrderResult.Fail("EXECUTION_DISABLED");
+
+            if (quantity <= 0m || signal.EntryPrice <= 0m || signal.StopLoss <= 0m ||
+                (signal.Side == SignalSide.Buy && signal.StopLoss >= signal.EntryPrice) ||
+                (signal.Side == SignalSide.Sell && signal.StopLoss <= signal.EntryPrice) ||
+                (signal.Side != SignalSide.Buy && signal.Side != SignalSide.Sell))
+                return OrderResult.Fail("INVALID_ENTRY_OR_STOP");
+
             using var client = _factory.CreateRestClient();
 
             // =============================================================
@@ -2205,21 +2220,6 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                     signal.Symbol,
                     SymbolInfoService.QtyRule.Market);
 
-                var mktQty = Math.Floor(quantity / fMkt.step) * fMkt.step;
-
-                if (mktQty < fMkt.minQty)
-                {
-                    mktQty = fMkt.minQty;
-
-                    _logger.LogInformation(
-                        "[FALLBACK MARKET][{symbol}] qty bumped to minQty={minQty}",
-                        signal.Symbol,
-                        fMkt.minQty);
-                }
-
-                if (mktQty < fMkt.minQty)
-                    return OrderResult.Fail("FALLBACK_MKT_QTY_TOO_SMALL");
-
                 // ========================================================
                 // MARKET ENTRY
                 // ========================================================
@@ -2241,6 +2241,18 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                         "[1M SOFT][{symbol}] fallback CORE weak timing {s}/{t} size×{sf:F2}",
                         signal.Symbol, score1mFb, thr1mFb, sf);
                 }
+
+                // Recompute after the timing haircut. Never increase the
+                // risk-approved quantity to satisfy exchange minimums.
+                var marketStep = fMkt.step > 0m ? fMkt.step : step;
+                var marketMinQty = fMkt.minQty > 0m ? fMkt.minQty : minQty;
+                var mktQty = Math.Floor(quantity / marketStep) * marketStep;
+                if (mktQty <= 0m || mktQty < marketMinQty)
+                    return OrderResult.Fail("FALLBACK_MKT_QTY_TOO_SMALL");
+
+                if (fMkt.minNotional > 0m && mktQty * lastNow < fMkt.minNotional)
+                    return OrderResult.Fail("FALLBACK_MKT_NOTIONAL_TOO_SMALL");
+
                 var mktRes = await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: signal.Symbol,
                     side: side,
@@ -2718,7 +2730,8 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                         triggerPrice: tpPrice,
                         workingType: "CONTRACT_PRICE",
                         reduceOnly: isHedge ? null : true,
-                        ct: ct);
+                        ct: ct,
+                        clientAlgoId: $"TP_{Guid.NewGuid():N}");
 
                     if (algoOk)
                     {
@@ -3073,6 +3086,7 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
             CancellationToken ct,
             string logTag)
         {
+            var clientOrderId = $"{(algoType.Contains("TAKE_PROFIT", StringComparison.OrdinalIgnoreCase) ? "TP" : "SL")}_{Guid.NewGuid():N}";
             var algoOk = await _algoOrders.PlaceConditionalAsync(
                 symbol: symbol,
                 side: side,
@@ -3082,7 +3096,8 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                 triggerPrice: triggerPrice,
                 workingType: "CONTRACT_PRICE",
                 reduceOnly: isHedge ? null : true,
-                ct: ct);
+                ct: ct,
+                clientAlgoId: clientOrderId);
 
             if (algoOk)
             {
@@ -3107,6 +3122,7 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                 stopPrice: triggerPrice,
                 quantity: qty,
                 reduceOnly: isHedge ? null : true,
+                newClientOrderId: clientOrderId,
                 positionSide: isHedge ? posSide : null,
                 workingType: WorkingType.Contract,
                 selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,

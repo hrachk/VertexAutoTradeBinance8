@@ -1,4 +1,5 @@
 using System.Text.Json;
+using VertexAutoTradeBinance8.Strategy;
 
 namespace VertexAutoTradeBinance8.Web.Services;
 
@@ -16,6 +17,7 @@ public sealed class StrategyModeFileService
 {
     private readonly string _filePath;
     private readonly ILogger<StrategyModeFileService> _logger;
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
 
     public StrategyModeFileService(IConfiguration cfg, ILogger<StrategyModeFileService> logger)
     {
@@ -36,7 +38,13 @@ public sealed class StrategyModeFileService
             var json = await sr.ReadToEndAsync();
             var doc = JsonSerializer.Deserialize<StrategyModeFileDto>(json,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            return string.IsNullOrWhiteSpace(doc?.Mode) ? "Auto" : doc!.Mode;
+            if (!Enum.TryParse<StrategyMode>(doc?.Mode, ignoreCase: true, out var mode) || !Enum.IsDefined(mode))
+                return "Auto";
+
+            // TrendOnly is retained for old control files and has the same
+            // routing behavior as StrategyCoreOnly. Present one canonical
+            // option in the Web UI.
+            return mode == StrategyMode.TrendOnly ? nameof(StrategyMode.StrategyCoreOnly) : mode.ToString();
         }
         catch (Exception ex)
         {
@@ -47,16 +55,28 @@ public sealed class StrategyModeFileService
 
     public async Task SetModeAsync(string mode)
     {
-        var dir = Path.GetDirectoryName(_filePath);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        if (!Enum.TryParse<StrategyMode>(mode, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
+            throw new ArgumentException($"Unknown strategy mode '{mode}'.", nameof(mode));
 
-        var tmpPath = _filePath + ".tmp";
-        var json = JsonSerializer.Serialize(new StrategyModeFileDto { Mode = mode });
+        mode = parsed == StrategyMode.TrendOnly ? nameof(StrategyMode.StrategyCoreOnly) : parsed.ToString();
 
-        await File.WriteAllTextAsync(tmpPath, json);
-        File.Move(tmpPath, _filePath, overwrite: true);
+        await _writeLock.WaitAsync();
+        try
+        {
+            var dir = Path.GetDirectoryName(_filePath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-        _logger.LogInformation("[StrategyModeFileService] mode set to {mode}", mode);
+            var tmpPath = _filePath + ".tmp";
+            var json = JsonSerializer.Serialize(new StrategyModeFileDto { Mode = mode });
+            await File.WriteAllTextAsync(tmpPath, json);
+            File.Move(tmpPath, _filePath, overwrite: true);
+
+            _logger.LogInformation("[StrategyModeFileService] mode set to {mode}", mode);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
     }
 
     private sealed class StrategyModeFileDto

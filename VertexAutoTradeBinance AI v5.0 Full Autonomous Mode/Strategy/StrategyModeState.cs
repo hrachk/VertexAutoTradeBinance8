@@ -3,25 +3,21 @@ namespace VertexAutoTradeBinance8.Strategy
     public enum StrategyMode
     {
         /// <summary>
-        /// Regime-driven routing (the "option 2" behavior): Range/Squeeze
-        /// regimes route to MeanReversionEngine, Trend/StrongTrend regimes
-        /// route to the existing trend-following StrategyEngine. This is
-        /// the default — both engines run, the router picks per symbol
-        /// per evaluation based on the live SmartRegimeInfo reading.
+        /// Default mode: both CORE and mean-reversion engines may emit.
+        /// Each engine applies its own market-regime and setup filters; the
+        /// router enforces shared CHAOS and entry-sanity checks.
         /// </summary>
         Auto = 0,
 
-        /// <summary>Only the existing trend-following StrategyEngine fires,
-        /// regardless of regime. Behaves identically to pre-v9.</summary>
+        /// <summary>Backward-compatible alias for the CORE-only route.</summary>
         TrendOnly = 1,
 
-        /// <summary>Only MeanReversionEngine fires, regardless of regime.</summary>
+        /// <summary>Only MeanReversionEngine signals are forwarded; its internal regime gates still apply.</summary>
         MeanReversionOnly = 2,
 
         /// <summary>
-        /// StrategyCore v1 only — professional minimal engine (default).
-        /// Legacy trend / mean-reversion engines stay bound but their signals
-        /// are discarded by the router.
+        /// CORE strategy only. Legacy trend signals are diagnostic-only;
+        /// mean-reversion signals are discarded by the router.
         /// </summary>
         StrategyCoreOnly = 3
     }

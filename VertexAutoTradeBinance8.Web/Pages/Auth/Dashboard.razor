@@ -217,13 +217,13 @@ else
   {
     _modeMsg = "";
     var (ok, err) = await Auth.SwitchTradingModeAsync("live");
-    _modeMsg = ok ? "✓ Режим LIVE включён — ордера идут на Binance." : err;
+    _modeMsg = ok ? "✓ LIVE-ключи включены для Web-аккаунта. Исполнение Engine и параллельный DEMO управляются отдельно." : err;
   }
 
   async Task SwitchToDemo()
   {
     _modeMsg = "";
     var (ok, err) = await Auth.SwitchTradingModeAsync("demo");
-    _modeMsg = ok ? "✓ Режим DEMO — виртуальный баланс, без реальных ордеров." : err;
+    _modeMsg = ok ? "✓ Web-аккаунт переключён в DEMO. Это не Binance Testnet и не выключает глобальный AutoTrade Engine; параллельный Demo управляется отдельным переключателем." : err;
   }
 }

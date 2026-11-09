@@ -8,11 +8,9 @@ using VertexAutoTradeBinance8.Strategy.StrategyCore;
 namespace VertexAutoTradeBinance8.Strategy
 {
     /// <summary>
-    /// Dual strategy router (replaces CORE-only policy):
-    ///   TREND regime  → CORE structure/pullback/breakout (trend leg)
-    ///   RANGE regime  → Mean-reversion / spread on non-majors (range leg)
-    ///   CHAOS         → no execution forwards
-    /// LIVE and DEMO share the same channel after this router.
+    /// Routes validated strategy families through one common risk/execution channel.
+    /// Auto enables CORE and the independently filtered mean-reversion leg;
+    /// explicit modes can select one family. CHAOS holds both legs.
     ///
     /// FIX: mandatory Setup before forward; CHAOS hard-block; no empty-setup leaks.
     /// </summary>
@@ -25,7 +23,6 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly SmartRegimeService _smartRegimeService;
         private readonly MarketDataFacade _marketData;
         private readonly StrategyModeState _modeState;
-        private readonly LiveSignalService _liveSig;
         private readonly DualModeTradingPolicy? _dualMode;
 
         public event Action<TradeSignal>? OnSignalGenerated;
@@ -38,7 +35,6 @@ namespace VertexAutoTradeBinance8.Strategy
             SmartRegimeService smartRegimeService,
             MarketDataFacade marketData,
             StrategyModeState modeState,
-            LiveSignalService liveSig,
             DualModeTradingPolicy? dualMode = null)
         {
             _logger = logger;
@@ -48,7 +44,6 @@ namespace VertexAutoTradeBinance8.Strategy
             _smartRegimeService = smartRegimeService;
             _marketData = marketData;
             _modeState = modeState;
-            _liveSig = liveSig;
             _dualMode = dualMode;
         }
 
@@ -125,13 +120,8 @@ namespace VertexAutoTradeBinance8.Strategy
                 _logger.LogDebug(ex, "[ROUTER] sanity skip (cache) {sym}", signal.Symbol);
             }
 
-            try { _ = _liveSig.AppendAsync(signal, CancellationToken.None); }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[ROUTER] live_signals write failed ({src})", source);
-            }
             _logger.LogInformation(
-                "[ROUTER] {src} → channel+file {sym} {side} conf={c:F2} setup={s} reason={r}",
+                "[ROUTER] {src} → channel {sym} {side} conf={c:F2} setup={s} reason={r}",
                 source, signal.Symbol, signal.Side, signal.Confidence ?? 0m, signal.Setup, signal.Reason);
             OnSignalGenerated?.Invoke(signal);
         }
@@ -165,7 +155,6 @@ namespace VertexAutoTradeBinance8.Strategy
                 _logger.LogDebug("[ROUTER] CORE suppressed UI=MeanReversionOnly");
                 return;
             }
-
             var regime = Regime();
             if (regime == DualMarketMode.Chaos)
             {
@@ -201,11 +190,27 @@ namespace VertexAutoTradeBinance8.Strategy
         /// <summary>RANGE leg: Z-score mean-reversion / spread on non-majors only.</summary>
         private void OnMeanRevSignal(TradeSignal signal)
         {
-            // Fade entries are the book that longs a dump and shorts a rip.
-            // The journal's −1R cluster is that trade. Trend pullbacks only.
-            if (signal != null)
-                _logger.LogDebug("[ROUTER] MEANREV ignored {sym}", signal.Symbol);
-            return;
+            if (signal == null) return;
+
+            var uiMode = _modeState.Current;
+            if (uiMode == StrategyMode.TrendOnly || uiMode == StrategyMode.StrategyCoreOnly)
+            {
+                _logger.LogDebug("[ROUTER] MEANREV suppressed UI={mode} {sym}", uiMode, signal.Symbol);
+                return;
+            }
+
+            var regime = Regime();
+            if (regime == DualMarketMode.Chaos)
+            {
+                _logger.LogInformation("[ROUTER] MEANREV held {sym} — regime=CHAOS", signal.Symbol);
+                return;
+            }
+
+            // Auto enables the range leg when its own symbol-level strategy
+            // gates build a valid setup; MeanReversionEngine already checks
+            // local range/squeeze, volatility expansion, trend direction,
+            // volume, reversal, and BTC correlation before emitting.
+            Forward(signal, "RANGE/MEANREV");
         }
     }
 }

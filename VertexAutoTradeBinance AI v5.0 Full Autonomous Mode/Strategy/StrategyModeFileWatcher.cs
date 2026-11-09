@@ -14,7 +14,8 @@ namespace VertexAutoTradeBinance8.Strategy
     ///   This watcher (polls every 3s)  -->  reads it, updates StrategyModeState
     ///   StrategyRouter  -->  reads StrategyModeState.Current on every signal
     ///
-    /// File content: {"mode":"Auto"} | {"mode":"TrendOnly"} | {"mode":"MeanReversionOnly"}
+    /// File content: {"mode":"Auto"}, {"mode":"StrategyCoreOnly"}, or {"mode":"MeanReversionOnly"}.
+    /// Legacy TrendOnly is accepted as a CORE-only alias.
     /// Missing file or unreadable content is treated as "no change" — the
     /// last known StrategyModeState value (or the appsettings.json startup
     /// default) simply stays in effect, never crashes the engine.

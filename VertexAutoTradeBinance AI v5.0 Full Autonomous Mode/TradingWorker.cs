@@ -209,6 +209,10 @@ namespace VertexAutoTradeBinance8
             _mlGate = mlGate;
             _instPipe = institutionalPipeline;
             _dualMode = dualMode;
+            if (_tradeJournal != null && _instPipe != null)
+                _tradeJournal.TradeClosed += e => _instPipe.OnTradeClosed(
+                    new VertexAutoTrade.RiskEngine.Abstractions.ClosedTradeRiskEvent(
+                        e.ClosedAtUtc, e.RealizedR, e.CloseReason ?? string.Empty, e.Symbol));
             _logger = logger;
             _options = options.Value;
             _tradingMonitor = tradingMonitor;
@@ -456,6 +460,28 @@ namespace VertexAutoTradeBinance8
             _logger.LogWarning("[WORKER] Waiting BootGate ...");
             await _bootGate.WaitReadyAsync(ct);
             _logger.LogWarning("[WORKER] BootGate READY");
+
+            // Rebuild the institutional daily R and anti-tilt state after a
+            // restart. Without this, a restart erased the day's loss history.
+            if (_tradeJournal != null && _instPipe != null)
+            {
+                try
+                {
+                    var utcDay = DateTime.UtcNow.Date;
+                    foreach (var e in _tradeJournal.GetRecentEntries("client_001", take: 2000)
+                                 .Where(x => x.ClosedAtUtc.ToUniversalTime().Date == utcDay)
+                                 .OrderBy(x => x.ClosedAtUtc))
+                    {
+                        _instPipe.OnTradeClosed(new VertexAutoTrade.RiskEngine.Abstractions.ClosedTradeRiskEvent(
+                            e.ClosedAtUtc, e.RealizedR, e.CloseReason ?? string.Empty, e.Symbol));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[INST] Could not restore today's closed-trade risk state");
+                    throw;
+                }
+            }
 
 
             // ============================================
@@ -855,13 +881,6 @@ namespace VertexAutoTradeBinance8
 
 
             // =====================================================
-            // 1.5) LIVE SIGNALS UI — write BEFORE AI gate
-            // So /market always shows strategy candidates even if AI later blocks.
-            // =====================================================
-            try { await _liveSig.AppendAsync(signal, ct); }
-            catch { /* never block pipeline for UI */ }
-
-            // =====================================================
             // 2) COOLDOWN
             // =====================================================
             if (InCooldown(symbol))
@@ -972,7 +991,10 @@ namespace VertexAutoTradeBinance8
             }
             catch (Exception exSan)
             {
-                _logger.LogWarning(exSan, "[PROC][{symbol}] EntrySanityGate error — soft pass", symbol);
+                _logger.LogError(exSan, "[PROC][{symbol}] EntrySanityGate failed; blocking entry", symbol);
+                await RejectAsync(signal, symbol, tf, "SANITY_GATE_ERROR",
+                    "ENTRY_SANITY_EVALUATION_FAILED_FAIL_CLOSED", ct, extra: exSan.Message);
+                return;
             }
             if (!ai.Allow)
             {
@@ -1007,19 +1029,8 @@ namespace VertexAutoTradeBinance8
                         symbol, dual.Allow, dual.Mode, dual.Tier, dual.LeverageCap, dual.SizeMult, dual.FlowConfirmed, dual.Reason);
                     if (!dual.Allow)
                     {
-                        if (VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
-                            .IsLiveExecutable(signal.Setup ?? signal.Reason))
-                        {
-                            signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.40m, 0.15m, 1m);
-                            _logger.LogInformation(
-                                "[DUAL-MODE] {sym} not vetoed ({r}) — size×0.40",
-                                symbol, dual.Reason);
-                        }
-                        else
-                        {
-                            await RejectAsync(signal, symbol, tf, "DUAL", dual.Reason, ct, extra: dual.Mode.ToString());
-                            return;
-                        }
+                        await RejectAsync(signal, symbol, tf, "DUAL", dual.Reason, ct, extra: dual.Mode.ToString());
+                        return;
                     }
                     signal.Leverage = dual.LeverageCap;
                     signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * dual.SizeMult, 0.15m, 1.0m);
@@ -1028,23 +1039,22 @@ namespace VertexAutoTradeBinance8
                 }
                 catch (Exception exDual)
                 {
-                    // A failed classifier is not a reason to delete the setup.
-                    // Fail-closed here zeroed both books whenever the rank call threw.
-                    _logger.LogWarning(exDual, "[DUAL-MODE] evaluate failed — size×0.60, not a veto {sym}", symbol);
-                    signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.60m, 0.20m, 1m);
+                    _logger.LogError(exDual, "[DUAL-MODE] evaluate failed; blocking entry for {sym}", symbol);
+                    await RejectAsync(signal, symbol, tf, "DUAL_MODE_ERROR",
+                        "DUAL_MODE_EVALUATION_FAILED_FAIL_CLOSED", ct, extra: exDual.Message);
+                    return;
                 }
             }
 
             // =====================================================
-            // 3.1) WRITE TO LIVE SIGNALS (AI confirmed, before pipeline blocks)
+            // 3.1) Candidate was already written once before validation so
+            // rejected signals remain visible in the UI. Do not append again:
+            // LiveSignalService stores timestamped records and does not dedupe.
             // ─────────────────────────────────────────────────────────────────
             // Signal has passed AI (PE4 score >= 0.20) and has Entry/SL/TP.
             // Write it NOW so /market page shows it regardless of what
             // happens in the rest of the pipeline (execution, cooldown etc.)
             // =====================================================
-            try { await _liveSig.AppendAsync(signal, ct); }
-            catch { /* never block execution for UI write */ }
-
             // =====================================================
             // 3.2) MinExecute threshold check
             // ─────────────────────────────────────────────────────
@@ -1098,6 +1108,14 @@ namespace VertexAutoTradeBinance8
             }
             catch (Exception exMl)
             {
+                if (_mlGate?.EnableMlSkipGate == true)
+                {
+                    _logger.LogError(exMl, "[ML-GATE] enabled skip gate failed; blocking entry for {sym}", symbol);
+                    await RejectAsync(signal, symbol, tf, "ML_GATE_ERROR",
+                        "ENABLED_ML_GATE_EVALUATION_FAILED_FAIL_CLOSED", ct, extra: exMl.Message);
+                    return;
+                }
+
                 _logger.LogDebug(exMl, "[ML-SHADOW] evaluate skipped");
             }
 
@@ -1110,7 +1128,13 @@ namespace VertexAutoTradeBinance8
                     return;
                 }
             }
-            catch { }
+            catch (Exception exKill)
+            {
+                _logger.LogError(exKill, "[KILL-SWITCH] state unavailable; blocking entry for {sym}", symbol);
+                await RejectAsync(signal, symbol, tf, "KILL_SWITCH_ERROR",
+                    "KILL_SWITCH_STATE_UNAVAILABLE_FAIL_CLOSED", ct, extra: exKill.Message);
+                return;
+            }
 
             try
             {
@@ -1128,7 +1152,13 @@ namespace VertexAutoTradeBinance8
                     return;
                 }
             }
-            catch { }
+            catch (Exception exRiskGuard)
+            {
+                _logger.LogError(exRiskGuard, "[RISK-GUARD] daily/volatility guard failed; blocking entry for {sym}", symbol);
+                await RejectAsync(signal, symbol, tf, "RISK_GUARD_ERROR",
+                    "DAILY_OR_BTC_VOLATILITY_GUARD_FAILED_FAIL_CLOSED", ct, extra: exRiskGuard.Message);
+                return;
+            }
 
             try
             {
@@ -1181,7 +1211,13 @@ namespace VertexAutoTradeBinance8
                     }
                 }
             }
-            catch { }
+            catch (Exception exNews)
+            {
+                _logger.LogError(exNews, "[NEWS-GUARD] evaluation failed; blocking entry for {sym}", symbol);
+                await RejectAsync(signal, symbol, tf, "NEWS_GUARD_ERROR",
+                    "NEWS_GUARD_EVALUATION_FAILED_FAIL_CLOSED", ct, extra: exNews.Message);
+                return;
+            }
 
             }
 
@@ -1214,20 +1250,12 @@ namespace VertexAutoTradeBinance8
             var riskMult = _riskScaler.Scale(ai.Grade);
             if (riskMult <= 0)
             {
-                if (VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy.IsLiveExecutable(signal.Setup ?? signal.Reason))
-                {
-                    riskMult = 0.50m;
-                    _logger.LogInformation("[PROC][{symbol}] risk scaler was 0 — floor 0.50 for executable setup", symbol);
-                }
-                else
-                {
-                    await RejectAsync(
-                        signal, symbol, tf,
-                        "RISK",
-                        "RISK_MULT_ZERO",
-                        ct);
-                    return;
-                }
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "RISK",
+                    "RISK_MULT_ZERO",
+                    ct);
+                return;
             }
 
             // =====================================================
@@ -1602,8 +1630,9 @@ namespace VertexAutoTradeBinance8
                         EquityUsd = sizingBalance,
                         EntryPrice = signal.EntryPrice,
                         StopLossPrice = signal.StopLoss,
-                        ConfiguredRiskFraction = 0.01m,
-                        OpenPositionCount = 0,
+                        ConfiguredRiskFraction = Math.Clamp((decimal)trading.RiskPerTrade, 0.001m, 0.03m),
+                        OpenPositionCount = await _supervisor.GetActivePositionsCountAsync(ct).ConfigureAwait(false),
+                        RealizedPnlTodayUsd = _dailyDd?.Snapshot().dayPnl ?? 0m,
                         SignalConfidence = conf,
                         UtcNow = DateTime.UtcNow,
                         NewsHardMode = false, // real flag: Institutional:EnableNewsHardMode via IOptionsMonitor in pipeline
@@ -1617,21 +1646,9 @@ namespace VertexAutoTradeBinance8
                     });
                     if (!inst.Allowed)
                     {
-                        bool accountStop = inst.RejectLayer is "HardRisk" or "AntiTilt";
-                        if (!accountStop && VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
-                            .IsLiveExecutable(signal.Setup ?? signal.Reason))
-                        {
-                            signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.55m, 0.20m, 1m);
-                            _logger.LogInformation(
-                                "[INST] {sym} {layer} {code} — setup kept, size×0.55",
-                                symbol, inst.RejectLayer, inst.RejectCode);
-                        }
-                        else
-                        {
-                            await RejectAsync(signal, symbol, tf, "INST_" + inst.RejectLayer,
-                                $"{inst.RejectCode}: {inst.Message}", ct);
-                            return;
-                        }
+                        await RejectAsync(signal, symbol, tf, "INST_" + inst.RejectLayer,
+                            $"{inst.RejectCode}: {inst.Message}", ct);
+                        return;
                     }
                     if (inst.SizeMult > 0m && inst.SizeMult < 1m)
                         signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * inst.SizeMult, 0.15m, 1m);
@@ -1641,7 +1658,10 @@ namespace VertexAutoTradeBinance8
                 }
                 catch (Exception exInst)
                 {
-                    _logger.LogWarning(exInst, "[INST] pipeline skipped {sym}", symbol);
+                    _logger.LogError(exInst, "[INST] risk pipeline failed; blocking entry for {sym}", symbol);
+                    await RejectAsync(signal, symbol, tf, "INST_RISK_PIPELINE",
+                        "RISK_PIPELINE_ERROR_FAIL_CLOSED", ct, extra: exInst.Message);
+                    return;
                 }
             }
 
@@ -1780,9 +1800,16 @@ namespace VertexAutoTradeBinance8
             _exchangeRouter.LogRouting(signal);
             bool wantBinance = _exchangeRouter.ShouldExecuteOnBinance();
             bool wantBybit   = _exchangeRouter.ShouldExecuteOnBybit();
-            bool attemptedLive = (wantBinance || wantBybit) && liveBalance > 0 && qtyLive > 0;
+            bool liveExecutionEnabled = _tradingMonitor.CurrentValue.EnableExecution;
+            bool attemptedLive = liveExecutionEnabled && (wantBinance || wantBybit) && liveBalance > 0 && qtyLive > 0;
 
-            if ((wantBinance || wantBybit) && liveBalance > 0 && qtyLive <= 0)
+            if (!liveExecutionEnabled && (wantBinance || wantBybit))
+            {
+                _logger.LogInformation(
+                    "[ENTRY-SYNC] DEMO-ONLY {symbol} {side} — live execution disabled by runtime setting",
+                    symbol, signal.Side);
+            }
+            else if ((wantBinance || wantBybit) && liveBalance > 0 && qtyLive <= 0)
             {
                 _logger.LogWarning(
                     "[PROC][{symbol}] live qty 0 with balance {bal:F2} — paper only",
@@ -1822,9 +1849,9 @@ namespace VertexAutoTradeBinance8
                 }
             }
 
-            bool liveOk = attemptedLive && (
-                (wantBinance && binanceResult?.Success == true)
-                || (wantBybit && bybitResult?.Success == true));
+            bool binanceOk = attemptedLive && wantBinance && binanceResult?.Success == true;
+            bool bybitOk = attemptedLive && wantBybit && bybitResult?.Success == true;
+            bool liveOk = binanceOk || bybitOk;
 
             try
             {
@@ -1846,7 +1873,11 @@ namespace VertexAutoTradeBinance8
                     Reason = signal.Reason ?? "CORE",
                     Strategy = signal.Reason ?? "CORE",
                     SizeMultiplier = signal.SizeMultiplier,
-                    InitialRiskPrice = riskPx
+                    InitialRiskPrice = riskPx,
+                    SizingEquityUsd = sizingBalance,
+                    QuantityStep = step,
+                    MinQty = minQty,
+                    MinNotionalUsd = minNotional
                 });
                 _sameSideEntry[symbol] = (signal.Side, DateTime.UtcNow);
             }
@@ -1885,9 +1916,14 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
+            var liveVenues = string.Join("+", new[]
+            {
+                binanceOk ? "Binance" : null,
+                bybitOk ? "Bybit" : null
+            }.Where(x => x != null));
             _logger.LogInformation(
-                "[ENTRY-SYNC] LIVE+DEMO {symbol} {side} qtyLive={ql} qtyDemo={qd} entry={e} sl={sl}",
-                symbol, signal.Side, qtyLive, qty, signal.EntryPrice, signal.StopLoss);
+                "[ENTRY-SYNC] {venues}+DEMO {symbol} {side} qtyLive={ql} qtyDemo={qd} entry={e} sl={sl}",
+                liveVenues, symbol, signal.Side, qtyLive, qty, signal.EntryPrice, signal.StopLoss);
             _tradeJournal?.LogSignal(symbol, "PROC", "EXECUTE_LIVE",
                 $"qtyLive={qtyLive} qtyDemo={qty} lev={leverage}");
 
@@ -1897,9 +1933,12 @@ namespace VertexAutoTradeBinance8
             MarkTrade(symbol);
             TrackSymbol(symbol, keepAlive: true);
 
-            await _supervisor
-                .SuperviseAsync(symbol, signal, ct)
-                .ConfigureAwait(false);
+            if (binanceOk)
+            {
+                await _supervisor
+                    .SuperviseAsync(symbol, signal, ct)
+                    .ConfigureAwait(false);
+            }
 
             ConsoleSymbolTableFormatter.UpdateTf(
                 symbol, tf,
