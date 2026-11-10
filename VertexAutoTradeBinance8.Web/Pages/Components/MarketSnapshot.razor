@@ -3780,17 +3780,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 && string.Equals(s.Timeframe, timeframe, StringComparison.OrdinalIgnoreCase));
             if (idx < 0) return;
 
-            // Mutate list in place when possible to avoid ToList + record copy GC storm
+            // Klines are read by the renderer, sort/group projections, chart,
+            // and data refresh paths. Never mutate a list already published
+            // through Series: a concurrent render could enumerate it and tear
+            // down the user's entire Blazor Server circuit.
             var existing = Series[idx].Klines;
-            List<KlineDto> klines;
-            if (existing is List<KlineDto> mutable)
-            {
-                klines = mutable;
-            }
-            else
-            {
-                klines = existing.ToList();
-            }
+            var klines = existing.ToList();
 
             if (klines.Count > 0 && klines[^1].OpenTime == kline.OpenTime)
                 klines[^1] = kline;          // finalize the candle that was forming live
@@ -3800,8 +3795,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             if (klines.Count > 500)
                 klines.RemoveRange(0, klines.Count - 500);
 
-            if (!ReferenceEquals(existing, klines))
-                Series[idx] = Series[idx] with { Klines = klines };
+            Series[idx] = Series[idx] with { Klines = klines };
 
             // Only active chart needs full re-render of closed bar
             if (!string.Equals(symbol, _activeSym, StringComparison.OrdinalIgnoreCase)

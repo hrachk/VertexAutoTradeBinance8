@@ -76,3 +76,14 @@ These need review before treating the project as ready for live use:
 - `git diff --check` passed.
 - No live exchange calls, orders, or application startup were performed.
 - The latest supervisor time-stop change was included in the clean rebuild; the existing test suite remains 27/27 passing. There is no dedicated supervisor integration test harness in the solution.
+
+## Runtime log investigation — 2026-11-10
+
+The published instance logs under `C:\Vertex\Engines\client_001\logs` confirmed these incidents without reading or changing runtime credentials:
+
+- `/market` terminated its Blazor circuit with `InvalidOperationException: Collection was modified` in `MarketSnapshot.razor` while ranking series by `Klines.Sum(Volume)`. `OnLiveKlineClosed` modified the same published `List<KlineDto>` in place. It now copy-on-writes the updated candle list before publishing the new `MarketSeries`.
+- The log window contains six routed `CORE_INST_SHORT` candidates. Five were rejected at `INST_HardRisk` because the live account had 5 open positions while `RiskEngine:Hard:MaxOpenPositions` was 3. There were no `[ENTRY-PIPE] APPROVED` or `[ENTRY-SYNC]` records, and no `approved_entries.json`; consequently the Web paper service had no candidate to open. Live open-position and directional/correlation limits now block only the live order route; valid strategy candidates continue through shared quality gates and can be published to the independent paper ledger. Demo still applies its own per-client position/quantity limits.
+- The published runtime had `Trading:EnableExecution=false`, which suppresses live orders, but the code's paper path should still operate. The client setting was `ParallelDemoEnabled=false` when inspected. Web logs recorded it toggled `True` and then `False` within the same session; the Dashboard toggle now disables itself while saving so rapid double clicks cannot immediately turn it back off. Re-enable Parallel Demo after deploying this fix if that account is intended to trade paper.
+- Only six routed candidates appeared in the roughly eight-hour log sample, all CORE short signals. The logs prove the hard live-position gate prevented paper approvals for most of the observed candidates; they do not prove the strategy's signal rate is adequate across other market conditions. Lowering strategy thresholds blindly would change risk behavior and is not justified by this sample.
+
+These runtime findings are from the published instance, which was not modified by this source change. Rebuild and deploy the updated Web and Engine binaries before expecting the fixes to affect that running service.

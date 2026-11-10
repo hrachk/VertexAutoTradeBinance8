@@ -166,8 +166,9 @@ else
         <span style="color:#38bdf8;">Не зависит от кнопки AutoTrade ON/OFF</span> — при ВКЛ виртуальный счёт торгуется всегда, пока есть сигналы.
       </div>
       <button class="dash-btn" style="width:auto;padding:8px 16px;@(c.ParallelDemoEnabled?"background:rgba(14,165,233,.25);border-color:#0ea5e9;":"")"
+              disabled="@_parallelDemoSaving"
               @onclick="ToggleParallelDemo">
-        @(c.ParallelDemoEnabled ? "● Параллельный DEMO ВКЛ" : "○ Включить параллельный DEMO")
+        @(_parallelDemoSaving ? "Сохранение…" : c.ParallelDemoEnabled ? "● Параллельный DEMO ВКЛ" : "○ Включить параллельный DEMO")
       </button>
     </div>
 
@@ -191,6 +192,7 @@ else
   }
 
   string _modeMsg = "";
+  bool _parallelDemoSaving;
 
   async Task ResetDemoBalance()
   {
@@ -203,14 +205,19 @@ else
 
   async Task ToggleParallelDemo()
   {
-    if (Auth.CurrentClient == null) return;
-    var next = !Auth.CurrentClient.ParallelDemoEnabled;
-    var (ok, err) = await Auth.SetParallelDemoEnabledAsync(next);
-    _modeMsg = ok
-      ? (next
-          ? "✓ Параллельный DEMO ВКЛ — торгуется всегда, независимо от AutoTrade."
-          : "Параллельный DEMO выключен.")
-      : err;
+    if (Auth.CurrentClient == null || _parallelDemoSaving) return;
+    _parallelDemoSaving = true;
+    try
+    {
+      var next = !Auth.CurrentClient.ParallelDemoEnabled;
+      var (ok, err) = await Auth.SetParallelDemoEnabledAsync(next);
+      _modeMsg = ok
+        ? (next
+            ? "✓ Параллельный DEMO ВКЛ — торгуется всегда, независимо от AutoTrade."
+            : "Параллельный DEMO выключен.")
+        : err;
+    }
+    finally { _parallelDemoSaving = false; }
   }
 
   async Task SwitchToLive()

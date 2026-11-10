@@ -21,6 +21,7 @@ using static VertexAutoTradeBinance8.Services.AiTimeframeSelectorService;
 
 using VertexAutoTrade.RiskEngine.Pipeline;
 using VertexAutoTrade.RiskEngine.Abstractions;
+using VertexAutoTrade.RiskEngine.Options;
 namespace VertexAutoTradeBinance8
 {
 
@@ -97,6 +98,7 @@ namespace VertexAutoTradeBinance8
         private readonly IApprovedEntryPublisher? _approvedEntries;
         private readonly ShadowMlGatekeeper? _mlGate;
         private readonly InstitutionalEntryPipeline? _instPipe;
+        private readonly IOptionsMonitor<HardRiskOptions>? _hardRiskOptions;
         private readonly SymbolInfoService _symbolInfo;
         private readonly FundingRateService _fundingRate;
         private readonly RealtimeMomentumDetector _momentum;
@@ -202,12 +204,14 @@ namespace VertexAutoTradeBinance8
             IApprovedEntryPublisher? approvedEntries = null,
             ShadowMlGatekeeper? mlGate = null,
             InstitutionalEntryPipeline? institutionalPipeline = null,
-            DualModeTradingPolicy? dualMode = null)
+            DualModeTradingPolicy? dualMode = null,
+            IOptionsMonitor<HardRiskOptions>? hardRiskOptions = null)
         {
             _tradeJournal = tradeJournal;
             _approvedEntries = approvedEntries;
             _mlGate = mlGate;
             _instPipe = institutionalPipeline;
+            _hardRiskOptions = hardRiskOptions;
             _dualMode = dualMode;
             if (_tradeJournal != null && _instPipe != null)
                 _tradeJournal.TradeClosed += e => _instPipe.OnTradeClosed(
@@ -697,7 +701,11 @@ namespace VertexAutoTradeBinance8
                     int maxLive = _tradingMonitor?.CurrentValue?.MaxOpenPositions
                         ?? _options.MaxOpenPositions;
                     if (maxLive <= 0) maxLive = 5;
-                    int slots = Math.Max(0, maxLive - openN);
+                    // Live capacity must not suppress the independent paper
+                    // book. Always pass at least the best candidate through
+                    // shared strategy/risk validation; live capacity is
+                    // enforced separately immediately before exchange routing.
+                    int slots = Math.Max(1, maxLive - openN);
 
                     var winners = await _signalAuction.SelectAsync(batch, slots, ct).ConfigureAwait(false);
                     foreach (var w in winners)
@@ -1261,24 +1269,49 @@ namespace VertexAutoTradeBinance8
             // =====================================================
             // 4.5) MAX OPEN POSITIONS — Trading:MaxOpenPositions (appsettings / runtime)
             // =====================================================
+            // Position-count, direction and correlation limits belong to the
+            // live account. They must stop exchange orders without deleting a
+            // strategy-approved paper candidate for the independent Demo book.
+            int liveOpenPositionCount = 0;
+            bool liveExposureBlocked = false;
+            string liveExposureBlockReason = string.Empty;
             try
             {
-                int openN = await _supervisor.GetActivePositionsCountAsync(ct).ConfigureAwait(false);
-                int maxLive = _tradingMonitor?.CurrentValue?.MaxOpenPositions
-                    ?? _options.MaxOpenPositions;
-                if (maxLive <= 0) maxLive = 5;
-                if (openN >= maxLive)
+                liveOpenPositionCount = await _supervisor.GetActivePositionsCountAsync(ct).ConfigureAwait(false);
+                int tradingMax = _tradingMonitor?.CurrentValue?.MaxOpenPositions ?? _options.MaxOpenPositions;
+                if (tradingMax <= 0) tradingMax = 5;
+                int hardRiskMax = _hardRiskOptions?.CurrentValue?.MaxOpenPositions ?? int.MaxValue;
+                int effectiveLiveMax = hardRiskMax > 0 ? Math.Min(tradingMax, hardRiskMax) : tradingMax;
+                if (liveOpenPositionCount >= effectiveLiveMax)
                 {
-                    await RejectAsync(
-                        signal, symbol, tf,
-                        "RISK",
-                        $"MAX_POSITIONS:{openN}>={maxLive}",
-                        ct);
-                    return;
+                    liveExposureBlocked = true;
+                    liveExposureBlockReason = $"MAX_POSITIONS:{liveOpenPositionCount}>={effectiveLiveMax}";
                 }
-
-                // Directional exposure — user-configurable (Trading:CorrelationFilterMode / MaxSameSidePositions)
-                // Disabled / MaxSameSidePositions<=0 → only MaxOpenPositions applies (no hardcode 2).
+            }
+            catch (Exception exPositionCount)
+            {
+                // A stale/unavailable live position count must never permit a
+                // real order. The independent Demo can still evaluate safely.
+                liveExposureBlocked = true;
+                liveExposureBlockReason = "LIVE_POSITION_COUNT_UNAVAILABLE";
+                _logger.LogWarning(exPositionCount,
+                    "[PROC][{symbol}] cannot verify live position capacity; live blocked, paper continues",
+                    symbol);
+            }
+            try
+            {
+                if (liveExposureBlocked)
+                {
+                    _logger.LogInformation(
+                        "[PROC][{symbol}] {reason} — live entry blocked; candidate continues to paper validation",
+                        symbol, liveExposureBlockReason);
+                }
+                // Direction/correlation limits protect the live account only.
+                // DemoAutoTradeService enforces its own per-client position caps.
+                //
+                // Do not return on these live-only restrictions: the setup
+                // must still pass the remaining strategy gates and can then
+                // be published for independent paper execution.
                 {
                     var to = _tradingMonitor?.CurrentValue ?? _options;
                     string mode = (to.CorrelationFilterMode ?? "Disabled").Trim();
@@ -1287,7 +1320,7 @@ namespace VertexAutoTradeBinance8
                     bool wantLong = signal.Side == SignalSide.Buy;
                     string sideLabel = wantLong ? "LONG" : "SHORT";
 
-                    if (!mode.Equals("Disabled", StringComparison.OrdinalIgnoreCase))
+                    if (!liveExposureBlocked && !mode.Equals("Disabled", StringComparison.OrdinalIgnoreCase))
                     {
                         int sameSide = await _supervisor.GetSameSideOpenCountAsync(wantLong, ct).ConfigureAwait(false);
 
@@ -1298,12 +1331,8 @@ namespace VertexAutoTradeBinance8
                             _logger.LogWarning(
                                 "[RiskEngine] Order REJECTED for {sym} ({side}). Reason: User SameSideLimit reached (Active {side}s: {n} / MaxAllowed: {m}). Configurable via Trading:MaxSameSidePositions / CorrelationFilterMode.",
                                 symbol, sideLabel, sideLabel, sameSide, maxSame);
-                            await RejectAsync(
-                                signal, symbol, tf,
-                                "RISK",
-                                $"DIR_MAX_SAME_SIDE_REACHED:{sameSide}>={maxSame}",
-                                ct);
-                            return;
+                            liveExposureBlocked = true;
+                            liveExposureBlockReason = $"DIR_MAX_SAME_SIDE_REACHED:{sameSide}>={maxSame}";
                         }
 
                         if (mode.Equals("DynamicCorrelation", StringComparison.OrdinalIgnoreCase))
@@ -1347,12 +1376,9 @@ namespace VertexAutoTradeBinance8
                                                 _logger.LogWarning(
                                                     "[RiskEngine] Order REJECTED for {sym} ({side}). High correlation with open position {other} (R = {r:F2} > Max {max:F2})",
                                                     symbol, sideLabel, other, rr, maxR);
-                                                await RejectAsync(
-                                                    signal, symbol, tf,
-                                                    "RISK",
-                                                    $"HIGH_CORRELATION:{other}:R={rr:F2}",
-                                                    ct);
-                                                return;
+                                                liveExposureBlocked = true;
+                                                liveExposureBlockReason = $"HIGH_CORRELATION:{other}:R={rr:F2}";
+                                                break;
                                             }
                                         }
                                         catch (Exception ex)
@@ -1368,7 +1394,11 @@ namespace VertexAutoTradeBinance8
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[PROC] position-count check failed — continuing");
+                liveExposureBlocked = true;
+                liveExposureBlockReason = "LIVE_EXPOSURE_CHECK_FAILED";
+                _logger.LogWarning(ex,
+                    "[PROC][{symbol}] live exposure check failed; live blocked, paper continues",
+                    symbol);
             }
 
             // =====================================================
@@ -1631,7 +1661,10 @@ namespace VertexAutoTradeBinance8
                         EntryPrice = signal.EntryPrice,
                         StopLossPrice = signal.StopLoss,
                         ConfiguredRiskFraction = Math.Clamp((decimal)trading.RiskPerTrade, 0.001m, 0.03m),
-                        OpenPositionCount = await _supervisor.GetActivePositionsCountAsync(ct).ConfigureAwait(false),
+                        // Live exposure is checked separately below. Passing
+                        // zero here prevents a full live wallet from vetoing
+                        // the same valid setup for the paper-only ledger.
+                        OpenPositionCount = 0,
                         RealizedPnlTodayUsd = _dailyDd?.Snapshot().dayPnl ?? 0m,
                         SignalConfidence = conf,
                         UtcNow = DateTime.UtcNow,
@@ -1801,9 +1834,16 @@ namespace VertexAutoTradeBinance8
             bool wantBinance = _exchangeRouter.ShouldExecuteOnBinance();
             bool wantBybit   = _exchangeRouter.ShouldExecuteOnBybit();
             bool liveExecutionEnabled = _tradingMonitor.CurrentValue.EnableExecution;
-            bool attemptedLive = liveExecutionEnabled && (wantBinance || wantBybit) && liveBalance > 0 && qtyLive > 0;
+            bool attemptedLive = liveExecutionEnabled && !liveExposureBlocked
+                && (wantBinance || wantBybit) && liveBalance > 0 && qtyLive > 0;
 
-            if (!liveExecutionEnabled && (wantBinance || wantBybit))
+            if (liveExposureBlocked && (wantBinance || wantBybit))
+            {
+                _logger.LogInformation(
+                    "[ENTRY-SYNC] DEMO-ONLY {symbol} {side} — live account limit: {reason}",
+                    symbol, signal.Side, liveExposureBlockReason);
+            }
+            else if (!liveExecutionEnabled && (wantBinance || wantBybit))
             {
                 _logger.LogInformation(
                     "[ENTRY-SYNC] DEMO-ONLY {symbol} {side} — live execution disabled by runtime setting",
@@ -1905,11 +1945,14 @@ namespace VertexAutoTradeBinance8
                 }
                 else
                 {
+                    var paperOnlyReason = liveExposureBlocked
+                        ? $"live capacity: {liveExposureBlockReason}"
+                        : liveBalance <= 0 ? "live balance empty" : "live execution disabled or venue unavailable";
                     _logger.LogInformation(
-                        "[ENTRY-SYNC] DEMO-ONLY {symbol} {side} qty={q} entry={e} sl={sl} (liveBal={bal:F2})",
-                        symbol, signal.Side, qty, signal.EntryPrice, signal.StopLoss, liveBalance);
+                        "[ENTRY-SYNC] DEMO-ONLY {symbol} {side} qty={q} entry={e} sl={sl} reason={reason} liveBal={bal:F2}",
+                        symbol, signal.Side, qty, signal.EntryPrice, signal.StopLoss, paperOnlyReason, liveBalance);
                     _tradeJournal?.LogSignal(symbol, "PROC", "EXECUTE_DEMO_ONLY",
-                        liveBalance <= 0 ? "live balance empty" : "live qty or venue unavailable");
+                        paperOnlyReason);
                 }
                 MarkTrade(symbol);
                 TrackSymbol(symbol, keepAlive: true);
