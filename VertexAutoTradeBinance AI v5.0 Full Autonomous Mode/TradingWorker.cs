@@ -1260,14 +1260,19 @@ namespace VertexAutoTradeBinance8
 
             // =====================================================
             // 4.5) MAX OPEN POSITIONS — Trading:MaxOpenPositions (appsettings / runtime)
+            // Live limit only. When EnableExecution is false the paper path
+            // must still publish ApprovedEntry so Demo can open independently.
             // =====================================================
             try
             {
+                bool liveOn = _tradingMonitor?.CurrentValue?.EnableExecution ?? _options.EnableExecution;
                 int openN = await _supervisor.GetActivePositionsCountAsync(ct).ConfigureAwait(false);
                 int maxLive = _tradingMonitor?.CurrentValue?.MaxOpenPositions
                     ?? _options.MaxOpenPositions;
                 if (maxLive <= 0) maxLive = 5;
-                if (openN >= maxLive)
+
+                // Only hard-block the live path. Demo has its own limit inside DemoAutoTradeService.
+                if (liveOn && openN >= maxLive)
                 {
                     await RejectAsync(
                         signal, symbol, tf,
@@ -1275,6 +1280,12 @@ namespace VertexAutoTradeBinance8
                         $"MAX_POSITIONS:{openN}>={maxLive}",
                         ct);
                     return;
+                }
+                if (!liveOn && openN >= maxLive)
+                {
+                    _logger.LogInformation(
+                        "[PROC][{symbol}] live max positions reached but execution disabled — paper path continues",
+                        symbol);
                 }
 
                 // Directional exposure — user-configurable (Trading:CorrelationFilterMode / MaxSameSidePositions)
@@ -1287,7 +1298,7 @@ namespace VertexAutoTradeBinance8
                     bool wantLong = signal.Side == SignalSide.Buy;
                     string sideLabel = wantLong ? "LONG" : "SHORT";
 
-                    if (!mode.Equals("Disabled", StringComparison.OrdinalIgnoreCase))
+                    if (liveOn && !mode.Equals("Disabled", StringComparison.OrdinalIgnoreCase))
                     {
                         int sameSide = await _supervisor.GetSameSideOpenCountAsync(wantLong, ct).ConfigureAwait(false);
 
@@ -1631,7 +1642,10 @@ namespace VertexAutoTradeBinance8
                         EntryPrice = signal.EntryPrice,
                         StopLossPrice = signal.StopLoss,
                         ConfiguredRiskFraction = Math.Clamp((decimal)trading.RiskPerTrade, 0.001m, 0.03m),
-                        OpenPositionCount = await _supervisor.GetActivePositionsCountAsync(ct).ConfigureAwait(false),
+                        // When live execution is off, do not let live position count block the paper path
+                        OpenPositionCount = ( _tradingMonitor?.CurrentValue?.EnableExecution ?? _options.EnableExecution)
+                            ? await _supervisor.GetActivePositionsCountAsync(ct).ConfigureAwait(false)
+                            : 0,
                         RealizedPnlTodayUsd = _dailyDd?.Snapshot().dayPnl ?? 0m,
                         SignalConfidence = conf,
                         UtcNow = DateTime.UtcNow,
