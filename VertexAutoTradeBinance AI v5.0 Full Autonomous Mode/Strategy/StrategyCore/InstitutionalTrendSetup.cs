@@ -23,14 +23,14 @@ namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
 /// </summary>
 public static class InstitutionalTrendSetup
 {
-    public const decimal MinConfidence = 0.52m;
-    public const decimal MinRr = 1.25m;
-    public const decimal MaxRiskPct = 0.028m;
-    public const decimal MinRiskPct = 0.009m;
-    public const decimal Atr1hPad = 0.35m;
-    public const decimal Atr15Pad = 0.90m;
-    public const decimal MinRetrace = 0.32m;
-    public const decimal MaxRetrace = 0.80m;
+    public const decimal MinConfidence = 0.42m;
+    public const decimal MinRr = 1.15m;
+    public const decimal MaxRiskPct = 0.032m;
+    public const decimal MinRiskPct = 0.007m;
+    public const decimal Atr1hPad = 0.30m;
+    public const decimal Atr15Pad = 0.80m;
+    public const decimal MinRetrace = 0.18m;
+    public const decimal MaxRetrace = 0.88m;
 
     public readonly record struct Result(bool Ok, TradeSignal? Signal, string Reason);
 
@@ -93,16 +93,15 @@ public static class InstitutionalTrendSetup
         if (!upTrend && !downTrend)
             return Fail("no_clear_1h_bias");
 
-        // The journal: shorts while the last 1H closes were still rising
-        // (AAPL 326→335, MU, AMD), longs while they were still falling (ETH, XAG).
+        decimal softPenalty = 0m;
+
+        // Soft: rising/falling closes are a penalty, not a hard block (crypto is noisy)
         if (c1.Count >= 9)
         {
             bool rising = c1[^1] > c1[^4] && c1[^4] >= c1[^8];
             bool falling = c1[^1] < c1[^4] && c1[^4] <= c1[^8];
-            if (downTrend && rising)
-                return Fail("short_into_rising_closes");
-            if (upTrend && falling)
-                return Fail("long_into_falling_closes");
+            if (downTrend && rising) softPenalty += 0.12m;
+            if (upTrend && falling) softPenalty += 0.12m;
         }
 
         if (d1Raw == null || d1Raw.Count < 30)
@@ -115,10 +114,9 @@ public static class InstitutionalTrendSetup
             var ed = Ema(cd, 21);
             if (ed[^1] <= 0)
                 return Fail("no_daily");
-            if (upTrend && cd[^1] < ed[^1])
-                return Fail("daily_against_long");
-            if (downTrend && cd[^1] > ed[^1])
-                return Fail("daily_against_short");
+            // Daily EMA21 against is a soft penalty (lag is common on crypto)
+            if (upTrend && cd[^1] < ed[^1]) softPenalty += 0.18m;
+            if (downTrend && cd[^1] > ed[^1]) softPenalty += 0.18m;
         }
 
         bool higherLows = st1 != null && st1.LastSwingLow >= st1.PrevSwingLow * 0.995m;
@@ -129,15 +127,15 @@ public static class InstitutionalTrendSetup
 
         if (btcBias01.HasValue && !symbol.StartsWith("BTC", StringComparison.OrdinalIgnoreCase))
         {
-            if (upTrend && btcBias01.Value < 0m)
-                return Fail("btc_against_long");
-            if (downTrend && btcBias01.Value > 0m)
-                return Fail("btc_against_short");
+            // BTC bias against is soft — reduces size/conf, does not kill the setup
+            if (upTrend && btcBias01.Value < 0m) softPenalty += 0.10m;
+            if (downTrend && btcBias01.Value > 0m) softPenalty += 0.10m;
         }
 
         decimal volR = VolRatio(h1, 8, 20);
-        if (volR < 0.40m)
+        if (volR < 0.25m)
             return Fail($"dead_1h_volume:{volR:F2}");
+        if (volR < 0.45m) softPenalty += 0.08m;
 
         decimal swingHi;
         decimal swingLo;
@@ -230,7 +228,7 @@ public static class InstitutionalTrendSetup
             if (rr < MinRr)
                 return Fail("rr_fail");
 
-            decimal conf = Score(volR, strongReject, retrace, fullStructure) - h4Pen;
+            decimal conf = Score(volR, strongReject, retrace, fullStructure) - h4Pen - softPenalty;
             if (conf < MinConfidence)
                 return Fail($"conf_low:{conf:F2}");
 
@@ -254,7 +252,7 @@ public static class InstitutionalTrendSetup
         if (rrS < MinRr)
             return Fail("rr_fail");
 
-        decimal confS = Score(volR, strongRejectS, retrace, fullStructure) - h4Pen;
+        decimal confS = Score(volR, strongRejectS, retrace, fullStructure) - h4Pen - softPenalty;
         if (confS < MinConfidence)
             return Fail($"conf_low:{confS:F2}");
 

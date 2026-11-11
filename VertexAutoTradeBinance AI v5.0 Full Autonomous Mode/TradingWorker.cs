@@ -1268,6 +1268,8 @@ namespace VertexAutoTradeBinance8
 
             // =====================================================
             // 4.5) MAX OPEN POSITIONS — Trading:MaxOpenPositions (appsettings / runtime)
+            // Live limit only. When EnableExecution is false the paper path
+            // must still publish ApprovedEntry so Demo can open independently.
             // =====================================================
             // Position-count, direction and correlation limits belong to the
             // live account. They must stop exchange orders without deleting a

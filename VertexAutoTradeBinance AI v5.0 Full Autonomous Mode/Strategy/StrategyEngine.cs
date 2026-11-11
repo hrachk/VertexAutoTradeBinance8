@@ -4724,9 +4724,16 @@ namespace VertexAutoTradeBinance8.Strategy
                     }
                     else
                     {
-                        _engineState.LastEntryDecision = "BLOCK_LATE_ENTRY_ALT";
-                        _logger.LogInformation("[LATE_ENTRY_BLOCK][{symbol}] altcoin late entry blocked", symbol);
-                        return Finalize(trace, smart);
+                        // Soft for alts too — strong penalty instead of hard kill so demo can still test
+                        finalConfidence *= 0.55m;
+                        baseSignal.Confidence = finalConfidence;
+                        _engineState.LastEntryDecision = "WARN_LATE_ENTRY_ALT";
+                        _logger.LogInformation("[LATE_ENTRY_PENALTY][{symbol}] altcoin late entry confidence reduced", symbol);
+                        if (finalConfidence < 0.35m)
+                        {
+                            _engineState.LastEntryDecision = "BLOCK_LATE_ENTRY_ALT";
+                            return Finalize(trace, smart);
+                        }
                     }
                 }
 
