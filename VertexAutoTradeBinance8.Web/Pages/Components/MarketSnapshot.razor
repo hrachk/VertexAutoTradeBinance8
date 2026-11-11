@@ -29,7 +29,9 @@
 
 <PageTitle>Market Intelligence — Vertex</PageTitle>
 
-<div class="mk">
+<ErrorBoundary>
+    <ChildContent>
+        <div class="mk">
 
     <!-- HEADER -->
     <div class="mk-header">
@@ -79,10 +81,10 @@
         <div class="mk-ticker-scroll">
             @foreach (var sym in OrderedTickerSymbols)
             {
-                var symSeries = Series.Where(s => s.Symbol == sym).ToList();
+                var symSeries = Series.Where(s => s.Symbol == sym && s.Klines != null).ToList();
                 var best = symSeries.OrderByDescending(s => s.Klines.Count).FirstOrDefault();
-                var last  = best?.Klines.Count > 0 ? best.Klines[^1].Close : 0m;
-                var first = best?.Klines.Count > 1 ? best.Klines[0].Close  : last;
+                var last  = best?.Klines is { Count: > 0 } kl ? kl[^1].Close : 0m;
+                var first = best?.Klines is { Count: > 1 } kl2 ? kl2[0].Close  : last;
                 var chg   = first > 0 ? (last - first) / first * 100m : 0m;
                 var isSel = sym == _activeSym;
                 <button class="mk-tk @(isSel?"mk-tk-on":"")" @onclick="()=>PickSymAndTrade(sym, last)">
@@ -441,6 +443,7 @@
             <div class="mk-side-tbl-scroll">
                 @{
                     var allInstruments = Series
+                        .Where(x => x.Klines != null)
                         .GroupBy(x => x.Symbol)
                         .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
                         .ToList();
@@ -462,8 +465,9 @@
 
                     decimal ChgPct(MarketSeries s)
                     {
-                        var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
-                        var open = s.Klines.Count > 0 ? s.Klines[0].Close : 0m;
+                        if (s.Klines == null || s.Klines.Count == 0) return 0m;
+                        var last = s.Klines[^1].Close;
+                        var open = s.Klines[0].Close;
                         return open > 0 ? (last - open) / open * 100m : 0m;
                     }
 
@@ -3216,6 +3220,17 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     </div>
 }
 
+    </ChildContent>
+    <ErrorContent Context="ex">
+        <div style="padding:40px;color:#ff5d73;font-family:monospace;max-width:800px;margin:40px auto;background:#121722;border:1px solid #ff5d73;border-radius:8px;">
+            <h3 style="margin-top:0;">Market page error</h3>
+            <pre style="white-space:pre-wrap;font-size:12px;color:#e7eef8;">@ex.ToString()</pre>
+            <button @onclick="() => { }" style="margin-top:16px;padding:8px 16px;background:#3dd68c;color:#07090d;border:none;border-radius:4px;cursor:pointer;">Reload the page</button>
+            <p style="font-size:11px;color:#6e90b2;margin-top:12px;">The circuit stayed alive. Check the exception above and fix the root cause.</p>
+        </div>
+    </ErrorContent>
+</ErrorBoundary>
+
 @code {
     List<MarketSeries> Series = new();
     MarketSeries? Selected;
@@ -3375,41 +3390,50 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     protected override async Task OnInitializedAsync()
     {
-        // Unique per-mount suffix for the chart canvas ids. If Blazor's
-        // diffing ever decides this component instance is "the same" as
-        // a previous mount and tries to reuse DOM nodes (which we now
-        // suspect is happening, since the JS-side generationId never
-        // advances past 1 even after navigating away and back), giving
-        // the canvas a genuinely different id each time it's created
-        // makes that reuse structurally impossible — the diffing
-        // algorithm can't match elements with different ids.
-        _chartInstanceId = Guid.NewGuid().ToString("N")[..8];
+        try
+        {
+            // Unique per-mount suffix for the chart canvas ids. If Blazor's
+            // diffing ever decides this component instance is "the same" as
+            // a previous mount and tries to reuse DOM nodes (which we now
+            // suspect is happening, since the JS-side generationId never
+            // advances past 1 even after navigating away and back), giving
+            // the canvas a genuinely different id each time it's created
+            // makes that reuse structurally impossible — the diffing
+            // algorithm can't match elements with different ids.
+            _chartInstanceId = Guid.NewGuid().ToString("N")[..8];
 
-        LiveState.PriceTicked      += OnLivePriceTicked;
-        LiveState.PositionChanged  += OnLivePositionChanged;
-        LiveState.KlineHistoryReady += OnKlineHistoryReady;
-        DemoAccount.Updated += OnDemoAccountUpdated;
-        DemoAccount.DemoModeChanged += OnDemoModeChangedExternally;
-        _demoMode = DemoAccount.DemoMode;
-        RefreshDemoSnapshot();
-        LiveState.KlineClosed += OnLiveKlineClosed;
+            LiveState.PriceTicked      += OnLivePriceTicked;
+            LiveState.PositionChanged  += OnLivePositionChanged;
+            LiveState.KlineHistoryReady += OnKlineHistoryReady;
+            DemoAccount.Updated += OnDemoAccountUpdated;
+            DemoAccount.DemoModeChanged += OnDemoModeChangedExternally;
+            _demoMode = DemoAccount.DemoMode;
+            RefreshDemoSnapshot();
+            LiveState.KlineClosed += OnLiveKlineClosed;
 
-        await LoadData();
-        _ = LoadOpenOrdersAsync();
-        _ = LoadAllOpenPositionsAsync();
-        // SMART POLLING: staggered intervals to minimize Binance API calls
-        // Prices come via SignalR (zero polling) — no need to poll prices
-        // Positions: 30s (open positions don't change that fast)
-        // Orders: 60s (only changes when user moves SL/TP)
-        // Account info: 60s (balance changes only on trade close)
-        _timer = new PeriodicTimer(TimeSpan.FromSeconds(30)); // positions/orders poll — 30s reduces REST+Blazor load
-        // InvokeAsync ensures the entire async tick (and all StateHasChanged()
-        // calls inside LoadData/LoadAllOpenPositions/etc.) runs on the Blazor
-        // SynchronizationContext, not the ThreadPool. Without this, calling
-        // StateHasChanged() from a ThreadPool thread can cause "The current
-        // thread is not associated with the Dispatcher" errors on Blazor Server.
-        _ = InvokeAsync(TickAsync);
-        _ = InvokeAsync(ScanCycleAsync);
+            await LoadData();
+            _ = LoadOpenOrdersAsync();
+            _ = LoadAllOpenPositionsAsync();
+            // SMART POLLING: staggered intervals to minimize Binance API calls
+            // Prices come via SignalR (zero polling) — no need to poll prices
+            // Positions: 30s (open positions don't change that fast)
+            // Orders: 60s (only changes when user moves SL/TP)
+            // Account info: 60s (balance changes only on trade close)
+            _timer = new PeriodicTimer(TimeSpan.FromSeconds(30)); // positions/orders poll — 30s reduces REST+Blazor load
+            // InvokeAsync ensures the entire async tick (and all StateHasChanged()
+            // calls inside LoadData/LoadAllOpenPositions/etc.) runs on the Blazor
+            // SynchronizationContext, not the ThreadPool. Without this, calling
+            // StateHasChanged() from a ThreadPool thread can cause "The current
+            // thread is not associated with the Dispatcher" errors on Blazor Server.
+            _ = InvokeAsync(TickAsync);
+            _ = InvokeAsync(ScanCycleAsync);
+        }
+        catch (Exception ex)
+        {
+            // Prevent circuit death on init. The ErrorBoundary will also catch render errors.
+            Console.WriteLine($"[MarketSnapshot] OnInitializedAsync failed: {ex}");
+            _chartInitError = ex.Message;
+        }
     }
 
     // ===== LIVE PUSH (from Engine via MarketDataHub) =====
