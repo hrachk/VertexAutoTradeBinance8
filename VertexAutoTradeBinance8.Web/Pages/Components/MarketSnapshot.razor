@@ -79,9 +79,12 @@
     <!-- ROW 1: SYMBOL TICKER -->
     <div class="mk-ticker-bar">
         <div class="mk-ticker-scroll">
+            @{
+                var tickerSeries = SnapshotSeries();
+            }
             @foreach (var sym in OrderedTickerSymbols)
             {
-                var symSeries = Series.Where(s => s.Symbol == sym && s.Klines != null).ToList();
+                var symSeries = tickerSeries.Where(s => s.Symbol == sym && s.Klines != null).ToList();
                 var best = symSeries.OrderByDescending(s => s.Klines.Count).FirstOrDefault();
                 var last  = best?.Klines is { Count: > 0 } kl ? kl[^1].Close : 0m;
                 var first = best?.Klines is { Count: > 1 } kl2 ? kl2[0].Close  : last;
@@ -442,7 +445,8 @@
             }
             <div class="mk-side-tbl-scroll">
                 @{
-                    var allInstruments = Series
+                    var seriesSnap = SnapshotSeries();
+                    var allInstruments = seriesSnap
                         .Where(x => x.Klines != null)
                         .GroupBy(x => x.Symbol)
                         .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
@@ -492,7 +496,7 @@
                         // these are the symbols users most often want quick access to.
                         // Slots 8–9 are filled by the single hottest symbol by volume
                         // that isn't already in the majors or open positions.
-                        var topHot = filtered.OrderByDescending(s => s.Klines.Sum(k => k.Volume)).Take(hotCount).Select(s => s.Symbol).ToHashSet();
+                        var topHot = filtered.OrderByDescending(s => KlineVolume(s)).Take(hotCount).Select(s => s.Symbol).ToHashSet();
                         ordered = filtered
                             .OrderByDescending(s => sideOpenPosSymbols.Contains(s.Symbol))
                             .ThenBy(s =>
@@ -501,7 +505,7 @@
                                 return idx >= 0 ? idx : 999;
                             })
                             .ThenByDescending(s => topHot.Contains(s.Symbol) && !MAJOR_SYMBOLS.Contains(s.Symbol))
-                            .ThenByDescending(s => (topHot.Contains(s.Symbol) && !MAJOR_SYMBOLS.Contains(s.Symbol)) ? s.Klines.Sum(k => k.Volume) : 0)
+                            .ThenByDescending(s => (topHot.Contains(s.Symbol) && !MAJOR_SYMBOLS.Contains(s.Symbol)) ? KlineVolume(s) : 0)
                             .ThenBy(s => s.Symbol);
                     }
 
@@ -557,7 +561,7 @@
                                value="@_instrumentSearch" @oninput="OnInstrumentSearchChanged" autofocus />
                         <div class="mk-max-sym-list">
                             @{
-                                var stdAllInstruments = Series
+                                var stdAllInstruments = SnapshotSeries()
                                     .GroupBy(x => x.Symbol)
                                     .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
                                     .ToList();
@@ -3232,6 +3236,33 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 </ErrorBoundary>
 
 @code {
+    List<MarketSeries> SnapshotSeries()
+    {
+        var src = Series;
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            try { return src.ToList(); }
+            catch (InvalidOperationException) { }
+        }
+        return new List<MarketSeries>();
+    }
+
+    // Index walk, not LINQ. List enumerators throw if a live tick replaces
+    // the last candle while Hot volume is being sorted.
+    static decimal KlineVolume(MarketSeries s)
+    {
+        var kl = s.Klines;
+        if (kl == null || kl.Count == 0) return 0m;
+        decimal volume = 0m;
+        var n = kl.Count;
+        for (var i = 0; i < n; i++)
+        {
+            if ((uint)i >= (uint)kl.Count) break;
+            volume += kl[i].Volume;
+        }
+        return volume;
+    }
+
     List<MarketSeries> Series = new();
     MarketSeries? Selected;
 
@@ -3711,13 +3742,20 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     continue;
                 var kl = Series[i].Klines;
                 if (kl == null || kl.Count == 0) continue;
-                var last = kl[^1];
-                kl[^1] = last with
+                // Copy-on-write. List indexer bumps _version, and the Market
+                // render enumerates these candles (volume sort). Mutating the
+                // published list tears the circuit with "Collection was modified".
+                List<KlineDto> next;
+                try { next = new List<KlineDto>(kl); }
+                catch (InvalidOperationException) { continue; }
+                var last = next[^1];
+                next[^1] = last with
                 {
                     High = Math.Max(last.High, price),
                     Low = Math.Min(last.Low, price),
                     Close = price
                 };
+                Series[i] = Series[i] with { Klines = next };
             }
         }
 
