@@ -68,23 +68,27 @@ public static class InstitutionalTrendSetup
         int i1 = c1.Count - 1;
         decimal px1 = c1[i1], ema21 = e21[i1], ema50 = e50[i1];
         decimal ema21Prev = e21[Math.Max(0, i1 - 3)];
-
-        // EMA21>EMA50 alone is late. After a top the average stays "up"
-        // while price is already falling, and the old rule bought that fall.
-        // A long needs the close still above EMA21 and a rising average.
-        // A confirmed lower-high + lower-low cancels the long even if the
-        // average has not crossed yet — that lag is the inverted signal.
-        bool emaLong = ema21 > ema50 && px1 > ema21 && ema21 > ema21Prev;
-        bool emaShort = ema21 < ema50 && px1 < ema21 && ema21 < ema21Prev;
         bool structBear = st1 != null && st1.IsBearish && !st1.IsBullish;
         bool structBull = st1 != null && st1.IsBullish && !st1.IsBearish;
-        if (emaLong && structBear)
+
+        // Bias is the trend, not the location of the last close.
+        // Requiring close > EMA21 AND a rising EMA21 made a pullback
+        // (the only entry we want) fail as no_clear_1h_bias, so scans
+        // emitted nothing for hours. A long may sit under EMA21 as long
+        // as EMA50, the trend anchor, is not lost.
+        bool stackedLong = ema21 > ema50;
+        bool stackedShort = ema21 < ema50;
+        decimal cushion = Math.Max(px1 * 0.004m, Math.Abs(px1 - ema21));
+        bool upTrend = stackedLong && px1 >= ema50 - cushion * 0.35m;
+        bool downTrend = stackedShort && px1 <= ema50 + cushion * 0.35m;
+
+        // A real rollover: structure flipped AND price lost the anchor.
+        // Two noisy pivots while price is still above EMA50 are not a short.
+        if (upTrend && structBear && px1 < ema50)
             return Fail("ema_lag_downtrend");
-        if (emaShort && structBull)
+        if (downTrend && structBull && px1 > ema50)
             return Fail("ema_lag_uptrend");
 
-        bool upTrend = emaLong && !structBear;
-        bool downTrend = emaShort && !structBull;
         if (upTrend && downTrend)
         {
             if (ema21 >= ema50) downTrend = false;
@@ -94,6 +98,10 @@ public static class InstitutionalTrendSetup
             return Fail("no_clear_1h_bias");
 
         decimal softPenalty = 0m;
+        if (upTrend && structBear) softPenalty += 0.08m;
+        if (downTrend && structBull) softPenalty += 0.08m;
+        if (stackedLong && ema21 < ema21Prev) softPenalty += 0.04m;
+        if (stackedShort && ema21 > ema21Prev) softPenalty += 0.04m;
 
         // Soft: rising/falling closes are a penalty, not a hard block (crypto is noisy)
         if (c1.Count >= 9)
@@ -168,12 +176,15 @@ public static class InstitutionalTrendSetup
         if (close <= 0)
             return Fail("bad_price");
 
-        // 15m stack against the 1H label means the execution trend already
-        // flipped. Buying that bounce is how a "long" becomes a short.
-        if (upTrend && eF[i] < eS[i])
+        // 15m stack against the trade is a flip only when price is also
+        // through the slow average. A pullback often dips EMA21 under EMA55
+        // for a few bars; killing that killed the entry.
+        if (upTrend && eF[i] < eS[i] && close < eS[i])
             return Fail("m15_stack_against_long");
-        if (downTrend && eF[i] > eS[i])
+        if (downTrend && eF[i] > eS[i] && close > eS[i])
             return Fail("m15_stack_against_short");
+        if (upTrend && eF[i] < eS[i]) softPenalty += 0.06m;
+        if (downTrend && eF[i] > eS[i]) softPenalty += 0.06m;
 
         if (h4 != null && h4.Count >= 30)
         {
@@ -182,10 +193,13 @@ public static class InstitutionalTrendSetup
             decimal px4 = c4[^1], ema4 = e4[^1];
             if (ema4 > 0)
             {
-                if (upTrend && px4 < ema4 * 0.997m)
+                // 0.3% through a 4H average is noise. Only a real break is a veto.
+                if (upTrend && px4 < ema4 * 0.985m)
                     return Fail("h4_below_ema");
-                if (downTrend && px4 > ema4 * 1.003m)
+                if (downTrend && px4 > ema4 * 1.015m)
                     return Fail("h4_above_ema");
+                if (upTrend && px4 < ema4) softPenalty += 0.06m;
+                if (downTrend && px4 > ema4) softPenalty += 0.06m;
             }
         }
 
@@ -228,7 +242,7 @@ public static class InstitutionalTrendSetup
             if (rr < MinRr)
                 return Fail("rr_fail");
 
-            decimal conf = Score(volR, strongReject, retrace, fullStructure) - h4Pen - softPenalty;
+            decimal conf = Score(volR, strongReject, retrace, fullStructure) - Math.Min(0.18m, h4Pen + softPenalty);
             if (conf < MinConfidence)
                 return Fail($"conf_low:{conf:F2}");
 
@@ -252,7 +266,7 @@ public static class InstitutionalTrendSetup
         if (rrS < MinRr)
             return Fail("rr_fail");
 
-        decimal confS = Score(volR, strongRejectS, retrace, fullStructure) - h4Pen - softPenalty;
+        decimal confS = Score(volR, strongRejectS, retrace, fullStructure) - Math.Min(0.18m, h4Pen + softPenalty);
         if (confS < MinConfidence)
             return Fail($"conf_low:{confS:F2}");
 
@@ -403,16 +417,18 @@ public static class InstitutionalTrendSetup
             return false;
         }
 
+        // Trend lives above/below EMA50. Requiring 3 of the last 4 closes
+        // above EMA21 forbids the pullback the trigger is built to buy.
         int onSide = 0;
-        for (int k = 0; k < 4; k++)
+        for (int k = 0; k < 6; k++)
         {
             int idx = n - 1 - k;
             bool ok = forLong
-                ? h1[idx].ClosePrice > ema21[idx]
-                : h1[idx].ClosePrice < ema21[idx];
+                ? h1[idx].ClosePrice > ema50[idx]
+                : h1[idx].ClosePrice < ema50[idx];
             if (ok) onSide++;
         }
-        if (onSide < 3)
+        if (onSide < 4)
         {
             why = forLong ? "trend_unconfirmed_long" : "trend_unconfirmed_short";
             return false;
@@ -429,7 +445,7 @@ public static class InstitutionalTrendSetup
         }
 
         decimal er = Efficiency(h1, 14);
-        if (er < 0.12m)
+        if (er < 0.08m)
         {
             why = $"chop_er:{er:F2}";
             return false;
@@ -484,17 +500,19 @@ public static class InstitutionalTrendSetup
             }
         }
 
+        // A nick is a close that never got back through the average.
+        // Closing just through EMA21 is the trigger, not a false signal.
         var prev = m15[i - 1];
         if (forLong
             && prev.ClosePrice < emaFast[i - 1] - atr * 0.35m
-            && b.ClosePrice < emaFast[i] + atr * 0.12m)
+            && b.ClosePrice <= emaFast[i])
         {
             why = "false_long_nick";
             return true;
         }
         if (!forLong
             && prev.ClosePrice > emaFast[i - 1] + atr * 0.35m
-            && b.ClosePrice > emaFast[i] - atr * 0.12m)
+            && b.ClosePrice >= emaFast[i])
         {
             why = "false_short_nick";
             return true;
