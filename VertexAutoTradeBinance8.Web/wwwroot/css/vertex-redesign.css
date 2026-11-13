@@ -1,0 +1,372 @@
+/* Vertex desk redesign — every surface except the /market terminal (.mk).
+   Market layout offsets stay: header 46px, topnav 34px. */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@420;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap");
+
+:root {
+  --vx-bg: #07090d;
+  --vx-bg-2: #0c1016;
+  --vx-panel: #10161e;
+  --vx-panel-2: #161d27;
+  --vx-line: rgba(231, 238, 248, 0.08);
+  --vx-line-2: rgba(231, 238, 248, 0.14);
+  --vx-text: #e7eef8;
+  --vx-muted: #8ea0b5;
+  --vx-dim: #5c6e82;
+  --vx-ice: #7cc4ff;
+  --vx-bid: #3dd68c;
+  --vx-ask: #ff5d73;
+  --vx-header-h: 46px;
+}
+
+html, body {
+  background: var(--vx-bg) !important;
+  color: var(--vx-text) !important;
+  font-family: Inter, "Segoe UI", sans-serif !important;
+}
+
+.mono, .ph-kpi-v, .ov-hn-val, .ov-gi-val, .dash-card-val, .ab-hv, .p-cg-val, .p-card-pnl, .st-kpi-v {
+  font-family: "JetBrains Mono", ui-monospace, monospace !important;
+}
+
+/* Page canvas. Market keeps its own paint. */
+.main-content:not(:has(.mk)) {
+  background:
+    radial-gradient(900px 420px at 0% -10%, rgba(124, 196, 255, 0.08), transparent 55%),
+    radial-gradient(700px 380px at 100% 0%, rgba(61, 214, 140, 0.05), transparent 50%),
+    var(--vx-bg) !important;
+}
+.main-content:not(:has(.mk)) .content {
+  background-image:
+    linear-gradient(rgba(231, 238, 248, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(231, 238, 248, 0.035) 1px, transparent 1px) !important;
+  background-size: 56px 56px !important;
+  background-position: -1px -1px !important;
+}
+
+/* ── Shell ─────────────────────────────────────────────── */
+.vertex-header {
+  height: 46px !important;
+  background: rgba(7, 9, 13, 0.92) !important;
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--vx-line) !important;
+  box-shadow: inset 0 -1px 0 rgba(124, 196, 255, 0.05) !important;
+}
+.vertex-title {
+  font-family: Inter, sans-serif !important;
+  letter-spacing: 0.28em !important;
+  font-size: 12px !important;
+  color: var(--vx-text) !important;
+}
+.vertex-subtitle {
+  letter-spacing: 0.22em !important;
+  color: var(--vx-ice) !important;
+  opacity: 0.7 !important;
+}
+.vx-logo-mark svg { filter: drop-shadow(0 0 8px rgba(124, 196, 255, 0.35)); }
+
+.vertex-topnav {
+  height: 34px !important;
+  top: 46px !important;
+  background: #090c12 !important;
+  border-bottom: 1px solid var(--vx-line) !important;
+}
+.vt-link {
+  height: 34px !important;
+  color: var(--vx-dim) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em !important;
+}
+.vt-link:hover { color: var(--vx-text) !important; background: transparent !important; }
+.vt-link.active {
+  color: var(--vx-text) !important;
+  border-bottom-color: var(--vx-ice) !important;
+  background: linear-gradient(180deg, transparent, rgba(124, 196, 255, 0.08)) !important;
+}
+.vt-link-feature.active { border-bottom-color: var(--vx-bid) !important; }
+
+.vertex-sidebar {
+  background: #090c12 !important;
+  border-right: 1px solid var(--vx-line) !important;
+}
+.nv-link {
+  color: var(--vx-muted) !important;
+  border-radius: 10px !important;
+}
+.nv-link:hover { background: rgba(231, 238, 248, 0.04) !important; color: var(--vx-text) !important; }
+.nv-link.active {
+  background: linear-gradient(90deg, rgba(124, 196, 255, 0.16), rgba(124, 196, 255, 0.03)) !important;
+  box-shadow: inset 2px 0 0 var(--vx-ice) !important;
+  color: var(--vx-text) !important;
+}
+
+.vx-user-btn, .vx-chip {
+  background: rgba(16, 22, 30, 0.9) !important;
+  border: 1px solid var(--vx-line-2) !important;
+  border-radius: 999px !important;
+  color: var(--vx-text) !important;
+}
+.vx-user-btn:hover, .vx-user-menu.open .vx-user-btn {
+  border-color: rgba(124, 196, 255, 0.55) !important;
+  background: rgba(124, 196, 255, 0.08) !important;
+}
+.vx-chip-live, .plan-live, .badge-live { color: var(--vx-bid) !important; }
+.vx-chip-demo, .plan-demo, .badge-demo { color: var(--vx-ice) !important; }
+.vx-dot-grn { background: var(--vx-bid) !important; box-shadow: 0 0 8px var(--vx-bid) !important; }
+.vx-dot-red { background: var(--vx-ask) !important; }
+.vx-user-dropdown {
+  background: #0e141c !important;
+  border: 1px solid var(--vx-line-2) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55) !important;
+}
+.vx-user-dd-name { color: var(--vx-text) !important; }
+.vx-user-dd-item:hover { background: rgba(124, 196, 255, 0.06) !important; color: var(--vx-text) !important; }
+.vx-login-topbtn {
+  background: var(--vx-ice) !important;
+  color: #071018 !important;
+  border-radius: 999px !important;
+  font-weight: 800 !important;
+}
+
+/* ── Shared panels ─────────────────────────────────────── */
+.ov, .dash, .st, .st-root, .p-root, .ab, .hx-root, .vnh, .mc-root, .pg, .sl, .vxl, .vp, .tp {
+  color: var(--vx-text) !important;
+}
+
+.ov-hero, .ov-global, .dash-card, .st .st-card, .st-root .st-card, .p-root .ph-bar,
+.ab-header, .ab .ab-card, .hx-nav, .vnh-hd, .mc-bar, .pg .pg-card, .sl .sl-card, .vxl .vxl-card, .vp .vp-card {
+  background: linear-gradient(180deg, rgba(22, 29, 39, 0.92), rgba(12, 16, 22, 0.92)) !important;
+  border: 1px solid var(--vx-line) !important;
+  border-radius: 16px !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 18px 40px rgba(0, 0, 0, 0.25) !important;
+}
+
+.ov { padding: 18px 8px 32px !important; }
+.ov-global {
+  display: flex !important;
+  border-radius: 999px !important;
+  padding: 8px 16px !important;
+}
+.ov-hero {
+  margin-top: 14px !important;
+  padding: 22px 24px !important;
+  position: relative;
+  overflow: hidden;
+}
+.ov-hero::after {
+  content: "";
+  position: absolute;
+  right: -40px;
+  top: -60px;
+  width: 220px;
+  height: 220px;
+  background: radial-gradient(circle, rgba(124, 196, 255, 0.18), transparent 68%);
+  pointer-events: none;
+}
+.ov-logo, .ov-hero-title, .ab-title, .ph-title, .st-title, .hx-brand-title, .vnh-name, .mc-logo {
+  letter-spacing: 0.08em !important;
+  color: var(--vx-text) !important;
+}
+.ov-hn-val, .dash-card-val, .ph-kpi-v, .ab-hv {
+  color: var(--vx-text) !important;
+  font-weight: 700 !important;
+}
+.ov-hn.hn-up .ov-hn-val, .g, .pnl-pos, .ph-kpi-pos .ph-kpi-v, .abg, .v-pos { color: var(--vx-bid) !important; }
+.ov-hn.hn-dn .ov-hn-val, .r, .pnl-neg, .ph-kpi-neg .ph-kpi-v, .abr, .v-danger { color: var(--vx-ask) !important; }
+.ov-tagline, .ov-hn-lab, .dash-card-sub, .ph-sub, .ab-sub, .st-subtitle, .vnh-sub {
+  color: var(--vx-muted) !important;
+}
+
+/* Dashboard */
+.dash { max-width: 1180px !important; }
+.dash-welcome { font-size: 28px !important; letter-spacing: -0.03em !important; color: var(--vx-text) !important; }
+.dash-welcome span { color: var(--vx-ice) !important; }
+.dash-card {
+  padding: 18px 18px 16px !important;
+  position: relative;
+  overflow: hidden;
+}
+.dash-card::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 2px;
+  background: linear-gradient(180deg, var(--vx-ice), transparent);
+}
+.dash-card-title {
+  color: var(--vx-dim) !important;
+  letter-spacing: 0.16em !important;
+}
+.dash-btn-primary, .auth-btn, .lm-submit, .st .st-btn-primary {
+  background: linear-gradient(180deg, #9fd4ff, #5eb0f2) !important;
+  color: #071018 !important;
+  border: none !important;
+  border-radius: 10px !important;
+  font-weight: 800 !important;
+  box-shadow: 0 8px 24px rgba(124, 196, 255, 0.18) !important;
+}
+.dash-btn-outline, .st .st-btn-secondary {
+  background: transparent !important;
+  border: 1px solid var(--vx-line-2) !important;
+  color: var(--vx-text) !important;
+  border-radius: 10px !important;
+}
+.dash-btn-demo { background: rgba(124, 196, 255, 0.1) !important; color: var(--vx-ice) !important; border: 1px solid rgba(124, 196, 255, 0.28) !important; }
+
+/* Settings */
+.st { padding-bottom: 40px !important; }
+.st .st-header, .st-root .st-header {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+.st .st-title, .st-root .st-title { font-size: 28px !important; font-weight: 800 !important; letter-spacing: -0.03em !important; }
+.st .st-tabs, .p-tabs, .st-root .st-ctrl-group {
+  background: rgba(16, 22, 30, 0.8) !important;
+  border: 1px solid var(--vx-line) !important;
+  border-radius: 12px !important;
+  padding: 4px !important;
+}
+.st .st-tab, .p-tab, .st-tab-btn, .st-mode-btn, .ph-mode-btn, .mc-lay {
+  border-radius: 8px !important;
+  color: var(--vx-muted) !important;
+  background: transparent !important;
+  border: none !important;
+}
+.st .st-tab-on, .p-tab-on, .st-tab-on, .st-mode-on, .ph-mode-on, .mc-lay.on, .vnh-lang .on, .hx-lang .on {
+  background: rgba(124, 196, 255, 0.14) !important;
+  color: var(--vx-text) !important;
+  box-shadow: inset 0 0 0 1px rgba(124, 196, 255, 0.35) !important;
+}
+.st .st-input, .st .st-select, .auth-field input, .lm-field input {
+  background: #07090d !important;
+  border: 1px solid var(--vx-line-2) !important;
+  color: var(--vx-text) !important;
+  border-radius: 10px !important;
+}
+.st .st-input:focus, .auth-field input:focus, .lm-field input:focus {
+  border-color: var(--vx-ice) !important;
+  box-shadow: 0 0 0 3px rgba(124, 196, 255, 0.15) !important;
+}
+.st .st-card-title { color: var(--vx-text) !important; letter-spacing: 0.04em !important; }
+.st .st-live-pill {
+  background: rgba(61, 214, 140, 0.12) !important;
+  color: var(--vx-bid) !important;
+  border: 1px solid rgba(61, 214, 140, 0.3) !important;
+  border-radius: 999px !important;
+}
+
+/* Positions */
+.p-root { padding: 8px 4px 28px !important; }
+.ph-bar {
+  display: flex !important;
+  gap: 18px !important;
+  align-items: center !important;
+  padding: 16px 18px !important;
+  margin-bottom: 12px !important;
+}
+.ph-title { font-size: 26px !important; font-weight: 800 !important; letter-spacing: -0.03em !important; }
+.ph-kpi {
+  background: rgba(7, 9, 13, 0.45) !important;
+  border: 1px solid var(--vx-line) !important;
+  border-radius: 12px !important;
+  padding: 8px 12px !important;
+}
+.p-card, .position-card, .bn-card, .pos-card {
+  background: linear-gradient(180deg, #141b24, #0e131a) !important;
+  border: 1px solid var(--vx-line) !important;
+  border-radius: 16px !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+}
+.p-card:hover, .position-card:hover { border-color: rgba(124, 196, 255, 0.35) !important; }
+.sb-l, .icon-l { background: rgba(61, 214, 140, 0.14) !important; color: var(--vx-bid) !important; }
+.sb-s, .icon-s { background: rgba(255, 93, 115, 0.14) !important; color: var(--vx-ask) !important; }
+.p-empty {
+  border: 1px dashed var(--vx-line-2) !important;
+  border-radius: 16px !important;
+  background: rgba(16, 22, 30, 0.45) !important;
+}
+
+/* Statistics / AI / news / help / charts */
+.st-root { padding: 12px 4px 36px !important; }
+.ab { padding: 8px 4px 32px !important; }
+.ab-title { font-size: 22px !important; font-weight: 800 !important; }
+.ab-logo-icon { font-size: 0 !important; position: relative !important; }
+.ab-logo-icon::after {
+  content: "";
+  width: 14px; height: 14px;
+  border: 2px solid var(--vx-ice);
+  transform: rotate(45deg);
+  display: block;
+  box-shadow: 0 0 12px rgba(124, 196, 255, 0.6);
+}
+.hx-root, .vnh, .vxl, .vp, .sl, .pg, .mc-root, .tp {
+  background: transparent !important;
+}
+.hx-nav {
+  background: rgba(12, 16, 22, 0.88) !important;
+}
+.vnh-mark, .hx-logo {
+  border-radius: 12px !important;
+}
+.vnh-name span, .mc-logo span, .auth-logo span { color: var(--vx-ice) !important; }
+.vnh-card, .vxl-panel, .vp-panel, .sl-row, .pg-tile, .ab-panel, .st-root .st-panel {
+  background: var(--vx-panel) !important;
+  border: 1px solid var(--vx-line) !important;
+  border-radius: 14px !important;
+}
+
+table { border-collapse: separate !important; border-spacing: 0 !important; }
+.p-root table, .st-root table, .ab table, .sl table, .vxl table, .st table {
+  width: 100%;
+}
+.p-root th, .st-root th, .ab th, .sl th, .st th {
+  color: var(--vx-dim) !important;
+  font-size: 11px !important;
+  letter-spacing: 0.12em !important;
+  text-transform: uppercase !important;
+  font-weight: 700 !important;
+  border-bottom: 1px solid var(--vx-line) !important;
+}
+.p-root td, .st-root td, .ab td, .sl td {
+  border-bottom: 1px solid rgba(231, 238, 248, 0.05) !important;
+  color: var(--vx-text) !important;
+}
+
+/* Auth */
+.auth-bg-wrap {
+  background:
+    radial-gradient(800px 400px at 50% 0%, rgba(124, 196, 255, 0.12), transparent 60%),
+    #07090d !important;
+}
+.auth-bg-wrap::before { opacity: 0.22 !important; }
+.auth-card, .lm-modal {
+  background: linear-gradient(180deg, #141b24, #0c1016) !important;
+  border: 1px solid var(--vx-line-2) !important;
+  border-radius: 18px !important;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+.auth-logo, .auth-title, .lm-title { color: var(--vx-text) !important; letter-spacing: -0.03em !important; }
+.auth-sub, .lm-divider { color: var(--vx-muted) !important; }
+.lm-btn {
+  background: #0c1016 !important;
+  border: 1px solid var(--vx-line-2) !important;
+  color: var(--vx-text) !important;
+  border-radius: 12px !important;
+}
+.lm-btn:hover { border-color: var(--vx-ice) !important; }
+.lm-backdrop { background: rgba(7, 9, 13, 0.72) !important; backdrop-filter: blur(8px); }
+
+.main-content:not(:has(.mk)) ::-webkit-scrollbar { width: 10px; height: 10px; }
+.main-content:not(:has(.mk)) ::-webkit-scrollbar-thumb {
+  background: #243041;
+  border-radius: 99px;
+  border: 2px solid #07090d;
+}
+
+/* Market page keeps its own canvas. This file is linked again after page
+   styles, so the rule below must stay last and only restore /market. */
+body:has(.mk) {
+  background: #04060e !important;
+}
