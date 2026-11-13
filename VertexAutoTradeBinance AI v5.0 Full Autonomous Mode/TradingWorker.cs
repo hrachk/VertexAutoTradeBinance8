@@ -1037,13 +1037,29 @@ namespace VertexAutoTradeBinance8
                         symbol, dual.Allow, dual.Mode, dual.Tier, dual.LeverageCap, dual.SizeMult, dual.FlowConfirmed, dual.Reason);
                     if (!dual.Allow)
                     {
-                        await RejectAsync(signal, symbol, tf, "DUAL", dual.Reason, ct, extra: dual.Mode.ToString());
-                        return;
+                        bool liveOnNow = _tradingMonitor?.CurrentValue?.EnableExecution ?? _options.EnableExecution;
+                        if (!liveOnNow)
+                        {
+                            // Paper path: do not delete a structurally valid setup just because dual-mode is strict.
+                            // Size it down and continue so Demo still receives the ApprovedEntry.
+                            _logger.LogInformation(
+                                "[DUAL-MODE] {sym} dual rejected ({r}) but live off — paper continues at reduced size",
+                                symbol, dual.Reason);
+                            signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * 0.40m, 0.15m, 0.50m);
+                        }
+                        else
+                        {
+                            await RejectAsync(signal, symbol, tf, "DUAL", dual.Reason, ct, extra: dual.Mode.ToString());
+                            return;
+                        }
                     }
-                    signal.Leverage = dual.LeverageCap;
-                    signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * dual.SizeMult, 0.15m, 1.0m);
-                    if (!string.IsNullOrEmpty(signal.Reason) && !signal.Reason.Contains("DUAL_"))
-                        signal.Reason = signal.Reason + "|DUAL_" + dual.Mode;
+                    else
+                    {
+                        signal.Leverage = dual.LeverageCap;
+                        signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * dual.SizeMult, 0.15m, 1.0m);
+                        if (!string.IsNullOrEmpty(signal.Reason) && !signal.Reason.Contains("DUAL_"))
+                            signal.Reason = signal.Reason + "|DUAL_" + dual.Mode;
+                    }
                 }
                 catch (Exception exDual)
                 {
@@ -1712,12 +1728,28 @@ namespace VertexAutoTradeBinance8
 
             if (qty <= 0)
             {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "RISK",
-                    $"QTY_ZERO: {_risk.LastRejectReason}",
-                    ct);
-                return;
+                bool liveOnNow = _tradingMonitor?.CurrentValue?.EnableExecution ?? _options.EnableExecution;
+                if (!liveOnNow && sizingBalance > 0 && step > 0 && signal.EntryPrice > 0)
+                {
+                    // Paper fallback: tiny qty so Demo still opens and can be sized by the Web side.
+                    decimal fallback = Math.Max(minQty, step);
+                    decimal notional = fallback * signal.EntryPrice;
+                    if (notional < 5m && signal.EntryPrice > 0)
+                        fallback = Math.Ceiling(5m / signal.EntryPrice / step) * step;
+                    qty = fallback;
+                    _logger.LogInformation(
+                        "[PROC][{symbol}] qty was 0 ({why}) — paper fallback qty={q} (live off)",
+                        symbol, _risk.LastRejectReason, qty);
+                }
+                else
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "RISK",
+                        $"QTY_ZERO: {_risk.LastRejectReason}",
+                        ct);
+                    return;
+                }
             }
 
             // Same signal for both books. Paper qty is sized on demo equity,

@@ -16,10 +16,10 @@ namespace VertexAutoTradeBinance8.Strategy;
 /// </summary>
 public static class EntrySanityGate
 {
-    public const decimal MinRiskPct = 0.009m;
-    public const decimal MaxRiskPct = 0.028m;
-    public const decimal RangeMinRiskPct = 0.0045m;
-    public const decimal RangeMaxRiskPct = 0.022m;
+    public const decimal MinRiskPct = 0.006m;
+    public const decimal MaxRiskPct = 0.035m;
+    public const decimal RangeMinRiskPct = 0.004m;
+    public const decimal RangeMaxRiskPct = 0.025m;
 
     /// <summary>Hard reject → do not trade.</summary>
     public static bool Allow(

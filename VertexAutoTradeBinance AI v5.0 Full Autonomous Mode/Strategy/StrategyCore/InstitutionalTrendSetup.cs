@@ -260,9 +260,8 @@ public static class InstitutionalTrendSetup
     }
 
     /// <summary>
-    /// Structural stop only. A stop pulled in to a 0.9% floor sits inside
-    /// noise: the journal then prints the same −1.05R on every name.
-    /// If the swing is closer than that, there is no trade.
+    /// Structural stop: beyond the recent pullback extreme (last 8 bars) ± ATR pad.
+    /// Avoids both micro-stops inside noise and stops so wide that R:R collapses.
     /// </summary>
     private static bool TryStop(
         bool isLong, decimal close, decimal swingInvalidation,
@@ -272,11 +271,20 @@ public static class InstitutionalTrendSetup
         sl = 0;
         risk = 0;
         why = "";
+        // Prefer the closer of the 1H swing and a local ATR-based invalidation
+        decimal localInvalid = isLong
+            ? close - Math.Max(atr15 * 1.4m, atr1h * 0.55m)
+            : close + Math.Max(atr15 * 1.4m, atr1h * 0.55m);
+
+        decimal inv = isLong
+            ? Math.Min(swingInvalidation, localInvalid)
+            : Math.Max(swingInvalidation, localInvalid);
+
         decimal pad = Math.Max(atr1h * Atr1hPad, atr15 * Atr15Pad);
         decimal atrPct = atr15 / close;
-        if (atrPct > 0.012m) pad = Math.Max(pad, atr15 * 1.15m);
+        if (atrPct > 0.010m) pad = Math.Max(pad, atr15 * 1.0m);
 
-        decimal slStruct = isLong ? swingInvalidation - pad : swingInvalidation + pad;
+        decimal slStruct = isLong ? inv - pad : inv + pad;
         decimal structRisk = isLong ? close - slStruct : slStruct - close;
         if (structRisk <= 0)
         {
@@ -284,7 +292,7 @@ public static class InstitutionalTrendSetup
             return false;
         }
 
-        decimal minDist = Math.Max(close * MinRiskPct, atr15 * 0.80m);
+        decimal minDist = Math.Max(close * MinRiskPct, atr15 * 0.70m);
         decimal maxDist = close * MaxRiskPct;
         if (minDist > maxDist)
         {
@@ -292,8 +300,6 @@ public static class InstitutionalTrendSetup
             return false;
         }
 
-        // Invalidation farther than the hard cap: skip. Clamping the stop closer
-        // puts it inside the swing and is how "SL_STRATEGY_FAIL" gets flooded.
         if (structRisk > maxDist)
         {
             why = $"sl_too_wide:{structRisk / close:P2}";
@@ -312,8 +318,8 @@ public static class InstitutionalTrendSetup
     }
 
     /// <summary>
-    /// 15m trigger over the last 4 closed bars: a touch of EMA21 plus either a
-    /// rejection wick or a bullish/bearish reclaim. One perfect candle is not required.
+    /// 15m trigger: pullback into EMA21 zone + close back through it +
+    /// volume confirmation. Avoids late chase entries that hit the stop.
     /// </summary>
     private static bool Trigger(
         List<BinanceFuturesUsdtKline> m15, List<decimal> emaFast, decimal atr15,
@@ -321,29 +327,41 @@ public static class InstitutionalTrendSetup
     {
         strongReject = false;
         int i = m15.Count - 1;
-        if (i < 4 || emaFast.Count != m15.Count) return false;
-        int from = Math.Max(0, i - 5);
+        if (i < 8 || emaFast.Count != m15.Count) return false;
+
+        // Volume confirmation: trigger bar should not be a dead bar
+        decimal volAvg = 0m;
+        int volN = 0;
+        for (int k = Math.Max(0, i - 10); k < i; k++)
+        {
+            volAvg += m15[k].Volume;
+            volN++;
+        }
+        if (volN > 0) volAvg /= volN;
+        bool volOk = volAvg <= 0 || m15[i].Volume >= volAvg * 0.65m;
+
+        int from = Math.Max(0, i - 6);
         bool touched = false;
         for (int j = from; j <= i; j++)
         {
             var b = m15[j];
-            decimal zone = Math.Max(atr15 * 0.70m, b.ClosePrice * 0.0030m);
+            decimal zone = Math.Max(atr15 * 0.85m, b.ClosePrice * 0.0035m);
             decimal rng = b.HighPrice - b.LowPrice;
             if (forLong)
             {
-                if (b.LowPrice <= emaFast[j] + zone && b.ClosePrice >= emaFast[j] - zone * 1.4m)
+                if (b.LowPrice <= emaFast[j] + zone && b.ClosePrice >= emaFast[j] - zone * 1.2m)
                     touched = true;
                 if (rng > 0 && b.ClosePrice >= b.OpenPrice
-                    && (b.ClosePrice - b.LowPrice) >= rng * 0.50m
+                    && (b.ClosePrice - b.LowPrice) >= rng * 0.45m
                     && b.LowPrice <= emaFast[j] + zone)
                     strongReject = true;
             }
             else
             {
-                if (b.HighPrice >= emaFast[j] - zone && b.ClosePrice <= emaFast[j] + zone * 1.4m)
+                if (b.HighPrice >= emaFast[j] - zone && b.ClosePrice <= emaFast[j] + zone * 1.2m)
                     touched = true;
                 if (rng > 0 && b.ClosePrice <= b.OpenPrice
-                    && (b.HighPrice - b.ClosePrice) >= rng * 0.50m
+                    && (b.HighPrice - b.ClosePrice) >= rng * 0.45m
                     && b.HighPrice >= emaFast[j] - zone)
                     strongReject = true;
             }
@@ -351,15 +369,18 @@ public static class InstitutionalTrendSetup
 
         var cur = m15[i];
         decimal rngCur = cur.HighPrice - cur.LowPrice;
-        // Close must finish back through EMA21. A close still under the
-        // average is a breakdown, not a long, even if the wick touched it.
         bool through = forLong
             ? cur.ClosePrice > emaFast[i]
             : cur.ClosePrice < emaFast[i];
         bool wonBar = rngCur <= 0 || (forLong
-            ? (cur.ClosePrice - cur.LowPrice) >= rngCur * 0.45m && cur.ClosePrice >= cur.OpenPrice
-            : (cur.HighPrice - cur.ClosePrice) >= rngCur * 0.45m && cur.ClosePrice <= cur.OpenPrice);
-        return touched && through && (strongReject || wonBar);
+            ? (cur.ClosePrice - cur.LowPrice) >= rngCur * 0.40m && cur.ClosePrice >= cur.OpenPrice
+            : (cur.HighPrice - cur.ClosePrice) >= rngCur * 0.40m && cur.ClosePrice <= cur.OpenPrice);
+
+        // Not extended: price should still be near the average (pullback entry, not chase)
+        decimal dist = Math.Abs(cur.ClosePrice - emaFast[i]);
+        bool notExtended = dist <= atr15 * 1.8m;
+
+        return touched && through && volOk && notExtended && (strongReject || wonBar);
     }
 
     /// <summary>
@@ -408,7 +429,7 @@ public static class InstitutionalTrendSetup
         }
 
         decimal er = Efficiency(h1, 14);
-        if (er < 0.18m)
+        if (er < 0.12m)
         {
             why = $"chop_er:{er:F2}";
             return false;
