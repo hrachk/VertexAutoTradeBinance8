@@ -358,6 +358,97 @@ table { border-collapse: separate !important; border-spacing: 0 !important; }
 .lm-btn:hover { border-color: var(--vx-ice) !important; }
 .lm-backdrop { background: rgba(7, 9, 13, 0.72) !important; backdrop-filter: blur(8px); }
 
+/* ── Motion ────────────────────────────────────────────── */
+:root {
+  --vx-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --vx-fast: 160ms;
+  --vx-mid: 420ms;
+}
+
+@keyframes vx-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes vx-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes vx-mark {
+  0%, 100% { filter: drop-shadow(0 0 4px rgba(124, 196, 255, 0.2)); }
+  50%      { filter: drop-shadow(0 0 10px rgba(124, 196, 255, 0.55)); }
+}
+@keyframes vx-sheen {
+  from { background-position: 0 0; }
+  to   { background-position: 56px 56px; }
+}
+
+.vx-logo-mark svg { animation: vx-mark 4.8s ease-in-out infinite; }
+
+.vt-link, .nv-link, .vx-chip, .vx-user-btn, .dash-btn, .st .st-tab, .p-tab, .ph-mode-btn, .mc-lay, .auth-btn, .lm-btn, .lm-submit {
+  transition: color var(--vx-fast) var(--vx-ease), background var(--vx-fast) var(--vx-ease), border-color var(--vx-fast) var(--vx-ease), transform var(--vx-fast) var(--vx-ease), box-shadow var(--vx-fast) var(--vx-ease) !important;
+}
+.dash-btn:active, .auth-btn:active, .lm-submit:active, .st .st-btn-primary:active, .ph-mode-btn:active {
+  transform: translateY(1px) scale(0.985);
+}
+
+.main-content:not(:has(.mk)) .content {
+  animation: vx-sheen 28s linear infinite;
+}
+.main-content:not(:has(.mk)) .content > * {
+  animation: vx-rise var(--vx-mid) var(--vx-ease) both;
+}
+
+.dash-grid .dash-card,
+.st .st-grid .st-card,
+.p-cards > *,
+.ov-hero-nums .ov-hn,
+.ab .ab-card,
+.st-root .st-card {
+  animation: vx-rise 520ms var(--vx-ease) both;
+}
+.dash-grid .dash-card:nth-child(2),
+.st .st-grid .st-card:nth-child(2),
+.p-cards > *:nth-child(2) { animation-delay: 50ms; }
+.dash-grid .dash-card:nth-child(3),
+.st .st-grid .st-card:nth-child(3),
+.p-cards > *:nth-child(3) { animation-delay: 90ms; }
+.dash-grid .dash-card:nth-child(4),
+.st .st-grid .st-card:nth-child(4),
+.p-cards > *:nth-child(4) { animation-delay: 130ms; }
+.dash-grid .dash-card:nth-child(n + 5),
+.st .st-grid .st-card:nth-child(n + 5),
+.p-cards > *:nth-child(n + 5) { animation-delay: 170ms; }
+
+.dash-card, .st .st-card, .p-card, .position-card, .bn-card {
+  transition: border-color var(--vx-fast) var(--vx-ease), transform var(--vx-mid) var(--vx-ease) !important;
+}
+.dash-card:hover, .st .st-card:hover, .p-card:hover, .position-card:hover {
+  transform: translateY(-2px);
+}
+
+.auth-card, .lm-modal { animation: vx-rise 380ms var(--vx-ease) both; }
+.lm-backdrop { animation: vx-fade 220ms ease both; }
+
+.sidebar-backdrop { animation: vx-fade 180ms ease both; }
+.vertex-sidebar.sidebar-open { animation: vx-rise 280ms var(--vx-ease) both; }
+
+.ph-kpi-v, .ov-hn-val, .dash-card-val, .ab-hv {
+  animation: vx-fade 600ms var(--vx-ease) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vx-logo-mark svg,
+  .main-content:not(:has(.mk)) .content,
+  .main-content:not(:has(.mk)) .content > *,
+  .dash-grid .dash-card,
+  .st .st-grid .st-card,
+  .p-cards > *,
+  .auth-card, .lm-modal, .lm-backdrop {
+    animation: none !important;
+  }
+  .dash-card:hover, .p-card:hover { transform: none; }
+}
+
 .main-content:not(:has(.mk)) ::-webkit-scrollbar { width: 10px; height: 10px; }
 .main-content:not(:has(.mk)) ::-webkit-scrollbar-thumb {
   background: #243041;
