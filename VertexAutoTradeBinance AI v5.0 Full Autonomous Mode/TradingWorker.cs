@@ -1321,7 +1321,7 @@ namespace VertexAutoTradeBinance8
                 if (liveExposureBlocked)
                 {
                     _logger.LogInformation(
-                        "[PROC][{symbol}] {reason} — live entry blocked; candidate continues to paper validation",
+                        "[PROC][{symbol}] {reason} — live entry blocked; demo book is independent and still validates",
                         symbol, liveExposureBlockReason);
                 }
                 // Direction/correlation limits protect the live account only.
@@ -1868,10 +1868,17 @@ namespace VertexAutoTradeBinance8
             bool wantBinance = _exchangeRouter.ShouldExecuteOnBinance();
             bool wantBybit   = _exchangeRouter.ShouldExecuteOnBybit();
             bool liveExecutionEnabled = _tradingMonitor.CurrentValue.EnableExecution;
-            bool attemptedLive = liveExecutionEnabled && !liveExposureBlocked
+            bool allowLiveOrders = _tradingMonitor.CurrentValue.AllowLiveOrders;
+            bool attemptedLive = liveExecutionEnabled && allowLiveOrders && !liveExposureBlocked
                 && (wantBinance || wantBybit) && liveBalance > 0 && qtyLive > 0;
 
-            if (liveExposureBlocked && (wantBinance || wantBybit))
+            if (!allowLiveOrders && (wantBinance || wantBybit))
+            {
+                _logger.LogInformation(
+                    "[ENTRY-SYNC] DEMO-ONLY {symbol} {side} — UI mode is Demo; live orders off, paper book continues",
+                    symbol, signal.Side);
+            }
+            else if (liveExposureBlocked && (wantBinance || wantBybit))
             {
                 _logger.LogInformation(
                     "[ENTRY-SYNC] DEMO-ONLY {symbol} {side} — live account limit: {reason}",
@@ -1983,7 +1990,7 @@ namespace VertexAutoTradeBinance8
                         ? $"live capacity: {liveExposureBlockReason}"
                         : liveBalance <= 0 ? "live balance empty" : "live execution disabled or venue unavailable";
                     _logger.LogInformation(
-                        "[ENTRY-SYNC] DEMO-ONLY {symbol} {side} qty={q} entry={e} sl={sl} reason={reason} liveBal={bal:F2}",
+                        "[ENTRY-SYNC] DEMO-ONLY {symbol} {side} qty={q} entry={e} sl={sl} reason={reason} liveBal={bal:F2} — live cap does not apply to the demo book",
                         symbol, signal.Side, qty, signal.EntryPrice, signal.StopLoss, paperOnlyReason, liveBalance);
                     _tradeJournal?.LogSignal(symbol, "PROC", "EXECUTE_DEMO_ONLY",
                         paperOnlyReason);

@@ -1,4 +1,6 @@
+using System.Text.Json.Nodes;
 using Microsoft.JSInterop;
+using VertexAutoTradeBinance8.Web.Services;
 
 namespace VertexAutoTradeBinance8.Web.Services.Auth;
 
@@ -34,6 +36,7 @@ public sealed class AuthSessionService : IAsyncDisposable
     private readonly VertexAutoTradeBinance8.Web.Services.DemoAccountService _demo;
     private readonly VertexAutoTradeBinance8.Services.TradingCredentialStore _liveCreds;
     private readonly VerificationCodeCache _codeCache;
+    private readonly RuntimeConfigService? _runtime;
     private IJSRuntime? _js;
     private bool        _initialized;
 
@@ -50,7 +53,8 @@ public sealed class AuthSessionService : IAsyncDisposable
         VertexAutoTradeBinance8.Web.Services.DemoAccountService demo,
         VertexAutoTradeBinance8.Services.TradingCredentialStore liveCreds,
         VerificationCodeCache codeCache,
-        ILogger<AuthSessionService> log)
+        ILogger<AuthSessionService> log,
+        RuntimeConfigService? runtime = null)
     {
         _db        = db;
         _tokens    = tokens;
@@ -59,6 +63,7 @@ public sealed class AuthSessionService : IAsyncDisposable
         _liveCreds = liveCreds;
         _codeCache = codeCache;
         _log       = log;
+        _runtime   = runtime;
     }
 
 
@@ -98,6 +103,15 @@ public sealed class AuthSessionService : IAsyncDisposable
     {
         try
         {
+            bool allowLive = live && client.IsLiveEnabled;
+            if (_runtime != null)
+            {
+                await _runtime.SetValueAsync("Trading:AllowLiveOrders", JsonValue.Create(allowLive));
+                _log.LogInformation(
+                    "[SESSION] AllowLiveOrders={allow} for {id} — demo book does not follow this switch",
+                    allowLive, client.Id);
+            }
+
             if (!live || !client.IsLiveEnabled)
             {
                 _liveCreds.Deactivate();

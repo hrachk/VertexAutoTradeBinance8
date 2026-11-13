@@ -296,6 +296,29 @@ public sealed class ClientDbService
         finally { _lock.Release(); }
     }
 
+    /// <summary>
+    /// Who receives the paper book. Live position caps never decide this.
+    /// Demo mode, parallel-demo, or a global live kill-switch all qualify.
+    /// If every active user is in Live and none of those flags are set, the
+    /// active users are still returned so a full live account cannot silently
+    /// drop the independent paper fill.
+    /// </summary>
+    public async Task<List<ClientRecord>> GetClientsForIndependentDemoAsync(bool liveExecutionEnabled)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var active = ReadAll().Where(c => c.IsActive).ToList();
+            var selected = active.Where(c =>
+                c.ParallelDemoEnabled
+                || !liveExecutionEnabled
+                || !string.Equals(c.TradingMode ?? "demo", "live", StringComparison.OrdinalIgnoreCase)
+            ).ToList();
+            return selected.Count > 0 ? selected : active;
+        }
+        finally { _lock.Release(); }
+    }
+
     public async Task<(string key, string secret)> GetBinanceKeysAsync(string clientId)
     {
         await _lock.WaitAsync();

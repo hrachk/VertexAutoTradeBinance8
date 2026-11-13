@@ -42,6 +42,13 @@ public class TradingOptions
     public bool EnableExecution { get; set; } = true;
 
     /// <summary>
+    /// UI Demo/Live switch, written by the web into appsettings.runtime.json.
+    /// false = do not send exchange orders. The paper book is unaffected.
+    /// Distinct from EnableExecution (the autotrade kill-switch).
+    /// </summary>
+    public bool AllowLiveOrders { get; set; } = true;
+
+    /// <summary>
     /// After restart/attach: if open position SL risk from entry is thinner than
     /// MinProtectiveRiskPct, replace SL (and seed missing TPs) with institutional geometry.
     /// Does not tighten already-wide stops. Default true for upgrade safety.
@@ -56,10 +63,14 @@ public class TradingOptions
 
 
     /// <summary>
-    /// Max concurrent open positions (LIVE TradingWorker + Demo auto).
-    /// From Trading:MaxOpenPositions. Default 5. Values <= 0 fall back to 5.
+    /// Max concurrent open positions on the LIVE account only.
+    /// From Trading:MaxOpenPositions. The demo book uses Trading:DemoMaxOpenPositions
+    /// and does not share this counter.
     /// </summary>
     public int MaxOpenPositions { get; set; } = 4;
+
+    /// <summary>Paper book cap. Independent of MaxOpenPositions. Default 8.</summary>
+    public int DemoMaxOpenPositions { get; set; } = 8;
 
     /// <summary>
     /// Max notional per position as fraction of equity (0.28 = 28%).

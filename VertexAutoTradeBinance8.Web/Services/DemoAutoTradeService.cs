@@ -96,8 +96,47 @@ public sealed class DemoAutoTradeService : BackgroundService
 
     private int GetMaxDemoPositions()
     {
-        int n = _cfg.GetValue("Trading:MaxOpenPositions", 4);
-        return n > 0 ? n : 5;
+        // Own book. Do not inherit Trading:MaxOpenPositions / HardRisk max
+        // (that is the live slot count — the one that logged MAX_POSITIONS:6>=3).
+        int n = _cfg.GetValue("Trading:DemoMaxOpenPositions", 8);
+        return n > 0 ? n : 8;
+    }
+
+    /// <summary>
+    /// Registry empty or out of sync with the folders the engine already
+    /// sized against (client_<id>/demo-account.json).
+    /// </summary>
+    private List<ClientRecord> DiscoverDemoLedgers()
+    {
+        var list = new List<ClientRecord>();
+        var engines = _cfg["SharedData:EnginesRoot"];
+        if (string.IsNullOrWhiteSpace(engines))
+        {
+            var root = _cfg["SharedData:Root"] ?? "";
+            engines = Path.GetDirectoryName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        }
+        if (string.IsNullOrWhiteSpace(engines) || !Directory.Exists(engines))
+            return list;
+
+        foreach (var dir in Directory.GetDirectories(engines))
+        {
+            var name = Path.GetFileName(dir);
+            if (!name.StartsWith("client_", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!File.Exists(Path.Combine(dir, "demo-account.json"))) continue;
+            var id = name["client_".Length..];
+            if (string.IsNullOrWhiteSpace(id)) continue;
+            list.Add(new ClientRecord
+            {
+                Id = id,
+                IsActive = true,
+                TradingMode = "demo",
+                ParallelDemoEnabled = true,
+                DemoBalance = 10_000m
+            });
+        }
+        if (list.Count > 0)
+            _log.LogInformation("[DEMO-AUTO] using {n} demo ledger folder(s) under {root}", list.Count, engines);
+        return list;
     }
 
     private async Task TickAsync(CancellationToken ct)
@@ -109,10 +148,13 @@ public sealed class DemoAutoTradeService : BackgroundService
         }
         catch { }
 
-        var clients = await _db.GetClientsWithParallelDemoAsync();
+        var liveOn = _cfg.GetValue("Trading:EnableExecution", true);
+        var clients = await _db.GetClientsForIndependentDemoAsync(liveOn);
+        if (clients.Count == 0)
+            clients = DiscoverDemoLedgers();
         if (clients.Count == 0)
         {
-            _log.LogDebug("[DEMO-AUTO] no clients with ParallelDemo");
+            _log.LogInformation("[DEMO-AUTO] no demo ledger — paper entry not opened");
             return;
         }
 
@@ -131,8 +173,7 @@ public sealed class DemoAutoTradeService : BackgroundService
         if (entries.Count == 0) return 0;
 
         int n = 0;
-        var notBefore = _startedUtc.AddMinutes(-2);
-        foreach (var e in entries.Where(x => x.Utc >= notBefore).OrderByDescending(x => x.Utc))
+        foreach (var e in entries.OrderByDescending(x => x.Utc))
         {
             var key = $"appr|{e.Id}|{e.Symbol}";
             if (!_seen.TryAdd(key, 0)) continue;
@@ -182,7 +223,10 @@ public sealed class DemoAutoTradeService : BackgroundService
             int openN = _demo.GetOpenPositionCountForClient(clientId);
             if (openN >= GetMaxDemoPositions())
             {
-                _journal?.LogSignal(symbol, "DEMO", "REJECT_DEMO", $"MAX_OPEN {openN}");
+                _log.LogInformation(
+                    "[DEMO-AUTO] {sym} skipped — demo book full {n}>={max} (live slot cap is not used)",
+                    symbol, openN, GetMaxDemoPositions());
+                _journal?.LogSignal(symbol, "DEMO", "REJECT_DEMO", $"DEMO_MAX_OPEN {openN}");
                 return false;
             }
             string side = (sideRaw ?? "").Contains("Sell", StringComparison.OrdinalIgnoreCase)
@@ -199,8 +243,11 @@ public sealed class DemoAutoTradeService : BackgroundService
                     cap = 2;
                 if (cap > 0 && sameSide >= cap)
                 {
+                    _log.LogInformation(
+                        "[DEMO-AUTO] {sym} skipped — demo book same-side {n}>={cap} (live positions are not counted)",
+                        symbol, sameSide, cap);
                     _journal?.LogSignal(symbol, "DEMO", "REJECT_DEMO",
-                        $"DIR_MAX_SAME_SIDE_REACHED:{sameSide}>={cap} mode={corrMode}");
+                        $"DEMO_DIR_MAX_SAME_SIDE:{sameSide}>={cap} mode={corrMode}");
                     return false;
                 }
             }
