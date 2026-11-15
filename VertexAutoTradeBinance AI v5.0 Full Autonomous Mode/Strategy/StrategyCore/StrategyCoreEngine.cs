@@ -847,6 +847,8 @@ public sealed class StrategyCoreEngine
         {
             var h1 = await LoadKlinesTfAsync("BTCUSDT", KlineInterval.OneHour, 70).ConfigureAwait(false);
             if (h1 == null || h1.Count < 55) return 0m;
+            if (InstitutionalTrendSetup.ShortsPaused(h1)) return 2m;
+            if (InstitutionalTrendSetup.LongsPaused(h1)) return -2m;
             var closes = h1.Select(x => x.ClosePrice).ToList();
             var e21 = EmaSeries(closes, 21);
             var e50 = EmaSeries(closes, 50);

@@ -135,9 +135,13 @@ public static class InstitutionalTrendSetup
 
         if (btcBias01.HasValue && !symbol.StartsWith("BTC", StringComparison.OrdinalIgnoreCase))
         {
-            // BTC bias against is soft — reduces size/conf, does not kill the setup
-            if (upTrend && btcBias01.Value < 0m) softPenalty += 0.10m;
-            if (downTrend && btcBias01.Value > 0m) softPenalty += 0.10m;
+            // BTC bias against is soft — reduces size/conf, does not kill the setup.
+            // The hard BTC reversal pause is applied later, once the swing is known.
+            if (btcBias01.Value > -1.5m && btcBias01.Value < 1.5m)
+            {
+                if (upTrend && btcBias01.Value < 0m) softPenalty += 0.10m;
+                if (downTrend && btcBias01.Value > 0m) softPenalty += 0.10m;
+            }
         }
 
         decimal volR = VolRatio(h1, 8, 20);
@@ -208,6 +212,26 @@ public static class InstitutionalTrendSetup
 
         decimal posInSwing = (close - swingLo) / swingSpan;
         decimal retrace = upTrend ? 1m - posInSwing : posInSwing;
+
+        // A pullback that has already reclaimed the middle of the last swing,
+        // or traded through the last pivot, is a change of character.
+        // EMAs lag that turn by days. Pause. Do not flip to the other side.
+        var pause = ReversalPause(h1, st1, upTrend, close, swingHi, swingLo, volR);
+        if (pause != null)
+            return Fail(pause);
+
+        var sessionBlock = SessionFade(h1, st1, upTrend, m15[^1].OpenTime, retrace, volR);
+        if (sessionBlock != null)
+            return Fail(sessionBlock);
+
+        if (btcBias01.HasValue && !symbol.StartsWith("BTC", StringComparison.OrdinalIgnoreCase))
+        {
+            // 2 / -2 is a BTC reversal pause, not a normal trend bias.
+            if (downTrend && btcBias01.Value >= 2m)
+                return Fail("btc_reversal_pause");
+            if (upTrend && btcBias01.Value <= -2m)
+                return Fail("btc_reversal_pause");
+        }
 
         var chase = ChaseBan(h1, upTrend, ema21, atr1h, retrace);
         if (chase != null)
@@ -696,6 +720,225 @@ public static class InstitutionalTrendSetup
         if (reject) c += 0.04m;
         if (retrace >= 0.28m && retrace <= 0.58m) c += 0.04m;
         return Math.Min(0.88m, c);
+    }
+
+    /// <summary>
+    /// BTC (and any symbol) : true when new shorts must wait.
+    /// EMA can still be stacked short. The swing cannot.
+    /// </summary>
+    public static bool ShortsPaused(IReadOnlyList<BinanceFuturesUsdtKline> h1Raw)
+        => DirectionPaused(h1Raw, blockingShorts: true);
+
+    public static bool LongsPaused(IReadOnlyList<BinanceFuturesUsdtKline> h1Raw)
+        => DirectionPaused(h1Raw, blockingShorts: false);
+
+    private static bool DirectionPaused(IReadOnlyList<BinanceFuturesUsdtKline> h1Raw, bool blockingShorts)
+    {
+        if (h1Raw == null || h1Raw.Count < 40) return false;
+        var h1 = ClosedBars(h1Raw, 60);
+        if (h1.Count < 30) return false;
+        var st = ReadStructure(h1);
+        decimal swingHi, swingLo;
+        if (st != null)
+        {
+            swingHi = st.LastSwingHigh;
+            swingLo = st.LastSwingLow;
+        }
+        else
+        {
+            var w = h1.TakeLast(16).ToList();
+            swingHi = w.Max(x => x.HighPrice);
+            swingLo = w.Min(x => x.LowPrice);
+        }
+        if (swingHi <= swingLo) return false;
+        decimal close = h1[^1].ClosePrice;
+        decimal span = swingHi - swingLo;
+        decimal pos = (close - swingLo) / span;
+        bool upTrend = !blockingShorts;
+        decimal retrace = upTrend ? 1m - pos : pos;
+        decimal volR = VolRatio(h1, 8, 20);
+        if (ReversalPause(h1, st, upTrend, close, swingHi, swingLo, volR) != null)
+            return true;
+        return SessionFade(h1, st, upTrend, h1[^1].OpenTime, retrace, volR) != null;
+    }
+
+    /// <summary>
+    /// Dow / swing fact, not a new indicator.
+    /// A bearish continuation exists only while price is still under the last
+    /// lower high and has not reclaimed the midpoint of that swing on rising
+    /// closes. The mirror applies to longs. Past that, wait for the next structure.
+    /// </summary>
+    private static string? ReversalPause(
+        List<BinanceFuturesUsdtKline> h1, Struct? st, bool upTrend,
+        decimal close, decimal swingHi, decimal swingLo, decimal volR)
+    {
+        if (h1.Count < 8 || swingHi <= swingLo || close <= 0) return null;
+        decimal mid = (swingHi + swingLo) / 2m;
+        bool risingCloses = h1[^1].ClosePrice > h1[^2].ClosePrice
+            && h1[^2].ClosePrice > h1[^3].ClosePrice;
+        bool fallingCloses = h1[^1].ClosePrice < h1[^2].ClosePrice
+            && h1[^2].ClosePrice < h1[^3].ClosePrice;
+
+        if (!upTrend)
+        {
+            if (st != null && close > st.LastSwingHigh)
+                return "choch_up";
+            bool higherLow = st != null && st.LastSwingLow > st.PrevSwingLow;
+            bool structureTurning = higherLow || RisingLows(h1, 4);
+            if (close > mid && risingCloses && structureTurning)
+                return "reversal_pause_short";
+            if (close > mid && risingCloses && BounceAbsorbs(h1, volR))
+                return "reversal_volume_short";
+            return null;
+        }
+
+        if (st != null && close < st.LastSwingLow)
+            return "choch_down";
+        bool lowerHigh = st != null && st.LastSwingHigh < st.PrevSwingHigh;
+        bool structureFailing = lowerHigh || FallingHighs(h1, 4);
+        if (close < mid && fallingCloses && structureFailing)
+            return "reversal_pause_long";
+        if (close < mid && fallingCloses && BounceAbsorbs(h1, volR))
+            return "reversal_volume_long";
+        return null;
+    }
+
+    /// <summary>
+    /// Cash sessions are the clocks that actually move crypto liquidity:
+    /// Tokyo 09:00–15:00, London 08:00–16:30, New York 09:30–16:00, DST-aware.
+    /// A weekday impulse that has already given back 40% in the weekend book
+    /// or after the New York cash close is being faded. Do not add to it.
+    /// Asia range faded by the New York cash session is the same fact.
+    /// </summary>
+    private static string? SessionFade(
+        List<BinanceFuturesUsdtKline> h1, Struct? st, bool upTrend,
+        DateTime entryOpen, decimal retrace, decimal volR)
+    {
+        if (!DeskClocksReady) return null;
+        var entryUtc = AsUtc(entryOpen);
+        bool thin = ThinBook(entryUtc);
+        if (st == null)
+            return thin && volR < 0.55m ? "thin_session_volume" : null;
+
+        decimal pivot = upTrend ? st.LastSwingLow : st.LastSwingHigh;
+        int idx = FindPivot(h1, pivot, high: !upTrend);
+        if (idx < 0)
+            return thin && volR < 0.55m ? "thin_session_volume" : null;
+
+        var impulse = DeskAt(AsUtc(h1[idx].OpenTime));
+        var entry = DeskAt(entryUtc);
+        bool impulseWasCash = impulse is DeskSession.Tokyo or DeskSession.London
+            or DeskSession.NewYork or DeskSession.Overlap;
+        if (thin && impulseWasCash && retrace >= 0.40m)
+            return "session_fade";
+        if (thin && volR < 0.55m)
+            return "thin_session_volume";
+        if (!thin
+            && impulse == DeskSession.Tokyo
+            && entry is DeskSession.NewYork or DeskSession.Overlap
+            && retrace >= 0.50m)
+            return "session_fade";
+        return null;
+    }
+
+    private enum DeskSession { Tokyo, London, NewYork, Overlap, Off }
+
+    private static readonly TimeZoneInfo TzTokyo = SafeZone("Asia/Tokyo", "Tokyo Standard Time");
+    private static readonly TimeZoneInfo TzLondon = SafeZone("Europe/London", "GMT Standard Time");
+    private static readonly TimeZoneInfo TzNewYork = SafeZone("America/New_York", "Eastern Standard Time");
+    private static bool DeskClocksReady =>
+        TzTokyo.Id != TimeZoneInfo.Utc.Id
+        && TzLondon.Id != TimeZoneInfo.Utc.Id
+        && TzNewYork.Id != TimeZoneInfo.Utc.Id;
+
+    private static TimeZoneInfo SafeZone(string iana, string windows)
+    {
+        try { return TimeZoneInfo.FindSystemTimeZoneById(iana); }
+        catch (TimeZoneNotFoundException) { }
+        catch (InvalidTimeZoneException) { }
+        try { return TimeZoneInfo.FindSystemTimeZoneById(windows); }
+        catch (TimeZoneNotFoundException) { return TimeZoneInfo.Utc; }
+        catch (InvalidTimeZoneException) { return TimeZoneInfo.Utc; }
+    }
+
+    private static DateTime AsUtc(DateTime t)
+    {
+        if (t.Kind == DateTimeKind.Utc) return t;
+        if (t.Kind == DateTimeKind.Local) return t.ToUniversalTime();
+        return DateTime.SpecifyKind(t, DateTimeKind.Utc);
+    }
+
+    private static bool InCash(DateTime utc, TimeZoneInfo tz, TimeSpan from, TimeSpan to)
+    {
+        var local = TimeZoneInfo.ConvertTimeFromUtc(utc, tz).TimeOfDay;
+        return local >= from && local < to;
+    }
+
+    private static DeskSession DeskAt(DateTime utc)
+    {
+        bool tokyo = InCash(utc, TzTokyo, new TimeSpan(9, 0, 0), new TimeSpan(15, 0, 0));
+        bool london = InCash(utc, TzLondon, new TimeSpan(8, 0, 0), new TimeSpan(16, 30, 0));
+        bool ny = InCash(utc, TzNewYork, new TimeSpan(9, 30, 0), new TimeSpan(16, 0, 0));
+        if (london && ny) return DeskSession.Overlap;
+        if (ny) return DeskSession.NewYork;
+        if (london) return DeskSession.London;
+        if (tokyo) return DeskSession.Tokyo;
+        return DeskSession.Off;
+    }
+
+    /// <summary>
+    /// Friday after the New York cash close through Sunday 18:00 New York,
+    /// when equity index futures reopen. Also the weekday gap from that
+    /// close until the Tokyo cash open.
+    /// </summary>
+    private static bool ThinBook(DateTime utc)
+    {
+        var ny = TimeZoneInfo.ConvertTimeFromUtc(utc, TzNewYork);
+        if (ny.DayOfWeek == DayOfWeek.Saturday) return true;
+        if (ny.DayOfWeek == DayOfWeek.Sunday && ny.TimeOfDay < new TimeSpan(18, 0, 0))
+            return true;
+        if (ny.DayOfWeek == DayOfWeek.Friday && ny.TimeOfDay >= new TimeSpan(16, 0, 0))
+            return true;
+        if (DeskAt(utc) != DeskSession.Off) return false;
+        var tokyo = TimeZoneInfo.ConvertTimeFromUtc(utc, TzTokyo);
+        return ny.TimeOfDay >= new TimeSpan(16, 0, 0) && tokyo.Hour < 9;
+    }
+
+    private static int FindPivot(List<BinanceFuturesUsdtKline> h1, decimal price, bool high)
+    {
+        for (int i = h1.Count - 3; i >= 0; i--)
+        {
+            decimal p = high ? h1[i].HighPrice : h1[i].LowPrice;
+            if (p == price) return i;
+        }
+        return -1;
+    }
+
+    private static bool RisingLows(List<BinanceFuturesUsdtKline> h1, int n)
+    {
+        if (h1.Count < n) return false;
+        for (int i = h1.Count - n + 1; i < h1.Count; i++)
+            if (h1[i].LowPrice < h1[i - 1].LowPrice) return false;
+        return true;
+    }
+
+    private static bool FallingHighs(List<BinanceFuturesUsdtKline> h1, int n)
+    {
+        if (h1.Count < n) return false;
+        for (int i = h1.Count - n + 1; i < h1.Count; i++)
+            if (h1[i].HighPrice > h1[i - 1].HighPrice) return false;
+        return true;
+    }
+
+    private static bool BounceAbsorbs(List<BinanceFuturesUsdtKline> h1, decimal volR)
+    {
+        if (h1.Count < 14 || volR < 0.80m) return false;
+        decimal recent = 0m, prior = 0m;
+        int n = h1.Count;
+        for (int i = 0; i < 4; i++) recent += h1[n - 1 - i].Volume;
+        for (int i = 0; i < 8; i++) prior += h1[n - 5 - i].Volume;
+        if (prior <= 0) return false;
+        return (recent / 4m) / (prior / 8m) >= 1.25m;
     }
 
     private static List<BinanceFuturesUsdtKline> ClosedBars(
