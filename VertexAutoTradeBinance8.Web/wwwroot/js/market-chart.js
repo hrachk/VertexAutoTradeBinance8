@@ -477,10 +477,10 @@ function formatPrice(p){if(p==null||!isFinite(p))return'—';const a=Math.abs(p)
             if (!container) return false;
 
             const colors = {
-                bg: '#0b0e13', text: '#8ea0b5', grid: '#1c2636',
+                bg: '#07090d', text: '#8ea0b5', grid: '#1a2330',
                 up: '#3dd68c', down: '#ff5d73',
-                tpNeon: '#3dd68c', slNeon: '#ff8a4a', trailNeon: '#7cc4ff',
-                ema21: '#7cc4ff', ema55: '#a78bfa',
+                tpNeon: '#3dd68c', slNeon: '#ff5d73', trailNeon: '#7cc4ff',
+                ema21: '#7cc4ff', ema55: '#c5d0dc',
                 rsi: '#7cc4ff', rsiOb: '#ff5d73', rsiOs: '#3dd68c',
             };
 

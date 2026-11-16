@@ -36,10 +36,15 @@
     <!-- HEADER -->
     <div class="mk-header">
         <div class="mk-title-block">
-            <span class="mk-icon">📈</span>
+            <span class="mk-mark" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none">
+                    <path d="M1.5 11.5l3.5-3.5L8 10.5 14.5 3" stroke="#7cc4ff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M10 3h4.5V7.5" stroke="#3dd68c" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </span>
             <div>
-                <div class="mk-title">MARKET INTELLIGENCE</div>
-                <div class="mk-sub">Candlestick · EMA · Bollinger · RSI · Volume</div>
+                <div class="mk-title">MARKET</div>
+                <div class="mk-sub">@(_symbols?.Count ?? 0) symbols · @(_demoMode ? "DEMO" : "LIVE")</div>
             </div>
         </div>
 
@@ -115,8 +120,8 @@
             <div class="mk-s"><div class="mk-sl">HIGH</div><div class="mk-sv up">@FmtP(Selected.Klines[^1].High)</div></div>
             <div class="mk-s"><div class="mk-sl">LOW</div><div class="mk-sv dn">@FmtP(Selected.Klines[^1].Low)</div></div>
             <div class="mk-s"><div class="mk-sl">CHANGE</div><div class="mk-sv @(_chg>=0?"up":"dn")">@(_chg>=0?"+":"")@_chg.ToString("F2")%</div></div>
-            <div class="mk-s"><div class="mk-sl">EMA21</div><div class="mk-sv" style="color:#38bdf8">@FmtP(_ema21)</div></div>
-            <div class="mk-s"><div class="mk-sl">EMA55</div><div class="mk-sv" style="color:#a855f7">@FmtP(_ema55)</div></div>
+            <div class="mk-s"><div class="mk-sl">EMA21</div><div class="mk-sv mk-sv-ema21">@FmtP(_ema21)</div></div>
+            <div class="mk-s"><div class="mk-sl">EMA55</div><div class="mk-sv mk-sv-ema55">@FmtP(_ema55)</div></div>
             <div class="mk-s"><div class="mk-sl">ATR</div><div class="mk-sv">@FmtP(_atr)</div></div>
             <div class="mk-s"><div class="mk-sl">RSI</div>
                 <div class="mk-sv @(_rsi>=70?"dn":_rsi<=30?"up":"")">
@@ -174,16 +179,16 @@
         @if (Selected == null || Selected.Klines.Count < 5)
         {
             <div class="mk-no-data-overlay">
-                <div style="font-size:36px">📊</div>
-                <div style="font-size:15px;font-weight:600;margin-top:8px">Waiting for market data</div>
-                <div class="mk-dim" style="font-size:11px;margin-top:4px">Engine writes klines_bootstrap.json on startup</div>
+                <div class="mk-wait-kicker">FEED</div>
+                <div class="mk-wait-title">Waiting for market data</div>
+                <div class="mk-dim">Engine writes klines on startup</div>
             </div>
         }
         else if (!_chartInitDone)
         {
             <div class="mk-no-data-overlay">
-                <div style="font-size:24px">⏳</div>
-                <div style="font-size:13px;margin-top:8px">Initializing chart…</div>
+                <div class="mk-wait-kicker">CHART</div>
+                <div class="mk-wait-title">Initializing chart</div>
             </div>
         }
         @if (!string.IsNullOrEmpty(_chartInitError))
@@ -806,14 +811,8 @@
             </div>
             <div class="mk-acct-item">
                 <div class="mk-acct-label">Realized PnL (today)</div>
-                @{
-                    var todayLocal = DateTime.Now.Date;
-                    var demoRealized = _demoSnapshot.History
-                        .Where(t => t.ClosedAtUtc.ToLocalTime().Date == todayLocal)
-                        .Sum(t => t.RealizedPnl);
-                }
-                <div class="mk-acct-value mono @(demoRealized >= 0 ? "up" : "dn")">
-                    @(demoRealized >= 0 ? "+" : "")@demoRealized.ToString("F2")
+                <div class="mk-acct-value mono @(_demoRealizedToday >= 0 ? "up" : "dn")">
+                    @(_demoRealizedToday >= 0 ? "+" : "")@_demoRealizedToday.ToString("F2")
                 </div>
             </div>
             <div class="mk-acct-item">
@@ -2202,9 +2201,10 @@
 <style>
 :root{--bg:#04060e;--bg2:#080d1a;--bg3:#0d1424;--bg4:#111c30;--bg5:#162035;--bdr:#1e2d47;--bdr2:#253450;--acc:#3b82f6;--grn:#10b981;--grn-d:rgba(16,185,129,.1);--grn-b:rgba(16,185,129,.22);--red:#ef4444;--red-d:rgba(239,68,68,.1);--red-b:rgba(239,68,68,.22);--yel:#f59e0b;--yel-d:rgba(245,158,11,.1);--cyan:#22d3ee;--cyan-d:rgba(34,211,238,.1);--cyan-b:rgba(34,211,238,.22);--purp:#a78bfa;--txt:#e8eef6;--txt2:#b0bfcf;--dim:#4a6080;--dim2:#2d3f5e;--mono:'JetBrains Mono','Fira Code',monospace;}
 html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothing:antialiased;}
-/* Hide ALL scrollbars globally — functional scrolling is kept via JS/CSS */
-*{scrollbar-width:none!important;-ms-overflow-style:none!important;}
-*::-webkit-scrollbar{display:none!important;}
+/* Hide scrollbars inside the terminal only. A global * rule hid every scrollbar in the app. */
+.mk, .mk *{scrollbar-width:thin;-ms-overflow-style:auto;}
+.mk *::-webkit-scrollbar{display:block;width:8px;height:8px;}
+.mk *::-webkit-scrollbar-thumb{background:#243041;border-radius:99px;}
 .mk{font-family:'Inter','Segoe UI',sans-serif;background:var(--bg);min-height:100vh;padding-bottom:48px;}
 .up{color:var(--grn)!important;}.dn{color:var(--red)!important;}.mk-dim{color:var(--dim)!important;}
 
@@ -3509,6 +3509,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             if (price > 0) total += pos.UnrealizedPnl(price);
         }
         _demoUnrealizedTotal = total;
+        _demoRealizedToday = SumTodayRealized(_demoSnapshot.History);
         _ooPanelNeedsAutoFit = true;
         InvalidateDisplayedPositionsCache();
         TryResolvePendingPositionRestore();
@@ -5905,6 +5906,21 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     bool _demoMode;
     DemoAccountState _demoSnapshot = new();
     decimal _demoUnrealizedTotal;
+    decimal _demoRealizedToday;
+
+    static decimal SumTodayRealized(List<DemoClosedTrade>? history)
+    {
+        if (history == null || history.Count == 0) return 0m;
+        var today = DateTime.Now.Date;
+        decimal sum = 0m;
+        for (var i = 0; i < history.Count; i++)
+        {
+            var t = history[i];
+            if (t.ClosedAtUtc.ToLocalTime().Date == today)
+                sum += t.RealizedPnl;
+        }
+        return sum;
+    }
     DateTime _lastRealizedPnlFetchUtc = DateTime.MinValue;
     bool _positionsLoading;
     int  _tickCount = 0; // for staggered polling
