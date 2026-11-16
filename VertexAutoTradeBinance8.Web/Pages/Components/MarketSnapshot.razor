@@ -637,8 +637,8 @@
                 }
             </div>
         <div class="mk-legend">
-                <span class="mk-legend-item"><span class="mk-legend-line" style="background:#38bdf8"></span> EMA21</span>
-                <span class="mk-legend-item"><span class="mk-legend-line" style="background:#a855f7"></span> EMA55</span>
+                <span class="mk-legend-item"><span class="mk-legend-line" style="background:#7cc4ff"></span> EMA21</span>
+                <span class="mk-legend-item"><span class="mk-legend-line" style="background:#c5d0dc"></span> EMA55</span>
                 <span class="mk-legend-sep"></span>
                 <span class="mk-legend-item" style="color:#94a3b8">RSI</span>
                 <span class="mk-legend-item mk-legend-ob">OB 70</span>
@@ -739,12 +739,13 @@
             <div class="mk-tpsl-overlay">
                 </div>
             }
+            <button type="button" class="mk-chart-grip" title="Drag the corner to resize the chart" aria-label="Resize chart"></button>
         </div>
 
         <div class="mk-hints">
-            <span>🖱 Drag to pan</span>
-            <span>⚲ Scroll to zoom</span>
-            <span>🖱 Right-click to pick a price</span>
+            <span>Drag the corner to resize</span>
+            <span>Scroll to zoom</span>
+            <span>Right-click to pick a price</span>
         </div>
 
         @* ── TP Percent Modal ─────────────────────────────────────── *@
@@ -3940,14 +3941,17 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // size while the transition is mid-flight.
         await Task.Delay(50);
         try { await JS.InvokeVoidAsync("marketChart.clearWrapInlineHeight", $"chartContainer-{_chartInstanceId}"); } catch { }
+        try { await JS.InvokeVoidAsync("marketResize.sync"); } catch { }
         try { await JS.InvokeVoidAsync("marketChart.resize", $"chartContainer-{_chartInstanceId}"); } catch { }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        try { await JS.InvokeVoidAsync("marketResize.sync"); } catch { }
         if (firstRender)
         {
             await InitChartAsync();
+            try { await JS.InvokeVoidAsync("marketResize.sync"); } catch { }
             // Give Blazor one render cycle to add _chartInitDone=true
             // elements to the DOM, then init draggable UI elements.
             StateHasChanged();
