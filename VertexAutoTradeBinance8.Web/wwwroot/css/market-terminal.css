@@ -428,3 +428,14 @@ body:has(.mk) .content.px-4 {
   .mk .mk-tk,
   .mk .ord-submit-btn { transition: none !important; }
 }
+
+.mk .mk-side-long.mk-sort-btn-on {
+  color: #3dd68c !important;
+  border-color: rgba(61, 214, 140, 0.7) !important;
+  background: rgba(61, 214, 140, 0.12) !important;
+}
+.mk .mk-side-short.mk-sort-btn-on {
+  color: #ff5d73 !important;
+  border-color: rgba(255, 93, 115, 0.7) !important;
+  background: rgba(255, 93, 115, 0.12) !important;
+}

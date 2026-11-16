@@ -1072,6 +1072,15 @@
                                 <input type="checkbox" @bind="_posFilterCurrentSym" /> Only <strong>@_activeSym</strong>
                             </label>
                             <div class="mk-pos-sort-btns">
+                                <span class="mk-dim" style="font-size:11px">Side:</span>
+                                <button type="button" class="mk-sort-btn @(_posSideFilter=="all"?"mk-sort-btn-on":"")"
+                                        @onclick='() => SetPosSideFilter("all")'>All</button>
+                                <button type="button" class="mk-sort-btn mk-side-long @(_posSideFilter=="LONG"?"mk-sort-btn-on":"")"
+                                        @onclick='() => SetPosSideFilter("LONG")'>Long</button>
+                                <button type="button" class="mk-sort-btn mk-side-short @(_posSideFilter=="SHORT"?"mk-sort-btn-on":"")"
+                                        @onclick='() => SetPosSideFilter("SHORT")'>Short</button>
+                            </div>
+                            <div class="mk-pos-sort-btns">
                                 <span class="mk-dim" style="font-size:11px">Sort:</span>
                                 @foreach (var (field, label) in new[]{("sym","Symbol"),("pnl","PnL"),("roi","ROI"),("size","Size")})
                                 {
@@ -1115,18 +1124,24 @@
                                     }
                                 }
                                 @{
-                                    // Apply filter (current symbol only) + sort
-                                    var posToShow = _posFilterCurrentSym && !string.IsNullOrEmpty(_activeSym)
-                                        ? DisplayedPositions.Where(p => p.Symbol == _activeSym).ToList()
-                                        : DisplayedPositions;
-                                    posToShow = _posSortField switch {
-                                        "sym"  => _posSortAsc ? posToShow.OrderBy(p=>p.Symbol).ToList() : posToShow.OrderByDescending(p=>p.Symbol).ToList(),
-                                        "roi"  => _posSortAsc ? posToShow.OrderBy(p=>p.Roi).ToList() : posToShow.OrderByDescending(p=>p.Roi).ToList(),
-                                        "size" => _posSortAsc ? posToShow.OrderBy(p=>p.Size).ToList() : posToShow.OrderByDescending(p=>p.Size).ToList(),
-                                        _      => _posSortAsc ? posToShow.OrderBy(p=>p.Pnl).ToList() : posToShow.OrderByDescending(p=>Math.Abs(p.Pnl)).ToList(),
+                                    var posToShow = DisplayedPositions.AsEnumerable();
+                                    if (_posFilterCurrentSym && !string.IsNullOrEmpty(_activeSym))
+                                        posToShow = posToShow.Where(p => p.Symbol == _activeSym);
+                                    if (_posSideFilter == "LONG" || _posSideFilter == "SHORT")
+                                        posToShow = posToShow.Where(p => string.Equals(p.Side, _posSideFilter, StringComparison.OrdinalIgnoreCase));
+                                    var posList = posToShow.ToList();
+                                    posList = _posSortField switch {
+                                        "sym"  => _posSortAsc ? posList.OrderBy(p=>p.Symbol).ToList() : posList.OrderByDescending(p=>p.Symbol).ToList(),
+                                        "roi"  => _posSortAsc ? posList.OrderBy(p=>p.Roi).ToList() : posList.OrderByDescending(p=>p.Roi).ToList(),
+                                        "size" => _posSortAsc ? posList.OrderBy(p=>p.Size).ToList() : posList.OrderByDescending(p=>p.Size).ToList(),
+                                        _      => _posSortAsc ? posList.OrderBy(p=>p.Pnl).ToList() : posList.OrderByDescending(p=>Math.Abs(p.Pnl)).ToList(),
                                     };
                                 }
-                                @foreach (var pos in posToShow)
+                                @if (posList.Count == 0)
+                                {
+                                    <tr><td colspan="12" class="mk-oo-empty">@(_posSideFilter == "LONG" ? "No long positions" : _posSideFilter == "SHORT" ? "No short positions" : "No positions match the filter")</td></tr>
+                                }
+                                @foreach (var pos in posList)
                                 {
                                     <tr class="mk-pos-row @(PosIdentityEquals(_selectedPosition, pos) ? "mk-pos-row-sel" : "") @(PosIdentityEquals(_selectingPosition, pos) ? "mk-pos-row-loading" : "")"
                                         @onclick="() => SelectPosition(pos)">
@@ -3276,6 +3291,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     {
         if (_posSortField == field) _posSortAsc = !_posSortAsc;
         else { _posSortField = field; _posSortAsc = field == "sym"; }
+        _ = SaveSelectionState();
+    }
+
+    void SetPosSideFilter(string side)
+    {
+        _posSideFilter = side;
+        _ = SaveSelectionState();
     }
 
     void SetSideTblTabHot() => _sideTblTab = "hot";
@@ -4041,6 +4063,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                         if (!string.IsNullOrEmpty(saved.posSortField)) _posSortField = saved.posSortField;
                         _posSortAsc = saved.posSortAsc;
                         _posFilterCurrentSym = saved.posFilterCurrentSym;
+                        if (saved.posSideFilter is "all" or "LONG" or "SHORT")
+                            _posSideFilter = saved.posSideFilter;
 
                         StateHasChanged();
                         _ = RenderCharts();
@@ -4859,6 +4883,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public string posSortField { get; set; } = "pnl";
         public bool posSortAsc { get; set; }
         public bool posFilterCurrentSym { get; set; }
+        public string posSideFilter { get; set; } = "all";
         public Dictionary<string,string>? symTf { get; set; }
     }
 
@@ -4879,6 +4904,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 posSortField = _posSortField,
                 posSortAsc = _posSortAsc,
                 posFilterCurrentSym = _posFilterCurrentSym,
+                posSideFilter = _posSideFilter,
             };
             var json = System.Text.Json.JsonSerializer.Serialize(state);
             await JS.InvokeVoidAsync("localStorage.setItem", "vertexMarketState", json);
@@ -5733,6 +5759,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     bool _posSortAsc = false;
     // Filter: show only positions matching the active chart symbol
     bool _posFilterCurrentSym = false;
+    string _posSideFilter = "all";
     bool _lastPositionsFetchOk; // see CleanupOrphanedProtectiveOrdersAsync — never treat an empty _allPositions as ground truth unless this is true
 
     // Returns the right positions list for display depending on mode -
