@@ -258,7 +258,7 @@ public static class InstitutionalTrendSetup
             if (!Trigger(m15, eF, atr15, forLong: true, out bool strongReject))
                 return Fail("no_m15_long_trigger");
 
-            if (!TryStop(true, close, swingLo, atr1h, atr15, out decimal sl, out decimal risk, out string slWhy))
+            if (!TryStop(true, close, swingLo, atr1h, atr15, m15, out decimal sl, out decimal risk, out string slWhy))
                 return Fail(slWhy);
 
             var tps = StructureTps(true, close, risk, swingHi, swingLo, atr15, atr1h, m15);
@@ -282,7 +282,7 @@ public static class InstitutionalTrendSetup
         if (!Trigger(m15, eF, atr15, forLong: false, out bool strongRejectS))
             return Fail("no_m15_short_trigger");
 
-        if (!TryStop(false, close, swingHi, atr1h, atr15, out decimal slS, out decimal riskS, out string slWhyS))
+        if (!TryStop(false, close, swingHi, atr1h, atr15, m15, out decimal slS, out decimal riskS, out string slWhyS))
             return Fail(slWhyS);
 
         var tpsS = StructureTps(false, close, riskS, swingHi, swingLo, atr15, atr1h, m15);
@@ -298,31 +298,48 @@ public static class InstitutionalTrendSetup
     }
 
     /// <summary>
-    /// Structural stop: beyond the recent pullback extreme (last 8 bars) ± ATR pad.
-    /// Avoids both micro-stops inside noise and stops so wide that R:R collapses.
+    /// Stop sits past the liquidity pool, not on it.
+    /// The pool is the further of the 1H swing and the last 15m wick.
+    /// Resting stops cluster on that wick and on the round number just beyond it.
+    /// A sweep runs a short distance through the pool and comes back, so the
+    /// stop is the pool plus that room. If the distance exceeds MaxRiskPct the
+    /// trade is skipped. The stop is never pulled back into the pool.
+    /// Size is 1R of equity, so a wider stop reduces quantity, not the dollar risk.
     /// </summary>
     private static bool TryStop(
         bool isLong, decimal close, decimal swingInvalidation,
         decimal atr1h, decimal atr15,
+        List<BinanceFuturesUsdtKline> m15,
         out decimal sl, out decimal risk, out string why)
     {
         sl = 0;
         risk = 0;
         why = "";
-        // Prefer the closer of the 1H swing and a local ATR-based invalidation
+
+        decimal pool = swingInvalidation;
+        int from = Math.Max(0, m15.Count - 10);
+        for (int k = from; k < m15.Count; k++)
+        {
+            decimal wick = isLong ? m15[k].LowPrice : m15[k].HighPrice;
+            pool = isLong ? Math.Min(pool, wick) : Math.Max(pool, wick);
+        }
+
         decimal localInvalid = isLong
             ? close - Math.Max(atr15 * 1.4m, atr1h * 0.55m)
             : close + Math.Max(atr15 * 1.4m, atr1h * 0.55m);
 
         decimal inv = isLong
-            ? Math.Min(swingInvalidation, localInvalid)
-            : Math.Max(swingInvalidation, localInvalid);
+            ? Math.Min(pool, localInvalid)
+            : Math.Max(pool, localInvalid);
 
+        // Structural pad, then the extra distance a sweep wick travels
+        // through the pool before the bar closes back inside.
         decimal pad = Math.Max(atr1h * Atr1hPad, atr15 * Atr15Pad);
-        decimal atrPct = atr15 / close;
-        if (atrPct > 0.010m) pad = Math.Max(pad, atr15 * 1.0m);
+        decimal sweepRoom = Math.Max(atr15 * 0.45m, close * 0.0018m);
+        pad += sweepRoom;
 
         decimal slStruct = isLong ? inv - pad : inv + pad;
+        slStruct = NudgePastRound(slStruct, close, isLong);
         decimal structRisk = isLong ? close - slStruct : slStruct - close;
         if (structRisk <= 0)
         {
@@ -353,6 +370,34 @@ public static class InstitutionalTrendSetup
         sl = slStruct;
         risk = structRisk;
         return true;
+    }
+
+    /// <summary>
+    /// Round prices (65000, 1800, 48.00) are where the resting stops sit.
+    /// If the structural stop lands on one, move it further out, never closer.
+    /// </summary>
+    private static decimal NudgePastRound(decimal sl, decimal price, bool isLong)
+    {
+        decimal step = RoundStep(price);
+        if (step <= 0) return sl;
+        decimal rem = sl % step;
+        if (rem < 0) rem += step;
+        decimal dist = Math.Min(rem, step - rem);
+        if (dist > price * 0.0004m) return sl;
+        decimal nudge = Math.Max(price * 0.0008m, step * 0.12m);
+        return isLong ? sl - nudge : sl + nudge;
+    }
+
+    private static decimal RoundStep(decimal price)
+    {
+        decimal a = Math.Abs(price);
+        if (a >= 10000m) return 100m;
+        if (a >= 1000m) return 10m;
+        if (a >= 100m) return 1m;
+        if (a >= 10m) return 0.1m;
+        if (a >= 1m) return 0.01m;
+        if (a >= 0.1m) return 0.001m;
+        return 0.0001m;
     }
 
     /// <summary>
