@@ -12,11 +12,90 @@ public sealed class DemoAccountService
     private readonly string _accountsDir;
     private readonly object _lock = new();
 
-    private string _clientId = "";
-    private string _filePath = "";
-    private string _dcaStatePath = "";
+    private static readonly AsyncLocal<string?> AmbientClient = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Ledger> _ledgers = new(StringComparer.OrdinalIgnoreCase);
+    private string _sessionClientId = "";
+    private Ledger? _tickLedger;
+    private int _tickDepth;
 
-    private DemoAccountState _state = new();
+    private DemoAccountState _loose = new();
+    private DemoDcaState _looseDca = new();
+    private string _loosePath = "";
+    private string _looseDcaPath = "";
+
+    public static void SetAmbientClient(string? clientId) =>
+        AmbientClient.Value = string.IsNullOrWhiteSpace(clientId) ? null : ClientPaths.Normalize(clientId);
+
+    public static void ClearAmbientClient() => AmbientClient.Value = null;
+
+    private sealed class Ledger
+    {
+        public string Id = "";
+        public string FilePath = "";
+        public string DcaPath = "";
+        public DemoAccountState State = new();
+        public DemoDcaState Dca = new();
+    }
+
+    private Ledger? CurrentLedger()
+    {
+        if (_tickLedger != null) return _tickLedger;
+        var id = AmbientClient.Value;
+        if (string.IsNullOrEmpty(id)) id = _sessionClientId;
+        if (string.IsNullOrEmpty(id)) return null;
+        id = ClientPaths.Normalize(id);
+        return _ledgers.TryGetValue(id, out var book) ? book : null;
+    }
+
+    private string _clientId
+    {
+        get => CurrentLedger()?.Id ?? _sessionClientId;
+        set => _sessionClientId = ClientPaths.Normalize(value);
+    }
+
+    private string _filePath
+    {
+        get => CurrentLedger()?.FilePath ?? _loosePath;
+        set
+        {
+            var book = CurrentLedger();
+            if (book != null) book.FilePath = value;
+            else _loosePath = value;
+        }
+    }
+
+    private string _dcaStatePath
+    {
+        get => CurrentLedger()?.DcaPath ?? _looseDcaPath;
+        set
+        {
+            var book = CurrentLedger();
+            if (book != null) book.DcaPath = value;
+            else _looseDcaPath = value;
+        }
+    }
+
+    private DemoAccountState _state
+    {
+        get => CurrentLedger()?.State ?? _loose;
+        set
+        {
+            var book = CurrentLedger();
+            if (book != null) book.State = value;
+            else _loose = value;
+        }
+    }
+
+    private DemoDcaState _dcaState
+    {
+        get => CurrentLedger()?.Dca ?? _looseDca;
+        set
+        {
+            var book = CurrentLedger();
+            if (book != null) book.Dca = value;
+            else _looseDca = value;
+        }
+    }
 
     // Tracks the most recent price for every symbol we've seen a tick
     // for — needed because checking SL/TP on a tick for symbol X
@@ -32,7 +111,7 @@ public sealed class DemoAccountService
     private readonly IOptionsMonitor<VertexAutoTradeBinance8.Configuration.DcaOptions> _dcaOptions;
     private readonly HistoricalDataReaderService _historicalData;
     private readonly VertexAutoTradeBinance8.Web.Data.SystemDb? _systemDb;
-    private DemoDcaState _dcaState = new();
+    // DCA state lives on the active ledger (_dcaState property).
     private Timer? _dcaTimer;
 
     public event Action? Updated;
@@ -68,7 +147,8 @@ public sealed class DemoAccountService
     /// </summary>
     public void BindClient(string clientId, decimal? preferredInitialBalance = null)
     {
-        if (string.IsNullOrWhiteSpace(clientId))
+        var id = ClientPaths.Normalize(clientId);
+        if (string.IsNullOrEmpty(id))
         {
             UnbindClient();
             return;
@@ -76,57 +156,70 @@ public sealed class DemoAccountService
 
         lock (_lock)
         {
-            if (_clientId == clientId && !string.IsNullOrEmpty(_filePath))
-                return; // already bound
-
-            // Persist previous user before switching
-            if (!string.IsNullOrEmpty(_clientId) && !string.IsNullOrEmpty(_filePath))
+            if (!_ledgers.TryGetValue(id, out var book))
             {
-                Save();
-                SaveDcaState();
+                book = OpenLedger(id, preferredInitialBalance);
+                _ledgers[id] = book;
             }
-
-            _clientId = clientId;
-            var clientDir = Path.Combine(_accountsDir, $"client_{clientId}");
-            try { Directory.CreateDirectory(clientDir); } catch { }
-
-            _filePath = Path.Combine(clientDir, "demo-account.json");
-            _dcaStatePath = Path.Combine(clientDir, "demo-dca-state.json");
-
-            _state = new DemoAccountState();
-            _dcaState = new DemoDcaState();
-            Load();
-            LoadDcaState();
-            SeedMarksFromPositions();
-
-            // Seed initial balance for brand-new demo ledger
-            if (!File.Exists(_filePath))
-            {
-                var seed = preferredInitialBalance is > 0 ? preferredInitialBalance.Value : 10_000m;
-                _state.InitialBalance = seed;
-                _state.Balance = seed;
-                Save();
-            }
+            _sessionClientId = id;
         }
 
-        _logger.LogInformation("[DEMO] Bound client {id} balance={bal:F2}", clientId, _state.Balance);
+        _logger.LogInformation("[DEMO] Bound client {id} balance={bal:F2} books={n}",
+            id, _ledgers[id].State.Balance, _ledgers.Count);
         Updated?.Invoke();
+    }
+
+    private Ledger OpenLedger(string id, decimal? preferredInitialBalance)
+    {
+        var clientDir = ClientPaths.Dir(_accountsDir, id);
+        try { Directory.CreateDirectory(clientDir); } catch { }
+
+        var book = new Ledger
+        {
+            Id = id,
+            FilePath = Path.Combine(clientDir, "demo-account.json"),
+            DcaPath = Path.Combine(clientDir, "demo-dca-state.json"),
+            State = new DemoAccountState(),
+            Dca = new DemoDcaState(),
+        };
+
+        // Load through the ledger directly so another circuit's ambient id
+        // cannot redirect the read onto the wrong user.
+        var prev = _tickLedger;
+        _tickLedger = book;
+        try
+        {
+            Load();
+            LoadDcaState();
+            if (!File.Exists(book.FilePath))
+            {
+                var seed = preferredInitialBalance is > 0 ? preferredInitialBalance.Value : 10_000m;
+                book.State.InitialBalance = seed;
+                book.State.Balance = seed;
+                Save();
+            }
+            SeedMarksFromPositions();
+        }
+        finally
+        {
+            _tickLedger = prev;
+        }
+
+        return book;
     }
 
     public void UnbindClient()
     {
         lock (_lock)
         {
-            if (!string.IsNullOrEmpty(_clientId) && !string.IsNullOrEmpty(_filePath))
+            if (_ledgers.TryGetValue(_sessionClientId, out var book))
             {
-                Save();
-                SaveDcaState();
+                var prev = _tickLedger;
+                _tickLedger = book;
+                try { Save(); SaveDcaState(); }
+                finally { _tickLedger = prev; }
             }
-            _clientId = "";
-            _filePath = "";
-            _dcaStatePath = "";
-            _state = new DemoAccountState();
-            _dcaState = new DemoDcaState();
+            _sessionClientId = "";
         }
         Updated?.Invoke();
     }
@@ -252,7 +345,7 @@ public sealed class DemoAccountService
 
         try
         {
-            var path = Path.Combine(_accountsDir, $"client_{clientId}", "demo-account.json");
+            var path = Path.Combine(ClientPaths.Dir(_accountsDir, clientId), "demo-account.json");
             if (!File.Exists(path)) return Math.Max(0m, fallbackBalance);
             var state = System.Text.Json.JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path));
             if (state == null) return 0m;
@@ -273,7 +366,7 @@ public sealed class DemoAccountService
 
         try
         {
-            var path = Path.Combine(_accountsDir, $"client_{clientId}", "demo-account.json");
+            var path = Path.Combine(ClientPaths.Dir(_accountsDir, clientId), "demo-account.json");
             if (!File.Exists(path)) return 10_000m;
             var state = System.Text.Json.JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path));
             if (state == null) return 10_000m;
@@ -294,7 +387,7 @@ public sealed class DemoAccountService
         }
         try
         {
-            var path = Path.Combine(_accountsDir, $"client_{clientId}", "demo-account.json");
+            var path = Path.Combine(ClientPaths.Dir(_accountsDir, clientId), "demo-account.json");
             if (!File.Exists(path)) return 0;
             var state = System.Text.Json.JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path));
             return state?.Positions?.Count ?? 0;
@@ -318,7 +411,7 @@ public sealed class DemoAccountService
         }
         try
         {
-            var path = Path.Combine(_accountsDir, $"client_{clientId}", "demo-account.json");
+            var path = Path.Combine(ClientPaths.Dir(_accountsDir, clientId), "demo-account.json");
             if (!File.Exists(path)) return 0;
             var state = System.Text.Json.JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path));
             return state?.Positions?.Count(p => Match(p.Side)) ?? 0;
@@ -337,7 +430,7 @@ public sealed class DemoAccountService
         }
         try
         {
-            var path = Path.Combine(_accountsDir, $"client_{clientId}", "demo-account.json");
+            var path = Path.Combine(ClientPaths.Dir(_accountsDir, clientId), "demo-account.json");
             if (!File.Exists(path)) return false;
             var state = System.Text.Json.JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path));
             return state?.Positions?.Any(p =>
@@ -464,7 +557,7 @@ public sealed class DemoAccountService
 
         lock (_lock)
         {
-            var clientDir = Path.Combine(_accountsDir, $"client_{clientId}");
+            var clientDir = ClientPaths.Dir(_accountsDir, clientId);
             try { Directory.CreateDirectory(clientDir); } catch { }
             var path = Path.Combine(clientDir, "demo-account.json");
 
@@ -545,9 +638,11 @@ public sealed class DemoAccountService
                 return (false, "save failed");
             }
 
-            // Keep session state in sync if this is the bound user
-            if (_clientId == clientId)
-                _state = state;
+            // Update the in-memory book for this user without switching
+            // whoever is currently on screen.
+            var id = ClientPaths.Normalize(clientId);
+            if (_ledgers.TryGetValue(id, out var book))
+                book.State = state;
 
             _logger.LogInformation("[DEMO-PARALLEL] {id} {side} {symbol} qty={qty} @ {price}",
                 clientId, side, symbol, qty, currentPrice);
@@ -593,7 +688,6 @@ public sealed class DemoAccountService
         string reason)
     {
         if (string.IsNullOrWhiteSpace(clientId)) return (false, "no client");
-        BindClient(clientId);
         if (qty <= 0 || entry <= 0) return (false, "Invalid qty/entry");
 
         // Slippage: long pays higher, short sells lower
@@ -627,7 +721,12 @@ public sealed class DemoAccountService
             decimal fee = notional * TakerFeeRate;
             lock (_lock)
             {
-                if (string.Equals(_clientId, clientId, StringComparison.OrdinalIgnoreCase))
+                var id = ClientPaths.Normalize(clientId);
+                if (!_ledgers.TryGetValue(id, out var book))
+                    return (ok, err);
+                var prev = _tickLedger;
+                _tickLedger = book;
+                try
                 {
                     _state.Balance -= fee;
                     var pos = _state.Positions.LastOrDefault(p => p.Symbol == symbol && p.Side == side);
@@ -653,6 +752,10 @@ public sealed class DemoAccountService
                         }
                     }
                     Save();
+                }
+                finally
+                {
+                    _tickLedger = prev;
                 }
             }
             _logger.LogInformation(
@@ -955,6 +1058,23 @@ _state.History.Add(new DemoClosedTrade
     private void OnPriceTicked(string symbol, decimal price)
     {
         if (price <= 0) return;
+
+        if (_tickDepth == 0)
+        {
+            List<Ledger> books;
+            lock (_lock) books = _ledgers.Values.ToList();
+            foreach (var book in books)
+            {
+                lock (_lock)
+                {
+                    _tickLedger = book;
+                    _tickDepth++;
+                    try { OnPriceTicked(symbol, price); }
+                    finally { _tickDepth--; _tickLedger = null; }
+                }
+            }
+            return;
+        }
 
         List<(DemoPosition pos, decimal pct, string reason)>? toClose = null;
         List<DemoPendingOrder>? toFill = null;

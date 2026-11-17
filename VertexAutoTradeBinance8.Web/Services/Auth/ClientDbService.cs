@@ -147,10 +147,7 @@ public sealed class ClientDbService
             };
 
             all.Add(client);
-            WriteAll(all);  // sync write inside lock — no nested async lock needed
-
-            // Create client data folder
-            try { Directory.CreateDirectory(client.DataFolder); } catch { }
+            WriteAll(all);
 
             EnsureClientDataFolder(client.Id);
             _log.LogInformation("[AUTH] Registered: {Id} {Email}", client.Id, client.Email);
@@ -390,7 +387,7 @@ public sealed class ClientDbService
         try
         {
             var dir = Path.GetDirectoryName(_filePath) ?? AppContext.BaseDirectory;
-            var clientDir = Path.Combine(dir, $"client_{clientId}");
+            var clientDir = VertexAutoTradeBinance8.Web.Services.ClientPaths.Dir(dir, clientId);
             Directory.CreateDirectory(clientDir);
             Directory.CreateDirectory(Path.Combine(clientDir, "ai-models", "decision-trace"));
         }
@@ -454,8 +451,6 @@ public sealed class ClientDbService
                     DemoBalance   = 10_000m,
                     CreatedAt     = DateTime.UtcNow,
                 };
-
-                try { Directory.CreateDirectory(client.DataFolder); } catch { }
             }
 
             // Link provider ID to account

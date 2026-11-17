@@ -74,6 +74,8 @@ builder.Services.AddHttpClient("oauth", c => { c.Timeout = TimeSpan.FromSeconds(
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.SessionTokenService>();
 builder.Services.AddScoped<VertexAutoTradeBinance8.Web.Services.Auth.AuthSessionService>();
 builder.Services.AddScoped<VertexAutoTradeBinance8.Web.Services.ClientDataService>();
+builder.Services.AddScoped<Microsoft.AspNetCore.Components.Server.Circuits.CircuitHandler,
+    VertexAutoTradeBinance8.Web.Services.UserCircuitHandler>();
 
 builder.Services.AddSingleton<AiRuntimeDataProvider>();
 builder.Services.AddSingleton<SymbolRegistryService>();

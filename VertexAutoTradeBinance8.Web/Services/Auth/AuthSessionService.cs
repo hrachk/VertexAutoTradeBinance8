@@ -114,7 +114,7 @@ public sealed class AuthSessionService : IAsyncDisposable
 
             if (!live || !client.IsLiveEnabled)
             {
-                _liveCreds.Deactivate();
+                _liveCreds.Deactivate(client.Id);
                 _log.LogInformation("[SESSION] LIVE credentials cleared (demo mode) for {id}", client.Id);
                 return;
             }
@@ -122,7 +122,7 @@ public sealed class AuthSessionService : IAsyncDisposable
             var (key, secret) = await _db.GetBinanceKeysAsync(client.Id);
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(secret))
             {
-                _liveCreds.Deactivate();
+                _liveCreds.Deactivate(client.Id);
                 _log.LogWarning("[SESSION] LIVE requested but keys empty for {id} — stayed deactivated", client.Id);
                 return;
             }
@@ -132,7 +132,7 @@ public sealed class AuthSessionService : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _liveCreds.Deactivate();
+            _liveCreds.Deactivate(client.Id);
             _log.LogError(ex, "[SESSION] SyncLiveCredentials failed for {id}", client.Id);
         }
     }
@@ -239,7 +239,10 @@ public sealed class AuthSessionService : IAsyncDisposable
 
         CurrentClient = client;
         BindDemoForClient(client);
-        // Cookie only after email verification (ConfirmEmailAsync)
+
+        var token = await _tokens.CreateAsync(client.Id, rememberMe: true);
+        if (_js != null)
+            await SetCookieAsync(CookieName, token, SessionTokenService.RememberMeDays);
 
         string? displayCode = null;
         bool emailSent = false;
@@ -345,19 +348,21 @@ public sealed class AuthSessionService : IAsyncDisposable
             await SetCookieAsync(CookieName, "", -1);
         }
 
+        var leaving = CurrentClient?.Id;
         CurrentClient = null;
         _demoMode = true;
         try { _demo.UnbindClient(); } catch { }
-        try { _liveCreds.Deactivate(); } catch { }
+        try { if (leaving != null) _liveCreds.Deactivate(leaving); else _liveCreds.Deactivate(); } catch { }
         OnChange?.Invoke();
     }
 
     // ── Legacy sync Logout (for backward compat) ──────────────
     public void Logout()
     {
+        var leaving = CurrentClient?.Id;
         CurrentClient = null;
         try { _demo.UnbindClient(); } catch { }
-        try { _liveCreds.Deactivate(); } catch { }
+        try { if (leaving != null) _liveCreds.Deactivate(leaving); else _liveCreds.Deactivate(); } catch { }
         _demoMode = true;
         if (_js != null)
             _ = SetCookieAsync(CookieName, "", -1);

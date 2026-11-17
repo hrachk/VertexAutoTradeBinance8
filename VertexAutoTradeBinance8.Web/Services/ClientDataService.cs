@@ -55,7 +55,7 @@ public sealed class ClientDataService
             var id = ClientId;
             if (string.IsNullOrEmpty(id) || id == "anonymous")
                 return Path.Combine(_enginesRoot, "anonymous");
-            return Path.Combine(_enginesRoot, $"client_{id}");
+            return ClientPaths.Dir(_enginesRoot, id);
         }
     }
 
@@ -82,7 +82,7 @@ public sealed class ClientDataService
     public void EnsureFolderFor(string clientId)
     {
         if (string.IsNullOrWhiteSpace(clientId)) return;
-        var root = Path.Combine(_enginesRoot, $"client_{clientId}");
+        var root = ClientPaths.Dir(_enginesRoot, clientId);
         try
         {
             Directory.CreateDirectory(root);

@@ -1,23 +1,31 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 
 namespace VertexAutoTradeBinance8.Services;
 
 /// <summary>
-/// Process-wide LIVE credentials.
-/// Binance and Bybit are independent so Dual mode can hold both.
-/// Demo mode MUST call Deactivate() / DeactivateBybit() as appropriate.
+/// LIVE credentials per registered user.
+/// A circuit sets <see cref="SetAmbientClient"/> so the UI uses that user's keys.
+/// Background engine code may use TryGet only when exactly one user is live.
 /// </summary>
 public sealed class TradingCredentialStore
 {
     private readonly object _gate = new();
+    private static readonly AsyncLocal<string?> AmbientClient = new();
 
-    // Binance
-    private string? _clientId;
-    private string? _apiKey;
-    private string? _apiSecret;
-    private bool _active;
+    private sealed class Keys
+    {
+        public string ClientId = "";
+        public string ApiKey = "";
+        public string ApiSecret = "";
+        public bool Active;
+    }
 
-    // Bybit
+    private readonly Dictionary<string, Keys> _binance = new(StringComparer.OrdinalIgnoreCase);
+
+    // Bybit stays single-slot; the product path in use is Binance per user.
     private string? _bybitClientId;
     private string? _bybitKey;
     private string? _bybitSecret;
@@ -25,9 +33,14 @@ public sealed class TradingCredentialStore
 
     public event Action? Changed;
 
+    public static void SetAmbientClient(string? clientId) =>
+        AmbientClient.Value = string.IsNullOrWhiteSpace(clientId) ? null : clientId.Trim();
+
+    public static void ClearAmbientClient() => AmbientClient.Value = null;
+
     public bool IsLiveActive
     {
-        get { lock (_gate) return _active && !string.IsNullOrWhiteSpace(_apiKey) && !string.IsNullOrWhiteSpace(_apiSecret); }
+        get { lock (_gate) return _binance.Values.Any(k => k.Active); }
     }
 
     public bool IsBybitLiveActive
@@ -37,7 +50,14 @@ public sealed class TradingCredentialStore
 
     public string? ActiveClientId
     {
-        get { lock (_gate) return _active ? _clientId : null; }
+        get
+        {
+            lock (_gate)
+            {
+                if (TryPick(out var keys)) return keys.ClientId;
+                return null;
+            }
+        }
     }
 
     public void ActivateLive(string clientId, string apiKey, string apiSecret)
@@ -49,10 +69,13 @@ public sealed class TradingCredentialStore
 
         lock (_gate)
         {
-            _clientId  = clientId.Trim();
-            _apiKey    = apiKey.Trim();
-            _apiSecret = apiSecret.Trim();
-            _active    = true;
+            _binance[clientId.Trim()] = new Keys
+            {
+                ClientId = clientId.Trim(),
+                ApiKey = apiKey.Trim(),
+                ApiSecret = apiSecret.Trim(),
+                Active = true,
+            };
         }
         Changed?.Invoke();
     }
@@ -74,18 +97,28 @@ public sealed class TradingCredentialStore
         Changed?.Invoke();
     }
 
+    /// <summary>Remove every Binance user. Prefer <see cref="Deactivate(string)"/>.</summary>
     public void Deactivate()
     {
         bool wasActive;
         lock (_gate)
         {
-            wasActive  = _active;
-            _active    = false;
-            _clientId  = null;
-            _apiKey    = null;
-            _apiSecret = null;
+            wasActive = _binance.Count > 0;
+            _binance.Clear();
         }
         if (wasActive) Changed?.Invoke();
+    }
+
+    public void Deactivate(string clientId)
+    {
+        if (string.IsNullOrWhiteSpace(clientId))
+        {
+            Deactivate();
+            return;
+        }
+        bool removed;
+        lock (_gate) removed = _binance.Remove(clientId.Trim());
+        if (removed) Changed?.Invoke();
     }
 
     public void DeactivateBybit()
@@ -106,15 +139,37 @@ public sealed class TradingCredentialStore
     {
         lock (_gate)
         {
-            if (_active && !string.IsNullOrWhiteSpace(_apiKey) && !string.IsNullOrWhiteSpace(_apiSecret))
+            if (TryPick(out var keys))
             {
-                clientId  = _clientId ?? "";
-                apiKey    = _apiKey!;
-                apiSecret = _apiSecret!;
+                clientId = keys.ClientId;
+                apiKey = keys.ApiKey;
+                apiSecret = keys.ApiSecret;
                 return true;
             }
         }
         clientId = apiKey = apiSecret = "";
+        return false;
+    }
+
+    private bool TryPick(out Keys keys)
+    {
+        var ambient = AmbientClient.Value;
+        if (!string.IsNullOrEmpty(ambient)
+            && _binance.TryGetValue(ambient, out var mine)
+            && mine.Active)
+        {
+            keys = mine;
+            return true;
+        }
+
+        var active = _binance.Values.Where(k => k.Active).ToList();
+        if (active.Count == 1)
+        {
+            keys = active[0];
+            return true;
+        }
+
+        keys = null!;
         return false;
     }
 
