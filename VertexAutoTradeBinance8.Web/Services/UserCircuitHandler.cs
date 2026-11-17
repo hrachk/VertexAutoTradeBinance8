@@ -7,20 +7,27 @@ namespace VertexAutoTradeBinance8.Web.Services;
 /// <summary>
 /// Each browser circuit sees only its own user. Demo books and live keys
 /// are chosen from this id, so two logged-in clients cannot trade each other.
+/// The handler is scoped, so the injected session is this circuit's session.
 /// </summary>
 public sealed class UserCircuitHandler : CircuitHandler
 {
+    private readonly AuthSessionService _auth;
+
+    public UserCircuitHandler(AuthSessionService auth)
+    {
+        _auth = auth;
+    }
+
     public override Func<CircuitInboundActivityContext, Task> CreateInboundActivityHandler(
         Func<CircuitInboundActivityContext, Task> next)
-        => async context =>
+        => async _ =>
         {
-            var auth = context.Services.GetRequiredService<AuthSessionService>();
-            var id = auth.CurrentClient?.Id;
+            var id = _auth.CurrentClient?.Id;
             DemoAccountService.SetAmbientClient(id);
             TradingCredentialStore.SetAmbientClient(id);
             try
             {
-                await next(context);
+                await next(_);
             }
             finally
             {
