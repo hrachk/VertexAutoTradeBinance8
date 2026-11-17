@@ -1124,6 +1124,26 @@ namespace VertexAutoTradeBinance8
                     }
                 }
 
+                var riskPct = signal.EntryPrice > 0 && signal.StopLoss > 0
+                    ? Math.Abs(signal.EntryPrice - signal.StopLoss) / signal.EntryPrice
+                    : 0.01m;
+                var trendLeg = VertexAutoTradeBinance8.Strategy.ExecutableStrategyPolicy
+                    .IsTrendLeg(signal.Reason ?? signal.Setup);
+                var meta = _tradeJournal?.ScoreMeta(
+                    symbol, sideName, signal.Confidence ?? 0.55m, riskPct, trendLeg, DateTime.UtcNow.Hour);
+                if (meta is { Skip: true })
+                {
+                    await RejectAsync(signal, symbol, tf, "META", "NET_SKIP",
+                        ct, extra: meta.Value.Note);
+                    return;
+                }
+                if (meta is { SizeMult: > 0m and < 0.999m })
+                {
+                    signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * meta.Value.SizeMult, 0.15m, 1m);
+                    _logger.LogInformation("[META] {sym} {side} size×{m:F2} {note}",
+                        symbol, sideName, meta.Value.SizeMult, meta.Value.Note);
+                }
+
                 // MinExecute gate: signal.Confidence is set by PredictiveEngineV4.
                 // Signals below MinExecute are written to UI (watch-only) but not traded.
                 var confCfg = _confSettings.CurrentValue;

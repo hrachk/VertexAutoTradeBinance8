@@ -26,6 +26,7 @@ public sealed class TradeJournalService
     private static readonly ConcurrentDictionary<string, object> Locks = new();
 
     private readonly ConcurrentDictionary<string, (DateTime at, SideLesson lesson)> _sideCache = new();
+    private readonly OnlineTradeNet _net;
 
     public TradeJournalService(IConfiguration cfg, ILogger<TradeJournalService> log, SqliteJournalStore? sqlite = null,
         DailyDrawdownGuard? dailyDd = null, TelegramNotificationService? tg = null,
@@ -46,6 +47,8 @@ public sealed class TradeJournalService
         if (string.IsNullOrWhiteSpace(configured))
             configured = cfg["SharedData:Root"] ?? Path.Combine(AppContext.BaseDirectory, "engines");
         _enginesRoot = LiftClientFolder(configured);
+        _net = new OnlineTradeNet(Path.Combine(_enginesRoot, "ml_meta_net.json"));
+        try { BootstrapNet(); } catch (Exception ex) { _log.LogWarning(ex, "[META] bootstrap skipped"); }
     }
 
     private static string LiftClientFolder(string path)
@@ -77,6 +80,7 @@ public sealed class TradeJournalService
     public void Append(TradeJournalEntry e)
     {
         if (string.IsNullOrWhiteSpace(e.ClientId) || string.IsNullOrWhiteSpace(e.Symbol)) return;
+        try { ObserveClose(e); } catch (Exception ex) { _log.LogDebug(ex, "[META] observe failed {s}", e.Symbol); }
         // Sanitize R: BE-trail partials used to store ±20 and poison memory
         if (e.RealizedR > 5m) e.RealizedR = 5m;
         if (e.RealizedR < -5m) e.RealizedR = -5m;
@@ -352,6 +356,9 @@ public sealed class TradeJournalService
                         decimal exit = el.TryGetProperty("ExitPrice", out var ex) && ex.TryGetDecimal(out var xv) ? xv : 0m;
                         DateTime closed = DateTime.UtcNow;
                         if (el.TryGetProperty("ClosedAtUtc", out var c) && c.TryGetDateTime(out var cv)) closed = cv;
+                        DateTime opened = closed;
+                        if (el.TryGetProperty("OpenedAtUtc", out var o) && o.TryGetDateTime(out var ov)) opened = ov;
+                        decimal riskPx = el.TryGetProperty("InitialRiskPrice", out var ir) && ir.TryGetDecimal(out var irv) ? irv : 0m;
                         list.Add(new TradeJournalEntry
                         {
                             Symbol = el.TryGetProperty("Symbol", out var s) ? s.GetString() ?? "" : "",
@@ -360,7 +367,11 @@ public sealed class TradeJournalService
                             RealizedR = r,
                             EntryPrice = entry,
                             ExitPrice = exit,
+                            InitialRiskPrice = riskPx,
+                            SetupReason = el.TryGetProperty("SetupReason", out var sr) ? sr.GetString() ?? "" : "",
+                            StrategyLeg = el.TryGetProperty("StrategyLeg", out var lg) ? lg.GetString() ?? "" : "",
                             CloseReason = el.TryGetProperty("CloseReason", out var cr) ? cr.GetString() ?? "" : "",
+                            OpenedAtUtc = opened,
                             ClosedAtUtc = closed,
                             Qty = 1m
                         });
@@ -400,6 +411,70 @@ public sealed class TradeJournalService
                 }
             }
         }
+    }
+
+    public MetaNetScore ScoreMeta(
+        string symbol, string side, decimal confidence, decimal riskPct, bool trendLeg, int hourUtc)
+    {
+        var prior = EvaluateSide(symbol, side);
+        var sign = NormSide(side) == "SHORT" ? -1 : 1;
+        var x = OnlineTradeNet.Features(confidence, sign, hourUtc, prior.AvgR, prior.LossStreak, riskPct, trendLeg);
+        var score = _net.Score(x);
+        if (score.Updates >= 8)
+            _log.LogInformation("[META] {sym} {side} {note}", symbol, side, score.Note);
+        return score;
+    }
+
+    private void ObserveClose(TradeJournalEntry e)
+    {
+        if (Math.Abs(e.RealizedR) < 0.05m && Math.Abs(e.RealizedPnl) < 0.5m) return;
+        var prior = EvaluateSide(e.Symbol, e.Side);
+        var risk = e.EntryPrice > 0 && e.InitialRiskPrice > 0 ? e.InitialRiskPrice / e.EntryPrice : 0.01m;
+        var conf = e.SignalConf > 0 ? e.SignalConf : 0.55m;
+        var sign = NormSide(e.Side) == "SHORT" ? -1 : 1;
+        var x = OnlineTradeNet.Features(conf, sign, e.OpenedAtUtc.Hour, prior.AvgR, prior.LossStreak, risk, IsTrend(e));
+        var loss = e.RealizedPnl < 0
+                   || (e.CloseReason ?? "").Contains("SL", StringComparison.OrdinalIgnoreCase);
+        _net.Learn(x, win: !loss, sampleWeight: loss ? 1.4 : 1);
+        _log.LogInformation("[META] learned {sym} {side} {y} updates={n}",
+            e.Symbol, e.Side, loss ? "loss" : "win", _net.Updates);
+    }
+
+    private void BootstrapNet()
+    {
+        if (_net.Updates > 0) return;
+        var hist = new Dictionary<string, List<decimal>>(StringComparer.OrdinalIgnoreCase);
+        var batch = new List<(double[] X, bool Win, double Weight)>();
+        foreach (var e in LoadOutcomeRows().OrderBy(x => x.ClosedAtUtc))
+        {
+            if (e.EntryPrice <= 0 || string.IsNullOrWhiteSpace(e.Symbol)) continue;
+            if (Math.Abs(e.RealizedR) < 0.05m && Math.Abs(e.RealizedPnl) < 0.5m) continue;
+            var key = e.Symbol + "|" + NormSide(e.Side);
+            if (!hist.TryGetValue(key, out var prev)) hist[key] = prev = new List<decimal>();
+            decimal avg = prev.Count == 0 ? 0 : prev.Skip(Math.Max(0, prev.Count - 8)).Average();
+            var streak = 0;
+            for (var i = prev.Count - 1; i >= 0 && prev[i] < 0; i--) streak++;
+            var risk = e.InitialRiskPrice > 0 ? e.InitialRiskPrice / e.EntryPrice : 0.01m;
+            var conf = e.SignalConf > 0 ? e.SignalConf : 0.55m;
+            var x = OnlineTradeNet.Features(
+                conf, NormSide(e.Side) == "SHORT" ? -1 : 1, e.OpenedAtUtc.Hour, avg, streak, risk, IsTrend(e));
+            var loss = e.RealizedPnl < 0
+                       || (e.CloseReason ?? "").Contains("SL", StringComparison.OrdinalIgnoreCase);
+            if (e.RealizedPnl == 0 && !loss) { prev.Add(e.RealizedR); continue; }
+            batch.Add((x, !loss, loss ? 1.4 : 1));
+            prev.Add(e.RealizedR == 0 ? (loss ? -1m : 1m) : e.RealizedR);
+        }
+        _net.Bootstrap(batch);
+        if (batch.Count > 0)
+            _log.LogInformation("[META] bootstrapped {n} closes into ml_meta_net.json", batch.Count);
+    }
+
+    private static bool IsTrend(TradeJournalEntry e)
+    {
+        if (string.Equals(e.StrategyLeg, "TREND", StringComparison.OrdinalIgnoreCase)) return true;
+        var s = e.SetupReason ?? "";
+        return s.Contains("CORE", StringComparison.OrdinalIgnoreCase)
+               || s.Contains("TREND", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string NormSide(string? side)
