@@ -48,6 +48,8 @@ public sealed class SymbolAdjustments
     public int RecentTrades { get; set; }
     public int RecentStops { get; set; }
     public int RecentWins { get; set; }
+    /// <summary>Weighted average R over the memory window. 0 when unknown.</summary>
+    public decimal AvgRealizedR { get; set; }
     /// <summary>True when offline expectancy says skip new entries on this symbol.</summary>
     public bool SoftSkip { get; set; }
     /// <summary>SoftSkip but high-confidence probe entry allowed at SizeMult=ProbeSize.</summary>
@@ -61,4 +63,22 @@ public sealed class SymbolMemoryFile
     public Dictionary<string, SymbolAdjustments> BySymbol { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
     public DateTime UpdatedUtc { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// What the book has actually earned on this symbol and side.
+/// Built from closed demo and live trades, newest weighted more.
+/// </summary>
+public sealed class SideLesson
+{
+    public string Symbol { get; init; } = "";
+    public string Side { get; init; } = "";
+    public int SampleCount { get; init; }
+    public decimal AvgR { get; init; }
+    public int LossStreak { get; init; }
+    public bool Block { get; init; }
+    public decimal SizeMult { get; init; } = 1m;
+    public decimal ConfidencePenalty { get; init; }
+    public decimal WidenStopFrac { get; init; }
+    public string Note { get; init; } = "";
 }

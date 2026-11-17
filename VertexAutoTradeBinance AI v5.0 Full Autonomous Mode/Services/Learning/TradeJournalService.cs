@@ -25,6 +25,8 @@ public sealed class TradeJournalService
     private static readonly JsonSerializerOptions JsonOpt = new() { WriteIndented = true };
     private static readonly ConcurrentDictionary<string, object> Locks = new();
 
+    private readonly ConcurrentDictionary<string, (DateTime at, SideLesson lesson)> _sideCache = new();
+
     public TradeJournalService(IConfiguration cfg, ILogger<TradeJournalService> log, SqliteJournalStore? sqlite = null,
         DailyDrawdownGuard? dailyDd = null, TelegramNotificationService? tg = null,
         ICloseContextProvider? closeCtx = null)
@@ -40,6 +42,22 @@ public sealed class TradeJournalService
         _windowDays = Math.Clamp(cfg.GetValue("TradeMemory:WindowDays", 30), 7, 90);
         _halfLifeDays = Math.Clamp(cfg.GetValue("TradeMemory:HalfLifeDays", 7.0), 1.0, 30.0);
         _probeMinConf = cfg.GetValue("TradeMemory:ProbeMinConfidence", 0.72m);
+        var configured = cfg["SharedData:EnginesRoot"];
+        if (string.IsNullOrWhiteSpace(configured))
+            configured = cfg["SharedData:Root"] ?? Path.Combine(AppContext.BaseDirectory, "engines");
+        _enginesRoot = LiftClientFolder(configured);
+    }
+
+    private static string LiftClientFolder(string path)
+    {
+        var root = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var name = Path.GetFileName(root);
+        if (name.StartsWith("client_", StringComparison.OrdinalIgnoreCase))
+        {
+            var parent = Path.GetDirectoryName(root);
+            if (!string.IsNullOrEmpty(parent)) return parent;
+        }
+        return root;
     }
 
     private static object LockFor(string id) => Locks.GetOrAdd(id, _ => new object());
@@ -138,6 +156,7 @@ public sealed class TradeJournalService
                 } catch { }
             }
             RebuildMemory(e.ClientId);
+            _sideCache.Clear();
             try { RebuildFromFeatures(e.ClientId); } catch { }
             try
             {
@@ -210,6 +229,188 @@ public sealed class TradeJournalService
         return new SymbolAdjustments { Symbol = symbol };
     }
 
+    /// <summary>
+    /// Outcome memory for one symbol and side, pooled across every client book.
+    /// A short that keeps stopping out is not allowed to repeat just because
+    /// some other symbol, or the opposite side, was fine.
+    /// </summary>
+    public SideLesson EvaluateSide(string symbol, string side)
+    {
+        var sym = (symbol ?? "").Trim();
+        var sd = NormSide(side);
+        if (sym.Length == 0 || sd.Length == 0)
+            return new SideLesson { Symbol = sym, Side = sd };
+        var key = sym + "|" + sd;
+        if (_sideCache.TryGetValue(key, out var hit) && (DateTime.UtcNow - hit.at).TotalSeconds < 20)
+            return hit.lesson;
+        var lesson = ComputeSide(sym, sd);
+        _sideCache[key] = (DateTime.UtcNow, lesson);
+        return lesson;
+    }
+
+    private SideLesson ComputeSide(string symbol, string side)
+    {
+        var cutoff = DateTime.UtcNow.AddDays(-14);
+        var rows = new List<TradeJournalEntry>();
+        foreach (var e in LoadOutcomeRows())
+        {
+            if (!string.Equals(e.Symbol, symbol, StringComparison.OrdinalIgnoreCase)) continue;
+            if (NormSide(e.Side) != side) continue;
+            if (e.ClosedAtUtc < cutoff) continue;
+            if (e.EntryPrice <= 0 || e.ExitPrice <= 0) continue;
+            rows.Add(e);
+        }
+        if (rows.Count == 0)
+            return new SideLesson { Symbol = symbol, Side = side, Note = "no closed trades on this side" };
+
+        double half = Math.Max(1.0, _halfLifeDays);
+        var now = DateTime.UtcNow;
+        decimal sw = 0m, sr = 0m;
+        foreach (var e in rows)
+        {
+            var r = e.RealizedR;
+            if (r == 0m && e.InitialRiskPrice > 0 && e.Qty > 0)
+                r = e.RealizedPnl / (e.InitialRiskPrice * e.Qty);
+            if (r > 5m) r = 5m;
+            if (r < -5m) r = -5m;
+            double w = Math.Exp(-Math.Max(0, (now - e.ClosedAtUtc).TotalDays) / half);
+            sw += (decimal)w;
+            sr += (decimal)w * r;
+        }
+        decimal avg = sw > 0 ? sr / sw : 0m;
+
+        int streak = 0;
+        foreach (var e in rows.OrderByDescending(x => x.ClosedAtUtc))
+        {
+            if (e.RealizedPnl < 0 || (e.CloseReason ?? "").Contains("SL", StringComparison.OrdinalIgnoreCase))
+                streak++;
+            else break;
+        }
+        int wins = rows.Count(e => e.RealizedPnl > 0);
+        bool recentTwoWon = rows.OrderByDescending(x => x.ClosedAtUtc).Take(2).Count(e => e.RealizedPnl > 0) == 2
+                            && rows.Count >= 2;
+
+        bool block = !recentTwoWon && rows.Count >= 4 && avg <= -0.30m && streak >= 3;
+        decimal size = 1m;
+        decimal pen = 0m;
+        decimal widen = 0m;
+        if (!block && !recentTwoWon && rows.Count >= 3 && avg < -0.10m)
+        {
+            size = avg <= -0.40m ? 0.45m : 0.60m;
+            pen = 0.06m;
+            widen = streak >= 2 ? 0.22m : 0.12m;
+        }
+        else if (block)
+        {
+            size = 0m;
+            widen = 0.25m;
+        }
+
+        var note = $"n={rows.Count} avgR={avg:F2} streak={streak} wins={wins}"
+                   + (block ? " BLOCK" : size < 1m ? " SIZE_CUT" : "");
+        if (rows.Count >= 3)
+            _log.LogInformation("[MEMORY] {sym} {side} {note}", symbol, side, note);
+
+        return new SideLesson
+        {
+            Symbol = symbol,
+            Side = side,
+            SampleCount = rows.Count,
+            AvgR = Math.Round(avg, 3),
+            LossStreak = streak,
+            Block = block,
+            SizeMult = size,
+            ConfidencePenalty = pen,
+            WidenStopFrac = block ? 0m : widen,
+            Note = note
+        };
+    }
+
+    private IEnumerable<TradeJournalEntry> LoadOutcomeRows()
+    {
+        var list = new List<TradeJournalEntry>();
+        if (!Directory.Exists(_enginesRoot)) return list;
+        foreach (var path in OutcomeFiles())
+        {
+            try
+            {
+                if (path.EndsWith("trade-journal.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    var file = LoadJournal(path);
+                    if (file.Entries != null) list.AddRange(file.Entries);
+                }
+                else
+                {
+                    using var doc = JsonDocument.Parse(File.ReadAllText(path));
+                    if (!doc.RootElement.TryGetProperty("History", out var hist) || hist.ValueKind != JsonValueKind.Array)
+                        continue;
+                    foreach (var el in hist.EnumerateArray())
+                    {
+                        decimal pnl = el.TryGetProperty("RealizedPnl", out var p) && p.TryGetDecimal(out var pv) ? pv : 0m;
+                        decimal r = el.TryGetProperty("RealizedR", out var rr) && rr.TryGetDecimal(out var rv) ? rv : 0m;
+                        decimal entry = el.TryGetProperty("EntryPrice", out var en) && en.TryGetDecimal(out var ev) ? ev : 0m;
+                        decimal exit = el.TryGetProperty("ExitPrice", out var ex) && ex.TryGetDecimal(out var xv) ? xv : 0m;
+                        DateTime closed = DateTime.UtcNow;
+                        if (el.TryGetProperty("ClosedAtUtc", out var c) && c.TryGetDateTime(out var cv)) closed = cv;
+                        list.Add(new TradeJournalEntry
+                        {
+                            Symbol = el.TryGetProperty("Symbol", out var s) ? s.GetString() ?? "" : "",
+                            Side = el.TryGetProperty("Side", out var sd) ? sd.GetString() ?? "" : "",
+                            RealizedPnl = pnl,
+                            RealizedR = r,
+                            EntryPrice = entry,
+                            ExitPrice = exit,
+                            CloseReason = el.TryGetProperty("CloseReason", out var cr) ? cr.GetString() ?? "" : "",
+                            ClosedAtUtc = closed,
+                            Qty = 1m
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "[MEMORY] skip outcome file {p}", path);
+            }
+        }
+        return list
+            .GroupBy(e => (e.Symbol ?? "") + "|" + NormSide(e.Side) + "|"
+                          + (e.ClosedAtUtc.Ticks / TimeSpan.TicksPerMinute) + "|"
+                          + e.RealizedPnl.ToString(System.Globalization.CultureInfo.InvariantCulture))
+            .Select(g => g.First())
+            .ToList();
+    }
+
+    private IEnumerable<string> OutcomeFiles()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!Directory.Exists(_enginesRoot)) yield break;
+        foreach (var dir in Directory.GetDirectories(_enginesRoot, "client_*"))
+        {
+            foreach (var file in new[] { "trade-journal.json", "demo-account.json" })
+            {
+                var p = Path.Combine(dir, file);
+                if (File.Exists(p) && seen.Add(p)) yield return p;
+            }
+            foreach (var nested in Directory.GetDirectories(dir, "client_*"))
+            {
+                foreach (var file in new[] { "trade-journal.json", "demo-account.json" })
+                {
+                    var p = Path.Combine(nested, file);
+                    if (File.Exists(p) && seen.Add(p)) yield return p;
+                }
+            }
+        }
+    }
+
+    private static string NormSide(string? side)
+    {
+        var s = (side ?? "").Trim();
+        if (s.Equals("BUY", StringComparison.OrdinalIgnoreCase) || s.Equals("LONG", StringComparison.OrdinalIgnoreCase))
+            return "LONG";
+        if (s.Equals("SELL", StringComparison.OrdinalIgnoreCase) || s.Equals("SHORT", StringComparison.OrdinalIgnoreCase))
+            return "SHORT";
+        return s.ToUpperInvariant();
+    }
 
     /// <summary>
     /// Offline feature-store pass: re-read trade-features.jsonl + journal and rebuild memory.
@@ -535,6 +736,7 @@ public sealed class TradeJournalService
             RecentTrades = valid.Count,
             RecentStops = stops,
             RecentWins = wins,
+            AvgRealizedR = Math.Round(avgRealizedR, 3),
             SoftSkip = softSkip,
             AllowProbe = allowProbe,
             ProbeSizeMult = probeSize,

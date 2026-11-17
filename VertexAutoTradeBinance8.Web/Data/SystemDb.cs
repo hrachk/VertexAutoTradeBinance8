@@ -247,17 +247,17 @@ public sealed class SystemDb
     public async Task UpsertDemoBalanceAsync(string userId, decimal balance, decimal equity, string positionsJson, CancellationToken ct = default)
     {
         await EnsureInitializedAsync(ct);
+        var id = CanonicalUserId(userId);
         await using var conn = OpenConnection();
         await conn.OpenAsync(ct);
-        // Ensure parent user exists (FK) — minimal stub if missing
         await using (var ensure = conn.CreateCommand())
         {
             ensure.CommandText = """
                 INSERT OR IGNORE INTO Users (Id, Email, DisplayName, PasswordHash, Role, IsActive, EmailVerified, ParallelDemoEnabled, CreatedAt, UpdatedAt)
                 VALUES ($id, $email, '', '', 'user', 1, 0, 1, $ts, $ts)
                 """;
-            ensure.Parameters.AddWithValue("$id", userId);
-            ensure.Parameters.AddWithValue("$email", userId + "@local.demo");
+            ensure.Parameters.AddWithValue("$id", id);
+            ensure.Parameters.AddWithValue("$email", id + "@ledger.local");
             ensure.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
             await ensure.ExecuteNonQueryAsync(ct);
         }
@@ -272,7 +272,7 @@ public sealed class SystemDb
               PositionsJson = excluded.PositionsJson,
               UpdatedAt = excluded.UpdatedAt
             """;
-        cmd.Parameters.AddWithValue("$id", userId);
+        cmd.Parameters.AddWithValue("$id", id);
         cmd.Parameters.AddWithValue("$bal", balance.ToString(System.Globalization.CultureInfo.InvariantCulture));
         cmd.Parameters.AddWithValue("$eq", equity.ToString(System.Globalization.CultureInfo.InvariantCulture));
         cmd.Parameters.AddWithValue("$pos", positionsJson ?? "[]");
@@ -311,5 +311,171 @@ public sealed class SystemDb
         cmd.CommandText = "SELECT COUNT(*) FROM Users";
         var o = await cmd.ExecuteScalarAsync(ct);
         return Convert.ToInt32(o);
+    }
+
+    /// <summary>client_001 stays client_001. A stripped "001" becomes client_001.</summary>
+    public static string CanonicalUserId(string? userId)
+    {
+        var id = (userId ?? "").Trim();
+        while (id.StartsWith("client_client_", StringComparison.OrdinalIgnoreCase))
+            id = id["client_".Length..];
+        if (string.IsNullOrEmpty(id)) return id;
+        if (id.StartsWith("client_", StringComparison.OrdinalIgnoreCase)) return id;
+        return "client_" + id;
+    }
+
+    /// <summary>
+    /// Moves DemoAccounts off stripped ids (001) onto client_001 and deletes
+    /// the stub users that the old migrator inserted.
+    /// </summary>
+    public async Task<int> RepairStrippedClientIdsAsync(CancellationToken ct = default)
+    {
+        await EnsureInitializedAsync(ct);
+        await using var conn = OpenConnection();
+        await conn.OpenAsync(ct);
+        var stubs = new List<string>();
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT Id FROM Users WHERE Id NOT LIKE 'client_%'";
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) stubs.Add(r.GetString(0));
+        }
+
+        int moved = 0;
+        foreach (var stub in stubs)
+        {
+            var real = CanonicalUserId(stub);
+            if (string.Equals(real, stub, StringComparison.OrdinalIgnoreCase)) continue;
+            await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
+            try
+            {
+                await using (var copy = conn.CreateCommand())
+                {
+                    copy.Transaction = tx;
+                    copy.CommandText = """
+                        INSERT OR IGNORE INTO Users (Id, Email, DisplayName, PasswordHash, Role, IsActive, EmailVerified, ParallelDemoEnabled, CreatedAt, UpdatedAt)
+                        VALUES ($real, $email, '', '', 'user', 1, 0, 1, $ts, $ts)
+                        """;
+                    copy.Parameters.AddWithValue("$real", real);
+                    copy.Parameters.AddWithValue("$email", real + "@ledger.local");
+                    copy.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+                    await copy.ExecuteNonQueryAsync(ct);
+                }
+
+                await using (var has = conn.CreateCommand())
+                {
+                    has.Transaction = tx;
+                    has.CommandText = "SELECT COUNT(*) FROM DemoAccounts WHERE UserId=$id";
+                    has.Parameters.AddWithValue("$id", real);
+                    var realHasDemo = Convert.ToInt32(await has.ExecuteScalarAsync(ct)) > 0;
+                    if (!realHasDemo)
+                    {
+                        await using var mv = conn.CreateCommand();
+                        mv.Transaction = tx;
+                        mv.CommandText = "UPDATE DemoAccounts SET UserId=$real, UpdatedAt=$ts WHERE UserId=$stub";
+                        mv.Parameters.AddWithValue("$real", real);
+                        mv.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+                        mv.Parameters.AddWithValue("$stub", stub);
+                        moved += await mv.ExecuteNonQueryAsync(ct);
+                    }
+                }
+
+                await using (var delUser = conn.CreateCommand())
+                {
+                    delUser.Transaction = tx;
+                    delUser.CommandText = """
+                        DELETE FROM Users
+                        WHERE Id=$stub AND Id <> $real
+                          AND (Email LIKE '%@local.demo' OR Email LIKE '%@ledger.local' OR Email = '')
+                        """;
+                    delUser.Parameters.AddWithValue("$stub", stub);
+                    delUser.Parameters.AddWithValue("$real", real);
+                    await delUser.ExecuteNonQueryAsync(ct);
+                }
+
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+            }
+        }
+        return moved;
+    }
+
+    public async Task UpsertSessionAsync(string userId, string tokenHash, DateTime expiresUtc, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(tokenHash)) return;
+        await EnsureInitializedAsync(ct);
+        var id = CanonicalUserId(userId);
+        await using var conn = OpenConnection();
+        await conn.OpenAsync(ct);
+        await using (var ensure = conn.CreateCommand())
+        {
+            ensure.CommandText = """
+                INSERT OR IGNORE INTO Users (Id, Email, DisplayName, PasswordHash, Role, IsActive, EmailVerified, ParallelDemoEnabled, CreatedAt, UpdatedAt)
+                VALUES ($id, $email, '', '', 'user', 1, 0, 0, $ts, $ts)
+                """;
+            var ts = DateTime.UtcNow.ToString("o");
+            ensure.Parameters.AddWithValue("$id", id);
+            ensure.Parameters.AddWithValue("$email", id + "@ledger.local");
+            ensure.Parameters.AddWithValue("$ts", ts);
+            await ensure.ExecuteNonQueryAsync(ct);
+        }
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO UserSessions (Id, UserId, RefreshTokenHash, ExpiresAt, CreatedAt, IsRevoked)
+            VALUES ($id, $user, $hash, $exp, $ts, 0)
+            ON CONFLICT(Id) DO UPDATE SET
+              ExpiresAt=excluded.ExpiresAt,
+              IsRevoked=0,
+              RevokedAt=NULL
+            """;
+        var now = DateTime.UtcNow.ToString("o");
+        cmd.Parameters.AddWithValue("$id", tokenHash);
+        cmd.Parameters.AddWithValue("$user", id);
+        cmd.Parameters.AddWithValue("$hash", tokenHash);
+        cmd.Parameters.AddWithValue("$exp", expiresUtc.ToString("o"));
+        cmd.Parameters.AddWithValue("$ts", now);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task TouchSessionAsync(string tokenHash, DateTime expiresUtc, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(tokenHash)) return;
+        await EnsureInitializedAsync(ct);
+        await using var conn = OpenConnection();
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE UserSessions SET ExpiresAt=$exp WHERE Id=$id AND IsRevoked=0";
+        cmd.Parameters.AddWithValue("$exp", expiresUtc.ToString("o"));
+        cmd.Parameters.AddWithValue("$id", tokenHash);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task RevokeSessionAsync(string tokenHash, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(tokenHash)) return;
+        await EnsureInitializedAsync(ct);
+        await using var conn = OpenConnection();
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE UserSessions SET IsRevoked=1, RevokedAt=$ts WHERE Id=$id";
+        cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("$id", tokenHash);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task RevokeUserSessionsAsync(string userId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId)) return;
+        await EnsureInitializedAsync(ct);
+        await using var conn = OpenConnection();
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE UserSessions SET IsRevoked=1, RevokedAt=$ts WHERE UserId=$id AND IsRevoked=0";
+        cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("$id", CanonicalUserId(userId));
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 }

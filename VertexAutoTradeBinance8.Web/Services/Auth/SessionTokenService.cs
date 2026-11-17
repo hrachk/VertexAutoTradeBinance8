@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using VertexAutoTradeBinance8.Web.Data;
 
 namespace VertexAutoTradeBinance8.Web.Services.Auth;
 
@@ -14,15 +16,17 @@ public sealed class SessionTokenService
     private readonly string _filePath;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly ILogger<SessionTokenService> _log;
+    private readonly SystemDb? _db;
 
     private static readonly JsonSerializerOptions _json = new() { WriteIndented = true };
 
     public const int RememberMeDays  = 30;
     public const int SessionHours    = 8;
 
-    public SessionTokenService(IConfiguration cfg, ILogger<SessionTokenService> log)
+    public SessionTokenService(IConfiguration cfg, ILogger<SessionTokenService> log, SystemDb? db = null)
     {
         _log = log;
+        _db = db;
         var root = cfg["SharedData:Root"] ?? AppContext.BaseDirectory;
         var dir  = Path.GetDirectoryName(root.TrimEnd('\\', '/')) ?? root;
         try { Directory.CreateDirectory(dir); } catch { }
@@ -48,6 +52,8 @@ public sealed class SessionTokenService
             Write(sessions);
         }
         finally { _lock.Release(); }
+
+        await MirrorAsync(() => _db!.UpsertSessionAsync(clientId, HashToken(token), expires));
 
         _log.LogInformation("[TOKEN] Created for {id}, expires {exp:u}, rememberMe={rm}",
             clientId, expires, rememberMe);
@@ -79,6 +85,7 @@ public sealed class SessionTokenService
                 if (idx >= 0) sessions[idx] = entry;
                 Write(sessions);
             }
+            await MirrorAsync(() => _db!.TouchSessionAsync(HashToken(token), entry.Expires));
             return entry.ClientId;
         }
         finally { _lock.Release(); }
@@ -95,6 +102,7 @@ public sealed class SessionTokenService
             Write(sessions);
         }
         finally { _lock.Release(); }
+        await MirrorAsync(() => _db!.RevokeSessionAsync(HashToken(token)));
     }
 
     // ── Revoke all for client ─────────────────────────────────
@@ -108,6 +116,7 @@ public sealed class SessionTokenService
             Write(sessions);
         }
         finally { _lock.Release(); }
+        await MirrorAsync(() => _db!.RevokeUserSessionsAsync(clientId));
     }
 
     // ── Cleanup expired ───────────────────────────────────────
@@ -144,6 +153,16 @@ public sealed class SessionTokenService
     private void Write(List<SessionEntry> sessions)
     {
         File.WriteAllText(_filePath, JsonSerializer.Serialize(sessions, _json));
+    }
+
+    private static string HashToken(string token)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+
+    private async Task MirrorAsync(Func<Task> write)
+    {
+        if (_db == null) return;
+        try { await write(); }
+        catch (Exception ex) { _log.LogDebug(ex, "[TOKEN] SQLite session mirror skipped"); }
     }
 
     private record SessionEntry(

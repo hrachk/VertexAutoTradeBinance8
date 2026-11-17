@@ -1089,6 +1089,41 @@ namespace VertexAutoTradeBinance8
             // high-quality signals confirmed by structure/S/R.
             // =====================================================
             {
+                var sideName = signal.Side == SignalSide.Buy ? "LONG" : "SHORT";
+                var lesson = _tradeJournal?.EvaluateSide(symbol, sideName);
+                if (lesson is { Block: true })
+                {
+                    await RejectAsync(signal, symbol, tf, "MEMORY", "SIDE_NEGATIVE_EXPECTANCY",
+                        ct, extra: lesson.Note);
+                    return;
+                }
+                if (lesson != null && lesson.SizeMult > 0m && lesson.SizeMult < 0.999m)
+                {
+                    signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * lesson.SizeMult, 0.15m, 1m);
+                    _logger.LogInformation("[MEMORY] {sym} {side} size×{m:F2} {note}",
+                        symbol, sideName, lesson.SizeMult, lesson.Note);
+                }
+                if (lesson != null && lesson.ConfidencePenalty > 0m && signal.Confidence is decimal rawConf)
+                {
+                    var unit = rawConf > 1.5m ? rawConf / 100m : rawConf;
+                    signal.Confidence = Math.Max(0.20m, unit - lesson.ConfidencePenalty);
+                }
+                if (lesson != null && lesson.WidenStopFrac > 0m
+                    && signal.EntryPrice > 0 && signal.StopLoss > 0)
+                {
+                    var risk = Math.Abs(signal.EntryPrice - signal.StopLoss);
+                    var extra = risk * lesson.WidenStopFrac;
+                    if (extra > 0)
+                    {
+                        signal.StopLoss = signal.Side == SignalSide.Buy
+                            ? signal.StopLoss - extra
+                            : signal.StopLoss + extra;
+                        _logger.LogInformation(
+                            "[MEMORY] {sym} {side} stop widened by {pct:P0} after stop-outs",
+                            symbol, sideName, lesson.WidenStopFrac);
+                    }
+                }
+
                 // MinExecute gate: signal.Confidence is set by PredictiveEngineV4.
                 // Signals below MinExecute are written to UI (watch-only) but not traded.
                 var confCfg = _confSettings.CurrentValue;
@@ -1693,7 +1728,8 @@ namespace VertexAutoTradeBinance8
                         RecentWins = memForInst?.RecentWins ?? 0,
                         MemorySizeMult = memForInst is { SizeMult: > 0 } ? memForInst.SizeMult : 1m,
                         SlPadAtr = memForInst?.SlPadAtr ?? 0m,
-                        SoftSkip = memForInst?.SoftSkip ?? false
+                        SoftSkip = memForInst?.SoftSkip ?? false,
+                        AvgRealizedR = memForInst?.AvgRealizedR ?? 0m
                     });
                     if (!inst.Allowed)
                     {

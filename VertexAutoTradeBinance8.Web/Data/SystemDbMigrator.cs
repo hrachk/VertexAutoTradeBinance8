@@ -35,6 +35,7 @@ public sealed class SystemDbMigrator
         if (File.Exists(flag) && existing > 0)
         {
             _log.LogDebug("[SYSTEM-DB] Migration already done ({flag}) users={n}", flag, existing);
+            await RepairLedgersAsync(ct);
             return;
         }
         if (existing == 0)
@@ -78,7 +79,11 @@ public sealed class SystemDbMigrator
                         var dir = Path.GetDirectoryName(path) ?? "";
                         var folder = Path.GetFileName(dir);
                         if (!folder.StartsWith("client_", StringComparison.OrdinalIgnoreCase)) continue;
-                        var userId = folder["client_".Length..];
+                        // Folder name IS the user id (client_001). Stripping the
+                        // prefix created a second user "001" and split the ledger.
+                        var userId = folder;
+                        while (userId.StartsWith("client_client_", StringComparison.OrdinalIgnoreCase))
+                            userId = userId["client_".Length..];
                         if (string.IsNullOrWhiteSpace(userId)) continue;
                         var json = await File.ReadAllTextAsync(path, ct);
                         using var doc = JsonDocument.Parse(json);
@@ -109,7 +114,22 @@ public sealed class SystemDbMigrator
         }
         catch { }
 
+        await RepairLedgersAsync(ct);
         _log.LogInformation("[SYSTEM-DB] Migration complete users={u} demos={d}", users, demos);
+    }
+
+    private async Task RepairLedgersAsync(CancellationToken ct)
+    {
+        try
+        {
+            int moved = await _db.RepairStrippedClientIdsAsync(ct);
+            if (moved > 0)
+                _log.LogInformation("[SYSTEM-DB] Repaired {n} demo rows that were stored under a stripped user id", moved);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "[SYSTEM-DB] ledger repair failed");
+        }
     }
 
     private static async Task UpsertUserAsync(SqliteConnection conn, ClientRecord c, CancellationToken ct)
