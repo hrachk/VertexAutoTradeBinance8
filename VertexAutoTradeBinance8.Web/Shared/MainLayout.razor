@@ -206,69 +206,35 @@
      sidebar (NavMenu inside <aside>) still exists in the DOM for
      tablet/mobile, but is hidden via CSS on desktop widths; this nav
      is the inverse (hidden on tablet/mobile, shown on desktop). -->
-<nav class="vertex-topnav">
-    <NavLink href="/market" class="vt-link vt-link-feature" Match="NavLinkMatch.All" title="Market">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17l5-5 4 4 8-8" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 7h7v7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Market
-    </NavLink>
-    <span class="vt-sep"></span>
-    <NavLink href="/statistics" class="vt-link" Match="NavLinkMatch.All" title="Statistics">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 20V10M12 20V4M6 20v-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Statistics
-    </NavLink>
-    <NavLink href="/ai-dashboard" class="vt-link" Match="NavLinkMatch.All" title="AI Dashboard">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="4" height="9" rx="1"/><rect x="10" y="6" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="17" rx="1"/></svg>
-        AI Dashboard
-    </NavLink>
-    <NavLink href="/macro-news" class="vt-link" Match="NavLinkMatch.Prefix" title="Macro News Hub">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v4H4zM4 11h10v4H4zM4 17h16v2H4z" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        News
-    </NavLink>
-    <NavLink href="/ai-learning" class="vt-link" Match="NavLinkMatch.All" title="AI Learning">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2L2 7l10 5 10-5-10-5z" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        AI Learning
-    </NavLink>
-    <NavLink href="/help" class="vt-link" Match="NavLinkMatch.All" title="Help">
-        Help
-    </NavLink>
-    <NavLink href="/missed-trades" class="vt-link" Match="NavLinkMatch.All" title="Signals">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Signals
-    </NavLink>
-    <NavLink href="/ai-pulse" class="vt-link" Match="NavLinkMatch.All" title="AI Pulse">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="2,12 6,12 8,4 10,20 12,10 14,16 16,8 18,12 22,12" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        AI Pulse
-    </NavLink>
-    <NavLink href="/risk-desk" class="vt-link" Match="NavLinkMatch.All" title="Risk desk — positions in R, ladder, expectancy">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h18" stroke-linecap="round"/><path d="M6 8v8M12 6v12M18 9v6" stroke-linecap="round"/></svg>
-        Risk desk
-    </NavLink>
-    <NavLink href="/positions" class="vt-link" Match="NavLinkMatch.All" title="Positions">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-            <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
-            <rect x="3" y="14" width="7" height="7" rx="1"/>
-            <path d="M14 17.5h7M17.5 14v7" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        Positions
-    </NavLink>
-    <NavLink href="/market/multi" class="vt-link" Match="NavLinkMatch.All" title="Multi Chart — TradingView grid like Bybit">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-            <rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/>
-            <rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/>
-        </svg>
-        Multi
-    </NavLink>
-    <NavLink href="/positions/grid" class="vt-link" Match="NavLinkMatch.All" title="Position Grid — live multi-chart">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-            <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
-            <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
-        </svg>
-        Grid
-    </NavLink>
-    <NavLink href="/settings" class="vt-link" Match="NavLinkMatch.All" title="Settings">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-        Settings
-    </NavLink>
+<nav class="vertex-topnav" aria-label="Main">
+    @* Grouped like an exchange terminal: trade → risk → signals → research, settings on the right. *@
+    <div class="vtn-group" aria-label="Trade">
+        <NavLink href="/overview" class="vt-link" Match="NavLinkMatch.All">Overview</NavLink>
+        <NavLink href="/market" class="vt-link vt-link-feature" Match="NavLinkMatch.All">Market</NavLink>
+        <NavLink href="/market/multi" class="vt-link" Match="NavLinkMatch.All">Multi chart</NavLink>
+        <NavLink href="/positions" class="vt-link" Match="NavLinkMatch.All">Positions</NavLink>
+        <NavLink href="/positions/grid" class="vt-link" Match="NavLinkMatch.All">Position grid</NavLink>
+    </div>
+    <span class="vt-sep" aria-hidden="true"></span>
+    <div class="vtn-group" aria-label="Risk">
+        <NavLink href="/risk-desk" class="vt-link" Match="NavLinkMatch.All">Risk desk</NavLink>
+        <NavLink href="/statistics" class="vt-link" Match="NavLinkMatch.All">Statistics</NavLink>
+    </div>
+    <span class="vt-sep" aria-hidden="true"></span>
+    <div class="vtn-group" aria-label="Signals">
+        <NavLink href="/missed-trades" class="vt-link" Match="NavLinkMatch.All">Signals</NavLink>
+        <NavLink href="/ai-pulse" class="vt-link" Match="NavLinkMatch.All">AI pulse</NavLink>
+    </div>
+    <span class="vt-sep" aria-hidden="true"></span>
+    <div class="vtn-group" aria-label="Research">
+        <NavLink href="/ai-dashboard" class="vt-link" Match="NavLinkMatch.All">AI dashboard</NavLink>
+        <NavLink href="/ai-learning" class="vt-link" Match="NavLinkMatch.All">AI learning</NavLink>
+        <NavLink href="/macro-news" class="vt-link" Match="NavLinkMatch.Prefix">News</NavLink>
+    </div>
+    <div class="vtn-group vtn-end">
+        <NavLink href="/settings" class="vt-link" Match="NavLinkMatch.All">Settings</NavLink>
+        <NavLink href="/help" class="vt-link" Match="NavLinkMatch.All">Help</NavLink>
+    </div>
 </nav>
 
 @if (_userMenuOpen)
@@ -288,6 +254,10 @@
 
         <main class="main-content vertex-main @(SidebarCollapsed ? "main-content-expanded vertex-main-expanded" : "")">
             <article class="content px-4">
+                @if (Auth.IsAuthenticated && !IsMarketRoute)
+                {
+                    <AccountStrip />
+                }
                 @Body
             </article>
         </main>
@@ -295,6 +265,7 @@
 </div>
 <link rel="stylesheet" href="/css/vertex-redesign.css" />
 <link rel="stylesheet" href="/css/market-terminal.css?v=4" />
+<link rel="stylesheet" href="/css/vx-pro.css?v=1" />
 
 @inject Microsoft.Extensions.Options.IOptions<ClientOptions> ClientOptions
 @inject Microsoft.JSInterop.IJSRuntime JS
@@ -303,6 +274,17 @@
 @inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
 
 @code {
+    // /market and /market/multi are full-bleed chart terminals with fixed offsets: no strip there.
+    private bool IsMarketRoute
+    {
+        get
+        {
+            var path = "/" + Nav.ToBaseRelativePath(Nav.Uri).Split('?', '#')[0].TrimEnd('/');
+            return path.StartsWith("/market", StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith("/positions/grid", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
     static readonly HashSet<string> _public = new(StringComparer.OrdinalIgnoreCase)
         { "/login", "/register" };
 
