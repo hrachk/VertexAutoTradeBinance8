@@ -1,0 +1,101 @@
+@using VertexAutoTrade.Core.Risk
+@using System.Globalization
+@inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoSvc
+@inject Microsoft.Extensions.Configuration.IConfiguration Cfg
+@implements IDisposable
+
+@* Account strip — the line a pro terminal keeps on screen: what the book is worth,
+   what it made today, how much is at risk right now and which exit rules apply. *@
+<div class="vxs" role="region" aria-label="Demo book summary">
+    <span class="vxs-book">Demo book</span>
+    <div class="vxs-cell">
+        <span class="vxs-l">Equity</span>
+        <span class="vxs-v">@Money(_equity)</span>
+    </div>
+    <div class="vxs-cell">
+        <span class="vxs-l">Today</span>
+        <span class="vxs-v @(_today >= 0 ? "up" : "dn")">@Signed(_today) $</span>
+    </div>
+    <div class="vxs-cell">
+        <span class="vxs-l">Unrealized</span>
+        <span class="vxs-v @(_upnl >= 0 ? "up" : "dn")">@Signed(_upnl) $</span>
+    </div>
+    <div class="vxs-cell">
+        <span class="vxs-l">Open</span>
+        <span class="vxs-v">@_open</span>
+    </div>
+    <div class="vxs-cell" title="Sum of what every open position loses if its stop is hit">
+        <span class="vxs-l">Open risk</span>
+        <span class="vxs-v @(_riskPct > 3m ? "dn" : "")">@Money(_risk) <small>@_riskPct.ToString("0.0", CultureInfo.InvariantCulture)%</small></span>
+    </div>
+    <div class="vxs-cell">
+        <span class="vxs-l">Risk / trade</span>
+        <span class="vxs-v">@_riskPerTrade</span>
+    </div>
+    <a class="vxs-cell vxs-link" href="/risk-desk">
+        <span class="vxs-l">Exits</span>
+        <span class="vxs-v">@_ladder</span>
+    </a>
+</div>
+
+@code {
+    private decimal _equity, _today, _upnl, _risk, _riskPct;
+    private int _open;
+    private string _ladder = "", _riskPerTrade = "";
+    private Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        DemoSvc.Updated += OnUpdated;
+        _timer = new Timer(_ => InvokeAsync(() => { Refresh(); StateHasChanged(); }), null, 3000, 3000);
+    }
+
+    private void OnUpdated() => InvokeAsync(() => { Refresh(); StateHasChanged(); });
+
+    private void Refresh()
+    {
+        try
+        {
+            var s = DemoSvc.GetSnapshot();
+            decimal upnl = 0m, risk = 0m;
+            foreach (var p in s.Positions)
+            {
+                decimal px = DemoSvc.GetLastPrice(p.Symbol);
+                if (px > 0) upnl += p.UnrealizedPnl(px);
+                if (p.StopLoss is > 0)
+                {
+                    bool isLong = p.Side is "LONG" or "BUY";
+                    decimal atStop = (isLong ? p.StopLoss.Value - p.EntryPrice : p.EntryPrice - p.StopLoss.Value) * p.Qty;
+                    if (atStop < 0) risk += -atStop;
+                }
+            }
+            var today = DateTime.UtcNow.Date;
+            _today = s.History.Where(h => h.ClosedAtUtc >= today).Sum(h => h.RealizedPnl);
+            _upnl = upnl;
+            _equity = s.Balance + upnl;
+            _open = s.Positions.Count;
+            _risk = risk;
+            _riskPct = _equity > 0 ? risk / _equity * 100m : 0m;
+
+            var l = RLadderPolicy.Current;
+            _ladder = l.Enabled
+                ? "R-ladder " + string.Join("/", l.TargetsR.Select(t => t.ToString("0.#", CultureInfo.InvariantCulture))) + "R"
+                : "Legacy";
+            decimal Pct(string k, decimal d) =>
+                decimal.TryParse(Cfg[k], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && v > 0 ? v * 100m : d;
+            _riskPerTrade = $"{Pct("Trading:CoreRiskPctAlt", 0.60m):0.##}–{Pct("Trading:CoreRiskPctMajor", 0.75m):0.##}%";
+        }
+        catch { /* the strip must never break the page */ }
+    }
+
+    private static string Money(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture) + " $";
+    private static string Signed(decimal v) =>
+        (v >= 0 ? "+" : "−") + Math.Abs(v).ToString("N2", CultureInfo.InvariantCulture);
+
+    public void Dispose()
+    {
+        DemoSvc.Updated -= OnUpdated;
+        _timer?.Dispose();
+    }
+}
