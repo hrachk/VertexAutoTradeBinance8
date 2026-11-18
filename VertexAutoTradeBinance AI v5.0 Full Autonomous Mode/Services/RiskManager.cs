@@ -114,6 +114,8 @@ namespace VertexAutoTradeBinance8.Services
             return effective;
         }
 
+        private decimal _equityHwm;
+
         public decimal GetPropDeskQtyFinal(
             TradeSignal signal,
             decimal balance,
@@ -178,25 +180,47 @@ namespace VertexAutoTradeBinance8.Services
                         return 0;
                     }
 
+                    // Risk per trade as % of CURRENT equity (fixed-fractional → compounds as the
+                    // deposit grows). Configurable; defaults unchanged (0.75% majors / 0.60% alts).
                     decimal riskFrac = major ? 0.0075m : 0.0060m;
-                    decimal riskBudget1R = balance * riskFrac;
+                    try
+                    {
+                        var cfgRf = _config?.GetValue<decimal?>(major ? "Trading:CoreRiskPctMajor" : "Trading:CoreRiskPctAlt");
+                        if (cfgRf is decimal rf && rf > 0m && rf <= 0.05m) riskFrac = rf;
+                    }
+                    catch { }
+                    // Drawdown brake: cut risk as equity falls from its high-water mark;
+                    // never raises risk (growth comes from compounding, not from bigger bets).
+                    if (balance > _equityHwm) _equityHwm = balance;
+                    decimal ddMult = VertexAutoTrade.Core.Risk.EquityCurveRiskScaler.Multiplier(balance, _equityHwm);
+                    if (ddMult < 1m)
+                        _logger.LogInformation("[RISK] drawdown brake {sym} equity={e:F2} hwm={h:F2} risk×{m:F2}",
+                            signal.Symbol, balance, _equityHwm, ddMult);
+                    decimal riskBudget1R = balance * riskFrac * ddMult;
                     if (riskMult > 0) riskBudget1R *= riskMult;
                     if (signal.SizeMultiplier > 0m)
                         riskBudget1R *= Math.Clamp(signal.SizeMultiplier, 0.40m, 1.0m);
 
-                    // Hard USD cap: journal showed wins ~$20–100 vs SL -$300–900
-                    // Keep single-trade loss bounded even if SL is wide.
-                    decimal hardCapUsd = major
-                        ? Math.Min(150m, Math.Max(40m, balance * 0.012m))
-                        : Math.Min(55m, Math.Max(18m, balance * 0.0075m));
+                    // Per-trade loss ceiling. Was a fixed USD cap (HardCapUsdAlt=35 / Major=80), which froze
+                    // the dollar risk while the deposit grew — compounding ("риск = % от текущего баланса")
+                    // could never happen. Now a % of current equity (Trading:MaxRiskPctPerTrade, default 2%);
+                    // a fixed USD cap applies only if HardCapUsdMajor/Alt is explicitly set > 0.
+                    decimal maxRiskPct = 0.02m;
+                    try
+                    {
+                        var cfgMax = _config?.GetValue<decimal?>("Trading:MaxRiskPctPerTrade");
+                        if (cfgMax is decimal mr && mr > 0m && mr <= 0.05m) maxRiskPct = mr;
+                    }
+                    catch { }
+                    decimal hardCapUsd = balance * maxRiskPct;
                     try
                     {
                         if (_config != null)
                         {
                             var cfgMajor = _config.GetValue<decimal?>("Trading:HardCapUsdMajor");
                             var cfgAlt = _config.GetValue<decimal?>("Trading:HardCapUsdAlt");
-                            if (major && cfgMajor.HasValue && cfgMajor.Value > 0) hardCapUsd = cfgMajor.Value;
-                            if (!major && cfgAlt.HasValue && cfgAlt.Value > 0) hardCapUsd = cfgAlt.Value;
+                            if (major && cfgMajor is decimal cM && cM > 0) hardCapUsd = Math.Min(hardCapUsd, cM);
+                            if (!major && cfgAlt is decimal cA && cA > 0) hardCapUsd = Math.Min(hardCapUsd, cA);
                         }
                     }
                     catch { }
@@ -217,7 +241,9 @@ namespace VertexAutoTradeBinance8.Services
                     try
                     {
                         var cfgPct = _config?.GetValue<decimal?>("Trading:MaxNotionalPctOfEquity");
-                        if (cfgPct.HasValue && cfgPct.Value > 0.05m && cfgPct.Value <= 1m)
+                        // Up to 3× equity notional: with 0.6–1% pullback stops a ≤1 cap silently
+                        // shrank the planned 1R to ~0.2–0.3% of equity (seen in client_001 Demo).
+                        if (cfgPct.HasValue && cfgPct.Value > 0.05m && cfgPct.Value <= 3m)
                             maxNotionalPct = cfgPct.Value;
                     }
                     catch { }

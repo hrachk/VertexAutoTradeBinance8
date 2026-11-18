@@ -700,11 +700,22 @@ public sealed class DemoAccountService
         var tps = new List<DemoTpLevel>();
         if (takeProfits != null)
         {
-            int i = 0;
-            foreach (var tp in takeProfits.Where(x => x > 0).Take(3))
+            var ladder = VertexAutoTrade.Core.Risk.RLadderPolicy.Current;
+            var levels = takeProfits.Where(x => x > 0).ToList();
+            if (ladder.Enabled && levels.Count == ladder.TargetsR.Length)
             {
-                i++;
-                tps.Add(new DemoTpLevel { Price = tp, Pct = i == 3 ? 34m : 33m });
+                // R-ladder: same weights the Live executor uses (Demo == Live).
+                for (int k = 0; k < levels.Count; k++)
+                    tps.Add(new DemoTpLevel { Price = levels[k], Pct = Math.Round(ladder.Weights[k] * 100m, 4) });
+            }
+            else
+            {
+                int i = 0;
+                foreach (var tp in levels.Take(3))
+                {
+                    i++;
+                    tps.Add(new DemoTpLevel { Price = tp, Pct = i == 3 ? 34m : 33m });
+                }
             }
         }
 
@@ -848,7 +859,7 @@ public sealed class DemoAccountService
                     decimal tp1 = isLong ? entry + tp1R * r : entry - tp1R * r;
                     pos.TakeProfits = new List<DemoTpLevel>
                     {
-                        new DemoTpLevel { Price = tp1, Pct = 0.5m }
+                        new DemoTpLevel { Price = tp1, Pct = 50m }
                     };
                     n++;
                 }
@@ -1001,7 +1012,8 @@ decimal riskPxH = pos.InitialRiskPrice > 0 ? pos.InitialRiskPrice
                 ? Math.Abs(pos.EntryPrice - pos.StopLoss.Value) : 0m);
         if (pos.InitialRiskPrice <= 0 && riskPxH > 0) pos.InitialRiskPrice = riskPxH;
         decimal rH = (riskPxH > 0 && closeQty > 0) ? realizedPnl / (riskPxH * closeQty) : 0m;
-        if (rH > 5m) rH = 5m; if (rH < -5m) rH = -5m;
+        // ±10R: the R-ladder's last target is 7R; the old ±5 clamp under-reported runners.
+        if (rH > 10m) rH = 10m; if (rH < -10m) rH = -10m;
         _state.History.Add(new DemoClosedTrade
         {
             Symbol = pos.Symbol, Side = pos.Side, EntryPrice = pos.EntryPrice, ExitPrice = exitPrice,
@@ -1154,41 +1166,63 @@ _state.History.Add(new DemoClosedTrade
             {
                 bool isLong = pos.Side == "LONG";
 
-                // Step-based profit lock (parity with Live ProfitAware):
-                // after TP1 reduced size, ratchet SL as price walks toward TP2/TP3.
+                // Profit lock. R-ladder (default): stop follows RLadderPolicy by peak R and
+                // filled targets (BE after TP1, 3R→+1R, 4R→+2R, 5R→+3R …), identical to Live.
+                // Legacy step-lock (+0.5R at 1R, +0.85R at 1.4R) capped winners at ≈0.86R in
+                // client_001 Demo, so it only runs when RLadder:Enabled=false.
                 try
                 {
-                    decimal basis = pos.InitialQty > 0 ? pos.InitialQty : pos.Qty;
-                    bool afterTp1 = basis > 0 && pos.Qty < basis * 0.92m;
+                    var ladder = VertexAutoTrade.Core.Risk.RLadderPolicy.Current;
                     decimal risk = pos.InitialRiskPrice > 0
                         ? pos.InitialRiskPrice
                         : (pos.StopLoss is > 0 ? Math.Abs(pos.EntryPrice - pos.StopLoss.Value) : 0m);
-                    if (afterTp1 && risk > 0 && pos.EntryPrice > 0)
+                    if (ladder.Enabled && risk > 0 && pos.EntryPrice > 0)
                     {
-                        decimal fav = isLong ? (price - pos.EntryPrice) : (pos.EntryPrice - price);
-                        decimal curR = fav / risk;
-                        decimal targetR = 0m;
-                        if (curR >= 2.40m) targetR = 1.70m;
-                        else if (curR >= 2.00m) targetR = 1.40m;
-                        else if (curR >= 1.70m) targetR = 1.00m;
-                        else if (curR >= 1.40m) targetR = 0.85m;
-                        else if (curR >= 1.00m) targetR = 0.50m;
-                        // else keep BE if already set
-
-                        if (targetR > 0)
+                        decimal curR = VertexAutoTrade.Core.Risk.RLadderPolicy.CurrentR(pos.EntryPrice, risk, isLong, price);
+                        if (curR > pos.PeakR) { pos.PeakR = curR; changed = true; }
+                        var lockSl = VertexAutoTrade.Core.Risk.RLadderPolicy.LockedStopPrice(
+                            pos.EntryPrice, risk, isLong, pos.PeakR, pos.TpFilled, ladder);
+                        decimal curSl = pos.StopLoss ?? 0m;
+                        if (lockSl is decimal ls && VertexAutoTrade.Core.Risk.RLadderPolicy.IsImprovement(ls, curSl, isLong))
                         {
-                            decimal lockSl = isLong
-                                ? pos.EntryPrice + risk * targetR
-                                : pos.EntryPrice - risk * targetR;
-                            decimal curSl = pos.StopLoss ?? 0m;
-                            bool better = isLong ? lockSl > curSl : (curSl <= 0m || lockSl < curSl);
-                            if (better)
+                            pos.StopLoss = ls;
+                            changed = true;
+                            _logger.LogInformation(
+                                "[DEMO-RLADDER] {sym} SL → {sl} (peak={pk:F2}R tpFilled={tp} cur={cr:F2}R)",
+                                pos.Symbol, ls, pos.PeakR, pos.TpFilled, curR);
+                        }
+                    }
+                    else
+                    {
+                        decimal basis = pos.InitialQty > 0 ? pos.InitialQty : pos.Qty;
+                        bool afterTp1 = basis > 0 && pos.Qty < basis * 0.92m;
+                        if (afterTp1 && risk > 0 && pos.EntryPrice > 0)
+                        {
+                            decimal fav = isLong ? (price - pos.EntryPrice) : (pos.EntryPrice - price);
+                            decimal curR = fav / risk;
+                            decimal targetR = 0m;
+                            if (curR >= 2.40m) targetR = 1.70m;
+                            else if (curR >= 2.00m) targetR = 1.40m;
+                            else if (curR >= 1.70m) targetR = 1.00m;
+                            else if (curR >= 1.40m) targetR = 0.85m;
+                            else if (curR >= 1.00m) targetR = 0.50m;
+                            // else keep BE if already set
+
+                            if (targetR > 0)
                             {
-                                pos.StopLoss = lockSl;
-                                changed = true;
-                                _logger.LogInformation(
-                                    "[DEMO-STEP-LOCK] {sym} SL → +{r:F2}R @ {sl} (curR={cr:F2})",
-                                    pos.Symbol, targetR, lockSl, curR);
+                                decimal lockSl = isLong
+                                    ? pos.EntryPrice + risk * targetR
+                                    : pos.EntryPrice - risk * targetR;
+                                decimal curSl = pos.StopLoss ?? 0m;
+                                bool better = isLong ? lockSl > curSl : (curSl <= 0m || lockSl < curSl);
+                                if (better)
+                                {
+                                    pos.StopLoss = lockSl;
+                                    changed = true;
+                                    _logger.LogInformation(
+                                        "[DEMO-STEP-LOCK] {sym} SL → +{r:F2}R @ {sl} (curR={cr:F2})",
+                                        pos.Symbol, targetR, lockSl, curR);
+                                }
                             }
                         }
                     }
@@ -1256,9 +1290,12 @@ _state.History.Add(new DemoClosedTrade
                                 && !reason.StartsWith("TP3/final", StringComparison.OrdinalIgnoreCase);
                     ClosePositionInternal(pos, pct, price, reason);
                     changed = true;
+                    if (isTp) pos.TpFilled++;
 
                     // Live-aligned: after first TP (partial), move SL to break-even (+ fee buffer).
-                    if (isTp && _state.Positions.Contains(pos) && pos.Qty > 0)
+                    // With the R-ladder the next tick applies RLadderPolicy (BE+fees after TP1).
+                    if (isTp && _state.Positions.Contains(pos) && pos.Qty > 0
+                        && !VertexAutoTrade.Core.Risk.RLadderPolicy.Current.Enabled)
                     {
                         bool isLong = pos.Side is "LONG" or "BUY";
                         decimal entry = pos.EntryPrice;

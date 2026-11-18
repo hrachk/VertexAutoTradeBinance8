@@ -200,6 +200,20 @@ public static class EntrySanityGate
         }
 
         signal.EntryPrice = livePrice;
+
+        // R-ladder targets are multiples of risk from entry. When the fill moves,
+        // rebuild them from the live entry so 2R/3R/5R/7R stay true R multiples.
+        var ladder = VertexAutoTrade.Core.Risk.RLadderPolicy.Current;
+        string tag = signal.Setup ?? signal.Reason ?? "";
+        if (ladder.Enabled && tag.StartsWith("CORE_INST", StringComparison.OrdinalIgnoreCase))
+        {
+            var rebuilt = VertexAutoTrade.Core.Risk.RLadderPolicy.TargetPrices(livePrice, signal.StopLoss, isLong, ladder);
+            if (rebuilt.Length > 0)
+            {
+                signal.TakeProfits = rebuilt.ToList();
+                signal.RRatio = ladder.TargetsR[0];
+            }
+        }
         return true;
     }
 

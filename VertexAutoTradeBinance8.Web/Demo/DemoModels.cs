@@ -23,6 +23,10 @@ public sealed class DemoPosition
     /// <summary>Signal reason at open (CORE_* / RANGE_SPREAD_*).</summary>
     public string SetupReason { get; set; } = "";
     public string StrategyLeg { get; set; } = "";
+    /// <summary>Best favourable excursion in R since open (drives the R-ladder stop locks).</summary>
+    public decimal PeakR { get; set; }
+    /// <summary>How many ladder targets have filled.</summary>
+    public int TpFilled { get; set; }
 
     public decimal Notional(decimal markPrice) => Qty * markPrice;
 

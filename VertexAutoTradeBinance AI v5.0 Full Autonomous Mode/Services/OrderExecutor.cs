@@ -1278,7 +1278,10 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                         quantity = filters.minQty;
                     notional = quantity * entryPrice;
 
-                    if (signal.TakeProfits != null && signal.EntryPrice > 0)
+                    // R-ladder targets are exact R multiples; shrinking them toward entry
+                    // turned TP1 (2R) into <1.5R. Weak timing now cuts size only.
+                    if (signal.TakeProfits != null && signal.EntryPrice > 0
+                        && !VertexAutoTrade.Core.Risk.RLadderPolicy.Current.Enabled)
                     {
                         var e = signal.EntryPrice;
                         for (int ti = 0; ti < signal.TakeProfits.Count; ti++)
@@ -2613,7 +2616,10 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                     .Select(tp => tick > 0 ? Math.Round(tp / tick) * tick : tp)
                     .ToList();
 
-                var weights = TpAllocationWeights(tps.Count);
+                var ladderW = VertexAutoTrade.Core.Risk.RLadderPolicy.Current;
+                var weights = ladderW.Enabled && tps.Count == ladderW.Weights.Length
+                    ? ladderW.Weights.ToList()          // R-ladder split (Demo uses the same weights)
+                    : TpAllocationWeights(tps.Count);
                 decimal totalQuantized = Math.Floor(quantity / step) * step;
                 totalQuantized = Math.Max(totalQuantized, filters.minQty);
 

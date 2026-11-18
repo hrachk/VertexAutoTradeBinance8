@@ -27,6 +27,7 @@ public sealed class StrategyCoreEngine
     private readonly BinanceClientFactory _factory;
     private readonly TradeJournalService? _journal;
     private readonly string _clientId;
+    private readonly IConfiguration? _cfg;
     private MarketDataFacade? _md;
     private Timer? _scanTimer;
     private int _scanBusy;
@@ -90,6 +91,22 @@ public sealed class StrategyCoreEngine
         _factory = factory;
         _journal = journal;
         _clientId = cfg?["Client:Id"] ?? "client_001";
+        _cfg = cfg;
+    }
+
+    /// <summary>
+    /// The top-level "SymbolBlacklist" was bound to Trading:SymbolBlacklist (always empty) and only
+    /// the legacy StrategyEngine checked it, so CORE traded blacklisted names (SPCXUSDT on 2026-11-18).
+    /// Read every blacklist the config defines; reloads with configuration.
+    /// </summary>
+    private bool IsBlacklisted(string symbol)
+    {
+        if (_cfg == null) return false;
+        foreach (var path in new[] { "SymbolBlacklist", "Trading:SymbolBlacklist", "DualMode:Blacklist" })
+            foreach (var c in _cfg.GetSection(path).GetChildren())
+                if (string.Equals(c.Value?.Trim(), symbol, StringComparison.OrdinalIgnoreCase))
+                    return true;
+        return false;
     }
 
     public void BindReactive(MarketDataFacade marketData)
@@ -236,6 +253,7 @@ public sealed class StrategyCoreEngine
     private async Task<(bool evaluated, bool emitted, string reason)> EvaluateAsync(string symbol)
     {
         if (InCooldown(symbol)) return (false, false, "cooldown");
+        if (IsBlacklisted(symbol)) return (false, false, "blacklist");
 
         var list = await LoadKlinesAsync(symbol).ConfigureAwait(false);
         if (list == null || list.Count < MinBars)
@@ -249,7 +267,7 @@ public sealed class StrategyCoreEngine
         var barOpen = list[closedIdx].OpenTime;
         if (barOpen.Kind == DateTimeKind.Unspecified)
             barOpen = DateTime.SpecifyKind(barOpen, DateTimeKind.Utc);
-        if ((DateTime.UtcNow - barOpen.ToUniversalTime()).TotalMinutes < 14.0 && list.Count >= 2)
+        if ((DateTime.UtcNow - barOpen.ToUniversalTime()).TotalMinutes < 15.0 && list.Count >= 2)
             closedIdx = list.Count - 2;
 
         var closed = list[closedIdx];

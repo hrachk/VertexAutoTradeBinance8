@@ -152,6 +152,16 @@ public class Program
                     services.Configure<TradingOptions>(
                       ctx.Configuration.GetSection("Trading")); // TRUE default
 
+                    // R-multiple exit ladder (2R/3R/5R/7R) — shared with Web Demo via the
+                    // runtime override file; re-applied whenever configuration reloads.
+                    {
+                        var cfgRoot = ctx.Configuration;
+                        void ApplyLadder() => VertexAutoTrade.Core.Risk.RLadderPolicy.Configure(
+                            VertexAutoTrade.Core.Risk.RLadderOptions.FromKeys(k => cfgRoot["RLadder:" + k]));
+                        ApplyLadder();
+                        Microsoft.Extensions.Primitives.ChangeToken.OnChange(cfgRoot.GetReloadToken, ApplyLadder);
+                    }
+
                     // NOTE: SignalOnlyMode section previously also bound to TradingOptions
                     // here, silently overriding any Trading-section value of EnableExecution.
                     // Removed: EnableExecution defaults to true in TradingOptions and is

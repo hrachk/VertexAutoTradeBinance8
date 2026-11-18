@@ -362,3 +362,7 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 /VertexAutoTradeBinance AI v5.0 Full Autonomous Mode
+
+# backtest cache/results
+bt-data/
+bt-results/

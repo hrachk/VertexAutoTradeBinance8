@@ -87,6 +87,15 @@ builder.Services.AddHttpClient("WebHistoryBootstrap");
 builder.Services.AddHostedService<WebHistoryBootstrapService>();
 builder.Services.AddSingleton<RealDcaHistoryReader>();
 builder.Services.Configure<DcaOptions>(builder.Configuration.GetSection("Dca"));
+
+// R-multiple exit ladder — same policy object the Engine uses, so Demo == Live exits.
+{
+    var cfgRoot = builder.Configuration;
+    void ApplyLadder() => VertexAutoTrade.Core.Risk.RLadderPolicy.Configure(
+        VertexAutoTrade.Core.Risk.RLadderOptions.FromKeys(k => cfgRoot["RLadder:" + k]));
+    ApplyLadder();
+    Microsoft.Extensions.Primitives.ChangeToken.OnChange(((IConfiguration)cfgRoot).GetReloadToken, ApplyLadder);
+}
 builder.Services.AddSingleton<MarketTickStore>();
 builder.Services.AddSingleton<MarketDataLiveState>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.DemoAccountService>();
