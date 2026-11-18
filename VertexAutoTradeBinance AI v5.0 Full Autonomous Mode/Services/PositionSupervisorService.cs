@@ -2355,8 +2355,18 @@ namespace VertexAutoTradeBinance8.Services
                 // A position can be user-managed. Only attach automation to
                 // positions carrying one of our stable SL/TP/BE/TR client IDs;
                 // exchange position data alone cannot establish ownership.
+                // One transient REST failure here used to stop the whole host at boot
+                // (client_001 2026-11-18 22:16:13, HYPEUSDT). Retry before failing closed.
                 var regularOrders = await client.UsdFuturesApi.Trading
                     .GetOpenOrdersAsync(symbol, ct: ct).ConfigureAwait(false);
+                for (int attempt = 1; attempt <= 3 && (!regularOrders.Success || regularOrders.Data == null); attempt++)
+                {
+                    _logger.LogWarning("[RECOVERY] open orders for {sym} {side} failed ({err}); retry {n}/3",
+                        symbol, side, regularOrders.Error?.Message, attempt);
+                    await Task.Delay(TimeSpan.FromSeconds(1.5 * attempt), ct).ConfigureAwait(false);
+                    regularOrders = await client.UsdFuturesApi.Trading
+                        .GetOpenOrdersAsync(symbol, ct: ct).ConfigureAwait(false);
+                }
                 if (!regularOrders.Success || regularOrders.Data == null)
                     throw new InvalidOperationException($"Cannot inspect recovery orders for {symbol} {side}.");
                 var algoOrders = await _algoRaw.GetOpenAlgoOrdersAsync(symbol, ct).ConfigureAwait(false);

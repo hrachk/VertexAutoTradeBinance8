@@ -72,7 +72,18 @@
                     <div><dt>Stop</dt><dd>@p.Stop.ToString("G8") <small>(@Signed(p.StopR)R)</small></dd></div>
                     <div><dt>Peak</dt><dd>@Signed(p.PeakR)R</dd></div>
                     <div><dt>Next target</dt><dd>@(p.NextTarget is decimal nt ? nt.ToString("G8") : "runner")</dd></div>
-                    <div><dt>Locked</dt><dd class="@(p.LockedUsd > 0 ? "g" : "")">@(p.LockedUsd > 0 ? "+" : "")@p.LockedUsd.ToString("F2") $</dd></div>
+                    @if (p.LockedUsd >= 0)
+                    {
+                        <div><dt>Locked by stop</dt><dd class="g">+@p.LockedUsd.ToString("F2") $</dd></div>
+                    }
+                    else
+                    {
+                        <div><dt>Loss if stopped</dt><dd class="l">−@Math.Abs(p.LockedUsd).ToString("F2") $</dd></div>
+                    }
+                    @if (p.StopR < -1.05m)
+                    {
+                        <div><dt>Warning</dt><dd class="l">stop is @Math.Abs(p.StopR).ToString("F2")R away, wider than planned</dd></div>
+                    }
                 </dl>
             </article>
         }
@@ -351,9 +362,15 @@
             decimal curR = RLadderPolicy.CurrentR(p.EntryPrice, risk, isLong, px);
             var tpsR = p.TakeProfits.Where(t => t.Price > 0)
                 .Select(t => Math.Round(RLadderPolicy.CurrentR(p.EntryPrice, risk, isLong, t.Price), 2)).ToList();
-            // Filled targets are removed from the position; show the full ladder with filled ones marked.
-            var full = _cfg.Enabled ? _cfg.TargetsR.ToList() : tpsR;
-            int filled = _cfg.Enabled ? p.TpFilled : 0;
+            // Show the targets this position really has. Filled ones were removed from the
+            // position, so they are rebuilt from the ladder only when the position was opened with it.
+            var full = tpsR.OrderBy(x => x).ToList();
+            int filled = 0;
+            if (p.TpFilled > 0 && _cfg.Enabled && p.TpFilled + tpsR.Count == _cfg.TargetsR.Length)
+            {
+                full = _cfg.TargetsR.ToList();
+                filled = p.TpFilled;
+            }
             decimal? next = p.TakeProfits.Where(t => t.Price > 0)
                 .OrderBy(t => isLong ? t.Price : -t.Price).Select(t => (decimal?)t.Price).FirstOrDefault();
             decimal locked = stop > 0 ? (isLong ? stop - p.EntryPrice : p.EntryPrice - stop) * p.Qty : 0m;
