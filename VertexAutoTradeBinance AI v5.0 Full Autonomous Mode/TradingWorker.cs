@@ -1252,7 +1252,10 @@ namespace VertexAutoTradeBinance8
                     if (isTrendLeg)
                     {
                         var dir = _news.TryGetActiveDirective();
-                        bool macro = dir != null && dir.Category == VertexAutoTradeBinance8.Services.News.NewsEventCategory.MacroHigh;
+                        // Hard pause only for a scheduled release window (directive size×0); a macro
+                        // headline directive carries size×0.6 and falls through to the size cut below.
+                        bool macro = dir != null && dir.Category == VertexAutoTradeBinance8.Services.News.NewsEventCategory.MacroHigh
+                                     && dir.SizeMult <= 0.01m;
                         if (macro && (_news.IsEntryPaused(symbol) || sm <= 0m))
                         {
                             await RejectAsync(signal, symbol, tf, "NEWS",
