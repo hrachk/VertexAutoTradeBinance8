@@ -117,6 +117,22 @@ public sealed class NewsCatalystService : INewsCatalystService
             if (grade == NewsImpactGrade.High && ev.Category != NewsEventCategory.TokenSpecific)
                 sizeMult = 0m;
 
+            // Only a SCHEDULED release (MacroCalendar: FOMC / CPI / NFP window) is a hard pause.
+            // Headlines that merely mention "Fed" / "interest rate" and the daily Fear&Greed index
+            // were also MacroHigh → size×0 for 30–90 min on every symbol. On 2026-11-18 23:29 that
+            // vetoed an XAGUSDT CORE short ("Bitcoin Tanks Ahead of Anthropic's IPO…"), and Fed
+            // chatter kept the book paused most of the evening. They now cut size, never pause.
+            if (ev.Category == NewsEventCategory.MacroHigh && !IsScheduledMacro(ev))
+            {
+                bool regime = string.Equals(ev.ReasonCode, "REASON_MARKET_REGIME_FNG", StringComparison.OrdinalIgnoreCase)
+                              || (ev.Headline ?? "").Contains("Fear&Greed", StringComparison.OrdinalIgnoreCase);
+                sizeMult = regime
+                    ? _cfg.GetValue("News:RegimeSizeMult", 0.85m)
+                    : _cfg.GetValue("News:MacroHeadlineSizeMult", 0.60m);
+                sizeMult = Math.Clamp(sizeMult, 0.25m, 1m);
+                reasonCode = regime ? "REASON_MARKET_REGIME_FNG" : "REASON_MACRO_HEADLINE";
+            }
+
             var dir = new NewsDirective
             {
                 Utc = DateTime.UtcNow,
@@ -256,9 +272,10 @@ public sealed class NewsCatalystService : INewsCatalystService
         if (!d.WouldBlock && d.SizeMult > 0.01m)
             return false;
 
-        // MacroHigh (calendar FOMC/CPI/NFP or graded macro): always pause — desk standard
+        // Scheduled macro window (size×0): always pause — desk standard.
+        // Macro HEADLINES and the Fear&Greed regime are size cuts (size×0.6/0.85), not pauses.
         var dir = TryGetActiveDirective();
-        bool isMacro = dir != null && dir.Category == NewsEventCategory.MacroHigh;
+        bool isMacro = dir != null && dir.Category == NewsEventCategory.MacroHigh && dir.SizeMult <= 0.01m;
         if (isMacro)
             return true;
 
@@ -326,6 +343,10 @@ public sealed class NewsCatalystService : INewsCatalystService
         NewsEventCategory.Infrastructure => 40,
         _ => 25
     };
+
+    /// <summary>True for the MacroCalendar blackout (FOMC/CPI/NFP release window) or an explicit macro grade source.</summary>
+    private static bool IsScheduledMacro(NewsEvent ev)
+        => string.Equals(ev.Source, "MacroCalendar", StringComparison.OrdinalIgnoreCase);
 
     private static void ClassifyIfNeeded(NewsEvent ev)
     {
