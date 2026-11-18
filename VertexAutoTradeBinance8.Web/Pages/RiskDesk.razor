@@ -1,0 +1,587 @@
+@page "/risk-desk"
+@using VertexAutoTrade.Core.Risk
+@using VertexAutoTradeBinance8.Web.Demo
+@using VertexAutoTradeBinance8.Web.Services
+@using System.Globalization
+@inject DemoAccountService DemoSvc
+@inject RuntimeConfigService RuntimeCfg
+@inject VertexAutoTradeBinance8.Web.Services.Auth.AuthSessionService Auth
+@inject NavigationManager Nav
+@inject Microsoft.Extensions.Configuration.IConfiguration Cfg
+@implements IDisposable
+
+<PageTitle>Risk desk — Vertex</PageTitle>
+
+<div class="rd">
+    <header class="rd-head">
+        <h1>Risk desk</h1>
+        <p class="rd-lede">
+            @if (_stats.Trades == 0)
+            {
+                <text>No closed Demo trades yet. Open positions are tracked below in units of risk (R): −1R is the stop, every target is a multiple of it.</text>
+            }
+            else
+            {
+                <text>
+                    @_stats.Trades closed trades: @_stats.WinPct.ToString("F0")% won, average winner
+                    <b class="g">+@_stats.AvgWin.ToString("F2")R</b>, average loser
+                    <b class="l">@_stats.AvgLoss.ToString("F2")R</b>, so each trade earned
+                    <b class="@(_stats.Expectancy >= 0 ? "g" : "l")">@Signed(_stats.Expectancy)R</b> on average.
+                    At this win rate the break-even average winner is @_stats.BreakEvenWin.ToString("F2")R.
+                </text>
+            }
+        </p>
+    </header>
+
+    <section class="rd-tracks" aria-label="Open positions in R">
+        <div class="rd-sec-h">
+            <h2>Open positions</h2>
+            <span class="rd-hint">Stop, entry, targets and price on one ruler from −1R to +@_maxR.ToString("0")R</span>
+        </div>
+        @if (_open.Count == 0)
+        {
+            <p class="rd-empty">No open Demo positions. New CORE signals will appear here with their 2R / 3R / 5R / 7R ladder.</p>
+        }
+        @foreach (var p in _open)
+        {
+            <article class="trk @(p.IsLong ? "is-long" : "is-short")">
+                <div class="trk-id">
+                    <span class="trk-sym">@p.Symbol</span>
+                    <span class="trk-side">@(p.IsLong ? "Long" : "Short")</span>
+                    <span class="trk-now @(p.CurR >= 0 ? "g" : "l")">@Signed(p.CurR)R</span>
+                </div>
+                <div class="trk-rule" role="img"
+                     aria-label="@($"{p.Symbol}: current {p.CurR:F2}R, peak {p.PeakR:F2}R, stop at {p.StopR:F2}R")">
+                    <div class="trk-risk" style="left:@X(-1);width:@W(-1, 0)"></div>
+                    <div class="trk-locked" style="left:@X(Math.Min(0, p.StopR));width:@W(Math.Min(0, p.StopR), Math.Max(0, p.StopR))"></div>
+                    <div class="trk-run" style="left:@X(Math.Min(0, p.CurR));width:@W(Math.Min(0, p.CurR), Math.Max(0, p.CurR))"></div>
+                    @for (int k = 0; k < p.TargetsR.Count; k++)
+                    {
+                        var tr = p.TargetsR[k];
+                        <span class="trk-tp @(k < p.TpFilled ? "done" : "")" style="left:@X(tr)">
+                            <i>@tr.ToString("0.#")R</i>
+                        </span>
+                    }
+                    <span class="trk-zero" style="left:@X(0)"></span>
+                    <span class="trk-stop" style="left:@X(p.StopR)" title="Stop @p.Stop.ToString("G8")"></span>
+                    <span class="trk-peak" style="left:@X(p.PeakR)" title="Peak @p.PeakR.ToString("F2")R"></span>
+                    <span class="trk-px" style="left:@X(p.CurR)"></span>
+                </div>
+                <dl class="trk-facts">
+                    <div><dt>Entry</dt><dd>@p.Entry.ToString("G8")</dd></div>
+                    <div><dt>Stop</dt><dd>@p.Stop.ToString("G8") <small>(@Signed(p.StopR)R)</small></dd></div>
+                    <div><dt>Peak</dt><dd>@Signed(p.PeakR)R</dd></div>
+                    <div><dt>Next target</dt><dd>@(p.NextTarget is decimal nt ? nt.ToString("G8") : "runner")</dd></div>
+                    <div><dt>Locked</dt><dd class="@(p.LockedUsd > 0 ? "g" : "")">@(p.LockedUsd > 0 ? "+" : "")@p.LockedUsd.ToString("F2") $</dd></div>
+                </dl>
+            </article>
+        }
+    </section>
+
+    <div class="rd-cols">
+        <section class="rd-calc" aria-label="Expectancy calculator">
+            <div class="rd-sec-h">
+                <h2>What the ladder needs to pay</h2>
+            </div>
+            <p class="rd-hint">Move the sliders to the share of trades that reach each target before the stop. Take these numbers from the backtest (MFE table), not from hope.</p>
+            @for (int k = 0; k < _cfg.TargetsR.Length; k++)
+            {
+                int idx = k;
+                <label class="sl">
+                    <span>Reach @_cfg.TargetsR[idx].ToString("0.#")R</span>
+                    <input type="range" min="0" max="80" step="1" value="@_pct[idx]"
+                           @oninput="e => OnPct(idx, e.Value)" />
+                    <b>@_pct[idx]%</b>
+                </label>
+            }
+            <div class="calc-out">
+                <div>
+                    <span>Expected per trade</span>
+                    <strong class="@(_expR >= 0 ? "g" : "l")">@Signed(_expR)R</strong>
+                </div>
+                <div>
+                    <span>After 100 trades at @((_riskPct * 100).ToString("0.##"))% risk</span>
+                    <strong class="@(_growth >= 1 ? "g" : "l")">@(((_growth - 1) * 100).ToString("+0;-0"))%</strong>
+                </div>
+            </div>
+            <label class="sl sl-risk">
+                <span>Risk per trade</span>
+                <input type="range" min="0.25" max="2" step="0.05" value="@(_riskPct * 100)"
+                       @oninput="e => OnRisk(e.Value)" />
+                <b>@((_riskPct * 100).ToString("0.00"))%</b>
+            </label>
+            <p class="rd-note">Growth compounds: risk is a percentage of current equity, so it grows with the deposit and shrinks in drawdown (−3% → ×0.85, −6% → ×0.7, −10% → ×0.5, −15% → ×0.25).</p>
+        </section>
+
+        <section class="rd-cfg" aria-label="Ladder settings">
+            <div class="rd-sec-h">
+                <h2>Ladder settings</h2>
+                <span class="rd-hint">Shared by Engine and Demo</span>
+            </div>
+            <label class="sw">
+                <input type="checkbox" checked="@_edit.Enabled" @onchange="e => _edit.Enabled = (bool)(e.Value ?? false)" />
+                <span>R-ladder exits on</span>
+            </label>
+            <div class="grid">
+                <label>Targets, R<input @bind="_targetsText" placeholder="2, 3, 5, 7" /></label>
+                <label>Size per target<input @bind="_weightsText" placeholder="0.25, 0.25, 0.25, 0.25" /></label>
+                <label>Minimum room to next level, R<input type="number" step="0.5" min="0" @bind="_edit.MinRoomR" /></label>
+                <label>
+                    Stop placement
+                    <select @bind="_edit.StopMode">
+                        <option value="Pullback">Behind the 15m pullback</option>
+                        <option value="Structure">Behind the 1H swing (legacy)</option>
+                    </select>
+                </label>
+                <label>Break-even at peak, R (0 = after first target)<input type="number" step="0.5" min="0" @bind="_edit.BreakevenAtR" /></label>
+                <label>Locks, peak→stop R<input @bind="_locksText" placeholder="3>1, 4>2, 5>3, 6>4" /></label>
+            </div>
+            @if (!string.IsNullOrEmpty(_msg))
+            {
+                <p class="rd-msg @(_msgErr ? "l" : "g")" role="status">@_msg</p>
+            }
+            <div class="actions">
+                <button class="btn-primary" @onclick="SaveAsync" disabled="@_saving">Save ladder</button>
+                <button class="btn-quiet" @onclick="Reset">Reset to defaults</button>
+            </div>
+        </section>
+    </div>
+
+    <section class="rd-week" aria-label="This week">
+        <div class="rd-sec-h">
+            <h2>This week</h2>
+            <span class="rd-hint">Net result per day, UTC. Dollars are R × the risk taken on each trade.</span>
+        </div>
+        <div class="wk-days">
+            @foreach (var d in _week)
+            {
+                <div class="wk-day @(d.Count == 0 ? "idle" : d.Pnl >= 0 ? "up" : "dn")">
+                    <span class="wk-name">@d.Name</span>
+                    @if (d.Count > 0)
+                    {
+                        <strong>@((d.Pnl >= 0 ? "+" : "−") + Math.Abs(d.Pnl).ToString("N0", CultureInfo.InvariantCulture)) $</strong>
+                        <small>@Signed(d.R)R in @d.Count @(d.Count == 1 ? "trade" : "trades")</small>
+                    }
+                </div>
+            }
+        </div>
+        <p class="rd-note">
+            Week total <b class="@(_weekR >= 0 ? "g" : "l")">@Signed(_weekR)R</b>,
+            @_weekWins won and @_weekLosses lost, profit factor @(_weekPf > 0 ? _weekPf.ToString("F2") : "n/a").
+        </p>
+    </section>
+
+    <section class="rd-scale" aria-label="Scaling simulator">
+        <div class="rd-sec-h">
+            <h2>Scaling: risk a fixed share of the current balance</h2>
+        </div>
+        <p class="rd-hint rd-hint-wide">
+            Before every trade the risk is recomputed from the balance left, and the size is
+            risk ÷ (entry − stop). Losing streaks shrink the bet, winning streaks grow it.
+            The engine sizes every trade this way.
+        </p>
+        <div class="sc-grid">
+            <div class="sc-inputs">
+                <label>Start balance, $<input type="number" min="10" step="10" @bind="_scStart" @bind:after="RunScale" /></label>
+                <label>Risk per trade, %<input type="number" min="0.1" max="10" step="0.1" @bind="_scRiskPct" @bind:after="RunScale" /></label>
+                <label>Reward : risk, 1 :<input type="number" min="0.5" max="10" step="0.5" @bind="_scRr" @bind:after="RunScale" /></label>
+                <label>Win rate, %<input type="number" min="5" max="90" step="1" @bind="_scWin" @bind:after="RunScale" /></label>
+                <label>Trades<input type="number" min="5" max="200" step="5" @bind="_scN" @bind:after="RunScale" /></label>
+                <button class="btn-quiet" @onclick="Reseed">New random sequence</button>
+
+                <div class="sc-verdict">
+                    <p>
+                        Each trade is worth <b class="@(_scExp >= 0 ? "g" : "l")">@Signed(_scExp)R</b> on average.
+                        Kelly says at most <b>@((_scKelly * 100).ToString("0.#"))%</b> per trade@(_scKelly <= 0 ? ": there is no edge at these numbers." : ".")
+                    </p>
+                    <p>
+                        Over 2,000 random orderings of @_scN trades the median account ends at
+                        <b>×@_scMc.median.ToString("0.00")</b>, the unlucky 5% at <b class="@(_scMc.p5 >= 1 ? "g" : "l")">×@_scMc.p5.ToString("0.00")</b>,
+                        and <b class="@(_scMc.ruin > 0.1m ? "l" : "")">@((_scMc.ruin * 100).ToString("0"))%</b> of them fall 50% below a peak on the way.
+                    </p>
+                    @if (_scRiskPct > 2m)
+                    {
+                        <p class="l">Above 2% a normal losing streak of @_scMc.streak trades takes @((100 * (1 - Math.Pow(1 - (double)_scRiskPct / 100, _scMc.streak))).ToString("0"))% of the account. The engine caps risk at @_engineMaxPct.ToString("0.#")% per trade.</p>
+                    }
+                </div>
+            </div>
+            <div class="sc-table-wrap">
+                <table class="sc-table">
+                    <thead><tr><th scope="col">Trade</th><th scope="col">Outcome</th><th scope="col">Risk, $</th><th scope="col">Result, $</th><th scope="col">Balance, $</th></tr></thead>
+                    <tbody>
+                        <tr class="start"><td>Start</td><td></td><td></td><td></td><td>@_scStart.ToString("N2", CultureInfo.InvariantCulture)</td></tr>
+                        @foreach (var r in _scRows)
+                        {
+                            <tr>
+                                <td>@r.N</td>
+                                <td><span class="pill @(r.Win ? "up" : "dn")">@(r.Win ? "Win" : "Loss")</span></td>
+                                <td>@r.RiskUsd.ToString("N2", CultureInfo.InvariantCulture)</td>
+                                <td class="@(r.Win ? "g" : "l")">@((r.ResultUsd >= 0 ? "+" : "−") + Math.Abs(r.ResultUsd).ToString("N2", CultureInfo.InvariantCulture))</td>
+                                <td>@r.Balance.ToString("N2", CultureInfo.InvariantCulture)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="sz">
+            <h3>Position size for one trade</h3>
+            <div class="sz-row">
+                <label>Balance, $<input type="number" min="0" step="10" @bind="_szBal" /></label>
+                <label>Risk, %<input type="number" min="0.1" max="5" step="0.1" @bind="_szPct" /></label>
+                <label>Entry<input type="number" step="any" @bind="_szEntry" /></label>
+                <label>Stop<input type="number" step="any" @bind="_szStop" /></label>
+            </div>
+            @{
+                decimal riskUsd = _szBal * _szPct / 100m;
+                decimal qty = RiskScaling.QtyForRisk(riskUsd, _szEntry, _szStop);
+            }
+            <p class="sz-out">
+                Risk <b>@riskUsd.ToString("N2", CultureInfo.InvariantCulture) $</b> ÷ (entry − stop)
+                <b>@Math.Abs(_szEntry - _szStop).ToString("G6", CultureInfo.InvariantCulture)</b>
+                = volume <b>@qty.ToString("G6", CultureInfo.InvariantCulture)</b>
+                (notional @((qty * _szEntry).ToString("N0", CultureInfo.InvariantCulture)) $).
+                Targets: @string.Join(", ", RLadderPolicy.TargetPrices(_szEntry, _szStop, _szEntry > _szStop, _cfg).Select((t, i) => $"{_cfg.TargetsR[i]:0.#}R {t:G6}"))
+            </p>
+        </div>
+
+        <div class="sz">
+            <h3>Engine risk per trade</h3>
+            <div class="sz-row">
+                <label>Majors (BTC, ETH, BNB, SOL), %<input type="number" min="0.1" max="5" step="0.05" @bind="_engMajorPct" /></label>
+                <label>Other coins, %<input type="number" min="0.1" max="5" step="0.05" @bind="_engAltPct" /></label>
+                <label>Ceiling per trade, %<input type="number" min="0.1" max="5" step="0.1" @bind="_engineMaxPct" /></label>
+            </div>
+            <div class="actions">
+                <button class="btn-primary" @onclick="SaveRiskAsync" disabled="@_saving">Save risk</button>
+            </div>
+            @if (!string.IsNullOrEmpty(_riskMsg))
+            {
+                <p class="rd-msg @(_riskMsgErr ? "l" : "g")" role="status">@_riskMsg</p>
+            }
+        </div>
+    </section>
+
+    <section class="rd-hist" aria-label="Recent trades in R">
+        <div class="rd-sec-h">
+            <h2>Last @_recent.Count trades</h2>
+            <span class="rd-hint">Each bar is one trade, height in R</span>
+        </div>
+        @if (_recent.Count == 0)
+        {
+            <p class="rd-empty">Closed trades will be plotted here.</p>
+        }
+        else
+        {
+            <div class="bars">
+                @foreach (var t in _recent)
+                {
+                    var h = Math.Min(100m, Math.Abs(t.R) / 7m * 100m);
+                    <span class="bar @(t.R >= 0 ? "up" : "dn")" style="--h:@h.ToString("F1", CultureInfo.InvariantCulture)%"
+                          title="@($"{t.Symbol} {t.Side} {t.R:+0.00;-0.00}R {t.Reason}")"></span>
+                }
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private sealed record OpenRow(string Symbol, bool IsLong, decimal Entry, decimal Stop, decimal StopR,
+        decimal CurR, decimal PeakR, List<decimal> TargetsR, int TpFilled, decimal? NextTarget, decimal LockedUsd);
+    private sealed record TradeR(string Symbol, string Side, decimal R, string Reason, DateTime Closed);
+    private sealed record Stats(int Trades, decimal WinPct, decimal AvgWin, decimal AvgLoss, decimal Expectancy, decimal BreakEvenWin);
+
+    private List<OpenRow> _open = new();
+    private List<TradeR> _recent = new();
+    private Stats _stats = new(0, 0, 0, 0, 0, 0);
+    private decimal _maxR = 7m;
+
+    private RLadderOptions _cfg = RLadderPolicy.Current;
+    private RLadderOptions _edit = new();
+    private string _targetsText = "", _weightsText = "", _locksText = "";
+    private int[] _pct = Array.Empty<int>();
+    private decimal _riskPct = 0.0075m, _expR, _growth = 1m;
+    private string _msg = "";
+    private bool _msgErr, _saving;
+    private Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        LoadEditor(RLadderPolicy.Current);
+        // Starting point: roughly a trend system's typical MFE decay. Replace with backtest numbers.
+        _pct = _cfg.TargetsR.Select(r => (int)Math.Round(Math.Clamp(55m / r, 3m, 60m))).ToArray();
+        Recalc();
+        Refresh();
+        try
+        {
+            decimal Pct(string k, decimal d) => decimal.TryParse(Cfg[k], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && v > 0 ? v * 100m : d;
+            _engMajorPct = Pct("Trading:CoreRiskPctMajor", 0.75m);
+            _engAltPct = Pct("Trading:CoreRiskPctAlt", 0.60m);
+            _engineMaxPct = Pct("Trading:MaxRiskPctPerTrade", 2m);
+            var bal = DemoSvc.GetSnapshot().Balance;
+            if (bal > 0) _szBal = Math.Round(bal, 2);
+        }
+        catch { }
+        _scRiskPct = _engAltPct;
+        RunScale();
+        DemoSvc.Updated += OnDemoUpdated;
+        _timer = new Timer(_ => InvokeAsync(() => { Refresh(); StateHasChanged(); }), null, 2000, 2000);
+    }
+
+    private void OnDemoUpdated() => InvokeAsync(() => { Refresh(); StateHasChanged(); });
+
+    private void Refresh()
+    {
+        _cfg = RLadderPolicy.Current;
+        var snap = DemoSvc.GetSnapshot();
+        _maxR = Math.Max(3m, _cfg.TargetsR.Length > 0 ? _cfg.TargetsR[^1] : 7m);
+
+        var rows = new List<OpenRow>();
+        foreach (var p in snap.Positions)
+        {
+            bool isLong = p.Side is "LONG" or "BUY";
+            decimal risk = p.InitialRiskPrice > 0 ? p.InitialRiskPrice
+                : (p.StopLoss is > 0 ? Math.Abs(p.EntryPrice - p.StopLoss.Value) : 0m);
+            if (risk <= 0 || p.EntryPrice <= 0) continue;
+            decimal px = DemoSvc.GetLastPrice(p.Symbol);
+            if (px <= 0) px = p.EntryPrice;
+            decimal stop = p.StopLoss ?? 0m;
+            decimal stopR = stop > 0 ? RLadderPolicy.CurrentR(p.EntryPrice, risk, isLong, stop) : -1m;
+            decimal curR = RLadderPolicy.CurrentR(p.EntryPrice, risk, isLong, px);
+            var tpsR = p.TakeProfits.Where(t => t.Price > 0)
+                .Select(t => Math.Round(RLadderPolicy.CurrentR(p.EntryPrice, risk, isLong, t.Price), 2)).ToList();
+            // Filled targets are removed from the position; show the full ladder with filled ones marked.
+            var full = _cfg.Enabled ? _cfg.TargetsR.ToList() : tpsR;
+            int filled = _cfg.Enabled ? p.TpFilled : 0;
+            decimal? next = p.TakeProfits.Where(t => t.Price > 0)
+                .OrderBy(t => isLong ? t.Price : -t.Price).Select(t => (decimal?)t.Price).FirstOrDefault();
+            decimal locked = stop > 0 ? (isLong ? stop - p.EntryPrice : p.EntryPrice - stop) * p.Qty : 0m;
+            rows.Add(new OpenRow(p.Symbol, isLong, p.EntryPrice, stop, stopR, curR, Math.Max(p.PeakR, curR),
+                full, filled, next, locked));
+        }
+        _open = rows.OrderByDescending(r => r.CurR).ToList();
+
+        // One row per partial close in history → aggregate to one trade.
+        var trades = snap.History
+            .Where(h => h.InitialRiskPrice > 0 && h.Qty > 0)
+            .GroupBy(h => (h.Symbol, h.Side, h.OpenedAtUtc))
+            .Select(g => new TradeR(g.Key.Symbol, g.Key.Side,
+                g.Sum(x => x.RealizedPnl) / (g.First().InitialRiskPrice * g.Sum(x => x.Qty)),
+                g.OrderBy(x => x.ClosedAtUtc).Last().CloseReason, g.Max(x => x.ClosedAtUtc)))
+            .OrderBy(t => t.Closed)
+            .ToList();
+        _recent = trades.TakeLast(60).ToList();
+        BuildWeek(trades, snap.History.Select(h => (h.ClosedAtUtc, h.RealizedPnl)).ToList());
+        if (trades.Count > 0)
+        {
+            var w = trades.Where(t => t.R > 0).ToList();
+            var l = trades.Where(t => t.R <= 0).ToList();
+            decimal wp = (decimal)w.Count / trades.Count;
+            decimal aw = w.Count > 0 ? w.Average(t => t.R) : 0m;
+            decimal al = l.Count > 0 ? l.Average(t => t.R) : 0m;
+            decimal be = wp > 0 ? (1 - wp) * Math.Abs(al == 0 ? 1m : al) / wp : 0m;
+            _stats = new Stats(trades.Count, wp * 100m, aw, al, trades.Average(t => t.R), be);
+        }
+    }
+
+    private string X(decimal r)
+    {
+        decimal pct = (Math.Clamp(r, -1m, _maxR) + 1m) / (_maxR + 1m) * 100m;
+        return pct.ToString("F2", CultureInfo.InvariantCulture) + "%";
+    }
+    private string W(decimal a, decimal b)
+    {
+        decimal pa = (Math.Clamp(a, -1m, _maxR) + 1m), pb = (Math.Clamp(b, -1m, _maxR) + 1m);
+        return (Math.Max(0m, pb - pa) / (_maxR + 1m) * 100m).ToString("F2", CultureInfo.InvariantCulture) + "%";
+    }
+    private static string Signed(decimal v) => v.ToString("+0.00;−0.00;0.00", CultureInfo.InvariantCulture);
+
+    private void OnPct(int idx, object? v)
+    {
+        if (int.TryParse(v?.ToString(), out var x)) _pct[idx] = x;
+        // A further target can never be reached more often than a nearer one.
+        for (int k = idx + 1; k < _pct.Length; k++) _pct[k] = Math.Min(_pct[k], _pct[k - 1]);
+        for (int k = idx - 1; k >= 0; k--) _pct[k] = Math.Max(_pct[k], _pct[k + 1]);
+        Recalc();
+    }
+    private void OnRisk(object? v)
+    {
+        if (decimal.TryParse(v?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+            _riskPct = x / 100m;
+        Recalc();
+    }
+    private void Recalc()
+    {
+        if (_pct.Length != _cfg.TargetsR.Length)
+            _pct = _cfg.TargetsR.Select(r => (int)Math.Round(Math.Clamp(55m / r, 3m, 60m))).ToArray();
+        _expR = RLadderPolicy.ExpectancyR(_pct.Select(p => p / 100m).ToArray(), _cfg);
+        double g = Math.Pow((double)(1m + _riskPct * _expR), 100);
+        _growth = (decimal)Math.Clamp(g, 0.0, 1000.0);
+    }
+
+    private void LoadEditor(RLadderOptions o)
+    {
+        _edit = new RLadderOptions
+        {
+            Enabled = o.Enabled, MinRoomR = o.MinRoomR, StopMode = o.StopMode,
+            BreakevenAtR = o.BreakevenAtR, FeeBufferPct = o.FeeBufferPct,
+        };
+        _targetsText = string.Join(", ", o.TargetsR.Select(x => x.ToString("0.##", CultureInfo.InvariantCulture)));
+        _weightsText = string.Join(", ", o.Weights.Select(x => x.ToString("0.###", CultureInfo.InvariantCulture)));
+        _locksText = string.Join(", ", o.LockSteps.Select(s =>
+            $"{s.TriggerR.ToString("0.##", CultureInfo.InvariantCulture)}>{s.LockR.ToString("0.##", CultureInfo.InvariantCulture)}"));
+    }
+
+    private void Reset()
+    {
+        LoadEditor(new RLadderOptions().Normalized());
+        _msg = "Defaults loaded. Save to apply.";
+        _msgErr = false;
+    }
+
+    private static decimal[]? ParseList(string s)
+    {
+        var parts = (s ?? "").Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        var list = new List<decimal>();
+        foreach (var p in parts)
+        {
+            if (!decimal.TryParse(p, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) || d <= 0) return null;
+            list.Add(d);
+        }
+        return list.Count > 0 ? list.ToArray() : null;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!Auth.IsAuthenticated) { Nav.NavigateTo("/login", replace: true); return; }
+        var targets = ParseList(_targetsText);
+        var weights = ParseList(_weightsText);
+        if (targets == null || weights == null || targets.Length != weights.Length)
+        {
+            _msg = "Targets and sizes need the same number of positive values, for example 2, 3, 5, 7 and 0.25, 0.25, 0.25, 0.25.";
+            _msgErr = true; return;
+        }
+        var locks = new List<RLockStep>();
+        foreach (var part in (_locksText ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var ab = part.Split('>', StringSplitOptions.TrimEntries);
+            if (ab.Length != 2
+                || !decimal.TryParse(ab[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var tr)
+                || !decimal.TryParse(ab[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var lr)
+                || lr >= tr)
+            {
+                _msg = $"Lock \"{part}\" is not valid. Write peak>stop, with the stop below the peak, for example 3>1.";
+                _msgErr = true; return;
+            }
+            locks.Add(new RLockStep { TriggerR = tr, LockR = lr });
+        }
+
+        _saving = true;
+        try
+        {
+            var o = new System.Text.Json.Nodes.JsonObject
+            {
+                ["Enabled"] = _edit.Enabled,
+                ["TargetsR"] = new System.Text.Json.Nodes.JsonArray(targets.Select(t => (System.Text.Json.Nodes.JsonNode?)t).ToArray()),
+                ["Weights"] = new System.Text.Json.Nodes.JsonArray(weights.Select(t => (System.Text.Json.Nodes.JsonNode?)t).ToArray()),
+                ["MinRoomR"] = _edit.MinRoomR,
+                ["BreakevenAtR"] = _edit.BreakevenAtR,
+                ["FeeBufferPct"] = _edit.FeeBufferPct,
+                ["StopMode"] = _edit.StopMode,
+                ["LockSteps"] = new System.Text.Json.Nodes.JsonArray(locks.Select(l =>
+                    (System.Text.Json.Nodes.JsonNode?)new System.Text.Json.Nodes.JsonObject { ["TriggerR"] = l.TriggerR, ["LockR"] = l.LockR }).ToArray()),
+            };
+            await RuntimeCfg.SetValueAsync("RLadder", o);
+            _msg = "Ladder saved. Engine and Demo pick it up within a few seconds; open positions keep their placed targets.";
+            _msgErr = false;
+        }
+        catch (Exception ex)
+        {
+            _msg = "Ladder not saved: " + ex.Message;
+            _msgErr = true;
+        }
+        finally { _saving = false; }
+    }
+
+
+    // ---------- week ----------
+    private sealed record DayRow(string Name, decimal Pnl, decimal R, int Count);
+    private List<DayRow> _week = new();
+    private decimal _weekR, _weekPf;
+    private int _weekWins, _weekLosses;
+
+    private void BuildWeek(List<TradeR> trades, List<(DateTime closed, decimal pnl)> pnls)
+    {
+        var today = DateTime.UtcNow.Date;
+        int back = ((int)today.DayOfWeek + 6) % 7; // Monday = 0
+        var monday = today.AddDays(-back);
+        string[] names = { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
+        var wk = trades.Where(t => t.Closed >= monday).ToList();
+        _week = Enumerable.Range(0, 7).Select(i =>
+        {
+            var day = monday.AddDays(i);
+            var ts = wk.Where(t => t.Closed.Date == day).ToList();
+            decimal pnl = pnls.Where(p => p.closed.Date == day).Sum(p => p.pnl);
+            return new DayRow(names[i], pnl, ts.Sum(t => t.R), ts.Count);
+        }).ToList();
+        _weekR = wk.Sum(t => t.R);
+        _weekWins = wk.Count(t => t.R > 0);
+        _weekLosses = wk.Count(t => t.R <= 0);
+        decimal gp = wk.Where(t => t.R > 0).Sum(t => t.R), gl = -wk.Where(t => t.R < 0).Sum(t => t.R);
+        _weekPf = gl > 0 ? gp / gl : 0m;
+    }
+
+    // ---------- scaling ----------
+    private decimal _scStart = 250m, _scRiskPct = 1m, _scRr = 4m, _scWin = 30m;
+    private int _scN = 25, _scSeed = 7;
+    private List<RiskScaling.Row> _scRows = new();
+    private decimal _scExp, _scKelly;
+    private (decimal median, decimal p5, decimal ruin, int streak) _scMc;
+
+    private void Reseed() { _scSeed++; RunScale(); }
+    private void RunScale()
+    {
+        _scN = Math.Clamp(_scN, 5, 200);
+        decimal p = Math.Clamp(_scWin, 1m, 99m) / 100m;
+        decimal f = Math.Clamp(_scRiskPct, 0.05m, 50m) / 100m;
+        _scRows = RiskScaling.Simulate(Math.Max(1m, _scStart), f, _scRr, RiskScaling.Sequence(_scN, p, _scSeed));
+        _scExp = RiskScaling.ExpectancyR(p, _scRr);
+        _scKelly = RiskScaling.Kelly(p, _scRr);
+        var mc = RiskScaling.MonteCarlo(f, _scRr, p, _scN, 2000, 0.5m, _scSeed);
+        _scMc = (mc.median, mc.p5, mc.ruinShare, Math.Max(1, (int)Math.Round(Math.Log(0.05) / Math.Log((double)(1m - p)))));
+    }
+
+    // ---------- position size + engine risk ----------
+    private decimal _szBal = 1000m, _szPct = 1m, _szEntry = 76.17m, _szStop = 76.04m;
+    private decimal _engMajorPct = 0.75m, _engAltPct = 0.60m, _engineMaxPct = 2m;
+    private string _riskMsg = "";
+    private bool _riskMsgErr;
+
+    private async Task SaveRiskAsync()
+    {
+        if (!Auth.IsAuthenticated) { Nav.NavigateTo("/login", replace: true); return; }
+        if (_engMajorPct <= 0 || _engAltPct <= 0 || _engineMaxPct <= 0 || _engMajorPct > 5 || _engAltPct > 5 || _engineMaxPct > 5)
+        {
+            _riskMsg = "Each value must be between 0.1% and 5%.";
+            _riskMsgErr = true; return;
+        }
+        _saving = true;
+        try
+        {
+            await RuntimeCfg.SetValueAsync("Trading:CoreRiskPctMajor", (object)Math.Round(_engMajorPct / 100m, 5));
+            await RuntimeCfg.SetValueAsync("Trading:CoreRiskPctAlt", (object)Math.Round(_engAltPct / 100m, 5));
+            await RuntimeCfg.SetValueAsync("Trading:MaxRiskPctPerTrade", (object)Math.Round(_engineMaxPct / 100m, 5));
+            _riskMsg = $"Risk saved: {_engMajorPct:0.##}% on majors, {_engAltPct:0.##}% on other coins, never more than {_engineMaxPct:0.#}% of the current balance.";
+            _riskMsgErr = false;
+        }
+        catch (Exception ex) { _riskMsg = "Risk not saved: " + ex.Message; _riskMsgErr = true; }
+        finally { _saving = false; }
+    }
+
+    public void Dispose()
+    {
+        DemoSvc.Updated -= OnDemoUpdated;
+        _timer?.Dispose();
+    }
+}

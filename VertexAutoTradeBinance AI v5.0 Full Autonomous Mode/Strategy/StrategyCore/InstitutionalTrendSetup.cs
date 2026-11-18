@@ -1,5 +1,6 @@
 using Binance.Net.Objects.Models.Futures;
 using VertexAutoTradeBinance8.Models;
+using VertexAutoTrade.Core.Risk;
 
 namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
 
@@ -258,13 +259,33 @@ public static class InstitutionalTrendSetup
             if (!Trigger(m15, eF, atr15, forLong: true, out bool strongReject))
                 return Fail("no_m15_long_trigger");
 
-            if (!TryStop(true, close, swingLo, atr1h, atr15, m15, out decimal sl, out decimal risk, out string slWhy))
+            var ladder = RLadderPolicy.Current;
+            decimal sl, risk;
+            string slWhy;
+            bool stopOk = ladder.Enabled && ladder.UsePullbackStop
+                ? TryStopPullback(true, close, atr15, m15, out sl, out risk, out slWhy)
+                : TryStop(true, close, swingLo, atr1h, atr15, m15, out sl, out risk, out slWhy);
+            if (!stopOk)
                 return Fail(slWhy);
 
-            var tps = StructureTps(true, close, risk, swingHi, swingLo, atr15, atr1h, m15);
-            decimal rr = (tps[0] - close) / risk;
-            if (rr < MinRr)
-                return Fail("rr_fail");
+            decimal[] tps;
+            decimal rr;
+            if (ladder.Enabled)
+            {
+                var opp = NearestOpposingLevel(true, close, h1, h4, d1Raw);
+                decimal room = RLadderPolicy.RoomR(close, sl, true, opp);
+                if (ladder.MinRoomR > 0 && room < ladder.MinRoomR)
+                    return Fail($"no_room:{Math.Min(room, 99m):F1}R");
+                tps = RLadderPolicy.TargetPrices(close, sl, true, ladder);
+                rr = ladder.TargetsR[0];
+            }
+            else
+            {
+                tps = StructureTps(true, close, risk, swingHi, swingLo, atr15, atr1h, m15);
+                rr = (tps[0] - close) / risk;
+                if (rr < MinRr)
+                    return Fail("rr_fail");
+            }
 
             decimal conf = Score(volR, strongReject, retrace, fullStructure) - Math.Min(0.18m, h4Pen + softPenalty);
             if (conf < MinConfidence)
@@ -282,13 +303,33 @@ public static class InstitutionalTrendSetup
         if (!Trigger(m15, eF, atr15, forLong: false, out bool strongRejectS))
             return Fail("no_m15_short_trigger");
 
-        if (!TryStop(false, close, swingHi, atr1h, atr15, m15, out decimal slS, out decimal riskS, out string slWhyS))
+        var ladderS = RLadderPolicy.Current;
+        decimal slS, riskS;
+        string slWhyS;
+        bool stopOkS = ladderS.Enabled && ladderS.UsePullbackStop
+            ? TryStopPullback(false, close, atr15, m15, out slS, out riskS, out slWhyS)
+            : TryStop(false, close, swingHi, atr1h, atr15, m15, out slS, out riskS, out slWhyS);
+        if (!stopOkS)
             return Fail(slWhyS);
 
-        var tpsS = StructureTps(false, close, riskS, swingHi, swingLo, atr15, atr1h, m15);
-        decimal rrS = (close - tpsS[0]) / riskS;
-        if (rrS < MinRr)
-            return Fail("rr_fail");
+        decimal[] tpsS;
+        decimal rrS;
+        if (ladderS.Enabled)
+        {
+            var oppS = NearestOpposingLevel(false, close, h1, h4, d1Raw);
+            decimal roomS = RLadderPolicy.RoomR(close, slS, false, oppS);
+            if (ladderS.MinRoomR > 0 && roomS < ladderS.MinRoomR)
+                return Fail($"no_room:{Math.Min(roomS, 99m):F1}R");
+            tpsS = RLadderPolicy.TargetPrices(close, slS, false, ladderS);
+            rrS = ladderS.TargetsR[0];
+        }
+        else
+        {
+            tpsS = StructureTps(false, close, riskS, swingHi, swingLo, atr15, atr1h, m15);
+            rrS = (close - tpsS[0]) / riskS;
+            if (rrS < MinRr)
+                return Fail("rr_fail");
+        }
 
         decimal confS = Score(volR, strongRejectS, retrace, fullStructure) - Math.Min(0.18m, h4Pen + softPenalty);
         if (confS < MinConfidence)
@@ -370,6 +411,75 @@ public static class InstitutionalTrendSetup
         sl = slStruct;
         risk = structRisk;
         return true;
+    }
+
+    /// <summary>
+    /// Pullback stop (RLadder StopMode=Pullback). The entry is timed on 15m, so the
+    /// invalidation is the 15m pullback extreme, not the far 1H impulse origin.
+    /// The old 1H-sized stop (1–3.2%) with 15m-pivot targets capped every trade at
+    /// ≈1.15R (client_001 logs). Stop = pullback extreme ± sweep room, never inside
+    /// noise (≥ max(MinRiskPct, 1.0×ATR15)), never wider than MaxRiskPct.
+    /// </summary>
+    private static bool TryStopPullback(
+        bool isLong, decimal close, decimal atr15,
+        List<BinanceFuturesUsdtKline> m15,
+        out decimal sl, out decimal risk, out string why)
+    {
+        sl = 0; risk = 0; why = "";
+        if (m15.Count < 10 || atr15 <= 0 || close <= 0) { why = "pb_stop_thin"; return false; }
+
+        decimal pool = isLong ? decimal.MaxValue : 0m;
+        for (int k = m15.Count - 8; k < m15.Count; k++)
+            pool = isLong ? Math.Min(pool, m15[k].LowPrice) : Math.Max(pool, m15[k].HighPrice);
+
+        decimal sweepRoom = Math.Max(atr15 * 0.35m, close * 0.0015m);
+        decimal s = isLong ? pool - sweepRoom : pool + sweepRoom;
+        s = NudgePastRound(s, close, isLong);
+
+        decimal minDist = Math.Max(close * MinRiskPct * 0.85m, atr15 * 1.0m);
+        decimal maxDist = close * MaxRiskPct;
+        decimal dist = isLong ? close - s : s - close;
+        if (dist <= 0) { why = "bad_risk"; return false; }
+        if (dist < minDist)
+        {
+            // Widen away from noise; never pull a stop closer than the floor.
+            dist = minDist;
+            s = isLong ? close - dist : close + dist;
+        }
+        if (dist > maxDist) { why = $"sl_too_wide:{dist / close:P2}"; return false; }
+
+        sl = s;
+        risk = dist;
+        return true;
+    }
+
+    /// <summary>
+    /// Nearest opposing higher-timeframe liquidity beyond entry: major 1H swings (±4-bar
+    /// fractal, the minor ±2 pivots sit every few bars and would veto everything), 4H swings
+    /// and the previous daily high/low. null = no level overhead/underfoot (open air).
+    /// </summary>
+    private static decimal? NearestOpposingLevel(
+        bool isLong, decimal entry,
+        List<BinanceFuturesUsdtKline> h1,
+        List<BinanceFuturesUsdtKline>? h4,
+        IReadOnlyList<BinanceFuturesUsdtKline>? d1Raw)
+    {
+        var levels = new List<decimal>();
+        levels.AddRange(Pivots(h1, high: isLong, wing: 4));
+        if (h4 != null && h4.Count >= 10) levels.AddRange(Pivots(h4, high: isLong, wing: 2));
+        if (d1Raw != null && d1Raw.Count >= 3)
+        {
+            var d1 = ClosedBars(d1Raw, 1440);
+            if (d1.Count >= 2) levels.Add(isLong ? d1[^1].HighPrice : d1[^1].LowPrice);
+        }
+        decimal minGap = entry * 0.0005m;
+        decimal? best = null;
+        foreach (var lv in levels)
+        {
+            if (isLong && lv > entry + minGap && (best is null || lv < best)) best = lv;
+            if (!isLong && lv < entry - minGap && lv > 0 && (best is null || lv > best)) best = lv;
+        }
+        return best;
     }
 
     /// <summary>
@@ -998,7 +1108,7 @@ public static class InstitutionalTrendSetup
         var ageMin = (DateTime.UtcNow - openT.ToUniversalTime()).TotalMinutes;
         // Drop the candle that has not yet closed (1H = 60, 4H = 240). The old
         // 50-minute cutoff kept a 4H bar that was still three hours from close.
-        if (ageMin < barMinutes - 1 && k.Count >= 2)
+        if (ageMin < barMinutes && k.Count >= 2)
             hi = k.Count - 2;
         return k.Take(hi + 1).ToList();
     }
@@ -1094,10 +1204,10 @@ public static class InstitutionalTrendSetup
         };
     }
 
-    private static List<decimal> Pivots(List<BinanceFuturesUsdtKline> k, bool high)
+    private static List<decimal> Pivots(List<BinanceFuturesUsdtKline> k, bool high, int wing = 2)
     {
         var list = new List<decimal>();
-        const int w = 2;
+        int w = Math.Max(1, wing);
         for (int i = w; i < k.Count - w; i++)
         {
             if (high)

@@ -146,6 +146,8 @@ namespace VertexAutoTradeBinance8.Services
             public int StepLevel;
             public bool GaveBackExitDone;
             public DateTime LastActionUtc;
+            /// <summary>Largest quantity seen for this position (R-ladder: infers filled targets).</summary>
+            public decimal PeakQty;
         }
         private readonly ConcurrentDictionary<string, ProfitAwareState> _profitAware = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, decimal> _openInitialRisk = new(StringComparer.OrdinalIgnoreCase);
@@ -672,6 +674,10 @@ namespace VertexAutoTradeBinance8.Services
 
                 if (qty <= 0 || entry <= 0 || mark <= 0) return;
 
+                // R-ladder owns bot-position exits (RunProfitAwareAsync). The legacy BE +
+                // 1m-ATR trail below would otherwise fight it and choke runners.
+                if (VertexAutoTrade.Core.Risk.RLadderPolicy.Current.Enabled) return;
+
                 var keyProbe = BuildExitKey(symbol, side, entry);
 
                 // =========================
@@ -698,8 +704,12 @@ namespace VertexAutoTradeBinance8.Services
                 //   Partial step: 5.0×ATR (vs 2.0×)
                 //   SL buffer: 1.2×ATR (vs 0.3-0.5×) — wide buffer, long-term hold
                 //   Partial size: 20% (vs 34-42%) — smaller partial, preserve position
-                decimal STEP         = ATR * (isDcaPos ? 1.0m  : 0.5m);
-                decimal PARTIAL_STEP = ATR * (isDcaPos ? 5.0m  : 2.0m);
+                // roi is a FRACTION of entry; ATR is a PRICE. Compare like with like —
+                // dividing a fraction by a price fired partials at random depending on
+                // the coin's price (e.g. instantly on sub-$1 coins, never on BTC).
+                decimal ATRF = entry > 0 ? ATR / entry : 0m;
+                decimal STEP         = ATRF * (isDcaPos ? 1.0m  : 0.5m);
+                decimal PARTIAL_STEP = ATRF * (isDcaPos ? 5.0m  : 2.0m);
                 decimal PARTIAL_SIZE = isDcaPos ? 0.20m : (isToxic ? 0.42m : 0.34m);
                 decimal MIN_BUFFER   = ATR * (isDcaPos ? 1.2m  : (isToxic ? 0.5m : 0.3m));
 
@@ -726,7 +736,7 @@ namespace VertexAutoTradeBinance8.Services
                     _lastSl[peakKey] = qty; // update peak on first call or size-up
                 decimal peakQty = _lastSl[peakKey];
 
-                decimal BE_TRIGGER = ATR * (isDcaPos ? 3.0m : 1.3m);
+                decimal BE_TRIGGER = ATRF * (isDcaPos ? 3.0m : 1.3m);
 
                 // ── Which phase? ─────────────────────────────────────────
                 // tp1Fired: true when at least 30% of position was closed
@@ -1035,9 +1045,49 @@ namespace VertexAutoTradeBinance8.Services
 
                 decimal peak = st.PeakMfeR;
                 decimal giveback = peak > 0.01m ? (peak - curR) / peak : 0m;
+                if (qty > st.PeakQty) st.PeakQty = qty;
 
                 if ((DateTime.UtcNow - st.LastActionUtc).TotalSeconds < 25)
                     return;
+
+                // ── R-LADDER (default) ─────────────────────────────────────────
+                // Exchange TP orders at 2R/3R/5R/7R do the scale-out. This only ratchets
+                // the stop: BE+fees after TP1, then 3R→+1R, 4R→+2R, 5R→+3R, 6R→+4R.
+                // No giveback partials and no 1m-ATR trail: those capped winners at ≈0.86R.
+                var ladder = VertexAutoTrade.Core.Risk.RLadderPolicy.Current;
+                if (ladder.Enabled)
+                {
+                    int filled = 0;
+                    if (st.PeakQty > 0)
+                    {
+                        decimal closedFrac = 1m - qty / st.PeakQty;
+                        decimal cum = 0m;
+                        foreach (var w in ladder.Weights)
+                        {
+                            cum += w;
+                            if (cum <= closedFrac + 0.02m) filled++;
+                            else break;
+                        }
+                    }
+                    var lockPx = VertexAutoTrade.Core.Risk.RLadderPolicy.LockedStopPrice(entry, risk, side == PositionSide.Long, peak, filled, ladder);
+                    if (lockPx is decimal lp)
+                    {
+                        decimal lastSl0 = _lastSl.TryGetValue(key, out var ls0) ? ls0 : 0m;
+                        if (VertexAutoTrade.Core.Risk.RLadderPolicy.IsImprovement(lp, lastSl0, side == PositionSide.Long))
+                        {
+                            _logger.LogWarning(
+                                "[RLADDER][{symbol}][{side}] SL → {sl} (peak={peak:F2}R cur={cur:F2}R filled={f})",
+                                symbol, side, lp, peak, curR, filled);
+                            if (await PlaceStopLossAtBeAsync(client, symbol, side, qty, lp, pos, ct))
+                            {
+                                _lastSl[key] = lp;
+                                st.LockedR = (side == PositionSide.Long ? lp - entry : entry - lp) / risk;
+                                st.LastActionUtc = DateTime.UtcNow;
+                            }
+                        }
+                    }
+                    return;
+                }
 
                 // Institutional step trail (TZ): protect impulse after TP1 so reversals
                 // do not give back almost all open profit (was locking only 0.15–0.60R).
@@ -2393,6 +2443,8 @@ namespace VertexAutoTradeBinance8.Services
             var to = _tradingOptions.CurrentValue;
             decimal minRisk = to.MinProtectiveRiskPct > 0 ? to.MinProtectiveRiskPct : 0.009m;
             decimal tp1R = to.ReconcileTp1R > 0 ? to.ReconcileTp1R : 1.6m;
+            var ladderR = VertexAutoTrade.Core.Risk.RLadderPolicy.Current;
+            if (ladderR.Enabled && ladderR.TargetsR.Length > 0) tp1R = ladderR.TargetsR[0];
 
             using var client = _factory.CreateRestClient();
             var regularResult = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct).ConfigureAwait(false);

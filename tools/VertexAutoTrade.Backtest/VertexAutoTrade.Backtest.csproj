@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Offline replay of the CORE trend setup (InstitutionalTrendSetup) + exit logic on real
+    Binance USDⓈ-M klines. Uses the SAME source files as the engine (linked, not copied),
+    so what is measured here is what trades in Demo/Live.
+
+    Run (Windows, from repo root):
+      dotnet run -c Release --project tools/VertexAutoTrade.Backtest -- --days 120
+    See README.md in this folder for options.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);CS8618;CS8601;CS8602;CS8603;CS8604;CS8625;CS0168;CS0219</NoWarn>
+    <EngineDir>..\..\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode</EngineDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Binance.Net" Version="12.13.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\..\src\VertexAutoTrade.Core\**\*.cs" LinkBase="Linked\Core" />
+    <Compile Include="$(EngineDir)\Models\TradeSignal.cs" Link="Linked\Engine\TradeSignal.cs" />
+    <Compile Include="$(EngineDir)\Strategy\StrategyCore\InstitutionalTrendSetup.cs" Link="Linked\Engine\InstitutionalTrendSetup.cs" />
+    <Compile Include="$(EngineDir)\Strategy\EntrySanityGate.cs" Link="Linked\Engine\EntrySanityGate.cs" />
+    <Compile Include="$(EngineDir)\Strategy\ExecutableStrategyPolicy.cs" Link="Linked\Engine\ExecutableStrategyPolicy.cs" />
+  </ItemGroup>
+</Project>
