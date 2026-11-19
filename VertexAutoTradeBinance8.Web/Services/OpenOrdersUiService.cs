@@ -52,7 +52,7 @@ public class OpenOrdersUiService
 
         try
         {
-            using var client = _factory.CreateRestClient();
+            var client = _factory.CreateRestClient();
             var list = new List<OpenOrderRow>();
 
             // All open futures orders (includes STOP / TP reduce-only on many accounts)

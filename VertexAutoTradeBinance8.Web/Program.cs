@@ -1,127 +1,73 @@
-﻿using Microsoft.AspNetCore.SignalR;
-using VertexAutoTradeBinance8.Configuration;
-using VertexAutoTradeBinance8.Services;
-using VertexAutoTradeBinance8.Web.Data;
-using VertexAutoTradeBinance8.Web.Hubs;
+using Microsoft.Extensions.Hosting.WindowsServices;
+using VertexAutoTradeBinance8.Hosting;
+using VertexAutoTradeBinance8.Web.Security;
 using VertexAutoTradeBinance8.Web.Services;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = WindowsServiceHelpers.IsWindowsService() ? AppContext.BaseDirectory : default
+});
+builder.Host.UseWindowsService(o => o.ServiceName = "VertexTerminalWeb");
 
+// ---------------- configuration ----------------
+builder.Configuration
+    .SetBasePath(builder.Environment.ContentRootPath)
+    .AddJsonFile("appsettings.web.json", optional: false, reloadOnChange: true)
+    .AddJsonFile($"appsettings.web.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true);
+
+// конфиг бота (Trading/Binance) — тот же файл, что использует worker
+var botSettingsPath = builder.Configuration["BotSettings:Path"];
+if (!string.IsNullOrWhiteSpace(botSettingsPath) && File.Exists(botSettingsPath))
+    builder.Configuration.AddJsonFile(botSettingsPath, optional: true, reloadOnChange: true);
+
+builder.Configuration.AddVertexConfiguration(builder.Environment.ContentRootPath); // Local.json + env (секреты)
+if (builder.Environment.IsDevelopment())
+    builder.Configuration.AddUserSecrets<Program>(optional: true);
+
+builder.Logging.AddProvider(new FileLoggerProvider("web"));
+
+// ---------------- services ----------------
+builder.Services.AddRazorPages();
+builder.Services.AddServerSideBlazor(o => o.DetailedErrors = builder.Environment.IsDevelopment());
+builder.Services.AddControllers();
+builder.Services.AddHttpClient();
 builder.Services.AddHttpClient("binance", c =>
 {
     c.BaseAddress = new Uri("https://fapi.binance.com");
     c.Timeout = TimeSpan.FromSeconds(15);
 });
-builder.Services.AddHttpClient(); // default for Blazor HttpClient if needed
-
-
-// ===============================
-// Конфиги (правильная версия)
-// ===============================
-builder.Configuration
-    .SetBasePath(builder.Environment.ContentRootPath)
-    .AddJsonFile("appsettings.web.json", optional: false, reloadOnChange: true)         // основной конфиг Web
-    .AddJsonFile($"appsettings.web.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true) // Dev/Staging/Prod
-    .AddEnvironmentVariables();
-
-// Если хочешь, можно добавить User Secrets только в Development
-if (builder.Environment.IsDevelopment())
-{
-    builder.Configuration.AddUserSecrets<Program>();
-}
-
-
-// Add services to the container.
-builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
-builder.Services.AddSingleton<WeatherForecastService>();
-
-
-// ============= DEPENDENCY INJECTION =============
-// Bot appsettings (API keys, trading) — same file worker uses
-var botSettingsPath = builder.Configuration["BotSettings:Path"];
-if (!string.IsNullOrWhiteSpace(botSettingsPath) && File.Exists(botSettingsPath))
-{
-    builder.Configuration.AddJsonFile(botSettingsPath, optional: true, reloadOnChange: true);
-}
-
-builder.Services.Configure<BinanceOptions>(builder.Configuration.GetSection("Binance"));
-builder.Services.Configure<TradingOptions>(builder.Configuration.GetSection("Trading"));
-builder.Services.Configure<TradingOptions>(
-    builder.Configuration.GetSection("TradingOptions"));
-
-builder.Services.AddSingleton<AiStopLossOptimizer>();
-
-
-// ========================================================================
-//  CORE SERVICES (общие для анализа и Dashboard)
-// ========================================================================
-builder.Services.AddSingleton<BinanceClientFactory>();
-builder.Services.AddSingleton<MarketDataService>();
-builder.Services.AddSingleton<SmartRegimeService>();
-builder.Services.AddSingleton<SymbolInfoService>();
-builder.Services.AddSingleton<AiCorrelationService>();
-
-// Учебный модуль
-builder.Services.AddSingleton<AiSelfLearningService>();
-builder.Services.AddSingleton<AiLearningFileService>();
-builder.Services.AddSingleton<MissedTradeFileService>();
-builder.Services.AddSingleton<EngineStateService>();
-builder.Services.AddSingleton<TradingSettingsService>();
-
-builder.Services.AddSingleton<ExecutedSignalUiService>();
-builder.Services.AddSingleton<OpenOrdersUiService>();
-builder.Services.AddSingleton<ExecutedSignalsPushService>();
-builder.Services.AddSingleton<ExecutedSignalService>();
-
-// Режим рынка (AI Smart Regime)
-builder.Services.AddSingleton<AiMarketRegimeService>();
-
-builder.Services.AddHttpClient("api", client =>
-{
-    client.BaseAddress = new Uri("https://localhost:7185/"); // твой Web API адрес
-});
-
-
-// REST API для получения данных
-builder.Services.AddControllers();
-
-// Blazor Server
-
-builder.Services.AddHttpClient();
 builder.Services.AddScoped(sp =>
 {
     var nav = sp.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>();
     return new HttpClient { BaseAddress = new Uri(nav.BaseUri) };
 });
-builder.Services.AddSignalR();
 
+// торговое ядро (read-mostly в Web: позиции, журнал, управляющий файл)
+builder.Services.AddVertexCore(builder.Configuration);
+
+// UI services
+builder.Services.AddSingleton<AiLearningFileService>();
+builder.Services.AddSingleton<MissedTradeFileService>();
+builder.Services.AddSingleton<EngineStateService>();
+builder.Services.AddSingleton<TradingSettingsService>();
+builder.Services.AddSingleton<ExecutedSignalUiService>();
+builder.Services.AddSingleton<OpenOrdersUiService>();
+builder.Services.AddSingleton<TerminalDataService>();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");
-    // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
-    app.UseHsts();
 }
 
-app.UseHttpsRedirection();
-
 app.UseStaticFiles();
-
-
+app.UseMiddleware<AccessKeyMiddleware>();
 app.UseRouting();
-app.MapControllers();   // API маршруты
+app.MapControllers();
 app.MapBlazorHub();
+app.MapGet("/health", () => Results.Ok(new { status = "ok", utc = DateTime.UtcNow }));
 app.MapFallbackToPage("/_Host");
-app.MapHub<ExecutedSignalsHub>("/hubs/executedSignals");
- 
-ExecutedSignalService.ExecutedSignalsChanged += async () =>
-{
-    var hub = app.Services.GetRequiredService<IHubContext<ExecutedSignalsHub>>();
-    await hub.Clients.All.SendAsync("ExecutedSignalsUpdated");
-};
 
 app.Run();

@@ -1,84 +1,134 @@
 @page "/positions"
+@using VertexAutoTradeBinance8.Web.Shared.Ui
+@inject TerminalDataService Data
 @implements IDisposable
-@using VertexAutoTradeBinance8.Web.Services
-@inject EngineStateService EngineService
+
+<PageTitle>Vertex · Positions</PageTitle>
 
 <div class="vt-page-title">
     <div>
         <h1>Positions</h1>
-        <p>Open exposure from engine snapshot · protection status</p>
+        <p>Живые позиции Binance USDⓈ-M · защита и стадия сопровождения бота</p>
     </div>
-    <span class="vt-badge ok">auto 5s</span>
+    <div class="vt-page-actions">
+        <span class="vt-badge info">auto 5s</span>
+        <button class="vt-btn sm" @onclick="() => Load(true)">Обновить</button>
+    </div>
 </div>
 
-<div class="vt-card">
-    <div class="vt-card-header">
-        <div class="vt-card-title">Active context</div>
-        <span class="vt-badge info">from engine_state.json</span>
+@if (s == null)
+{
+    <div class="vt-card"><div class="vt-empty">Загрузка…</div></div>
+}
+else
+{
+    <div class="vt-kpi-grid" style="margin-bottom:16px">
+        <div class="vt-kpi"><span class="label">Open</span><span class="value">@s.Positions.Count</span><span class="sub">@s.Positions.Count(p => p.Managed) managed · @s.Positions.Count(p => !p.Managed) manual</span></div>
+        <div class="vt-kpi @(s.Unrealized >= 0 ? "green" : "red")"><span class="label">Unrealized</span><span class="value">@Fmt.Signed(s.Unrealized)</span><span class="sub">USDT</span></div>
+        <div class="vt-kpi"><span class="label">Exposure</span><span class="value">@Fmt.Money(s.Positions.Sum(p => p.Notional))</span><span class="sub">notional USDT</span></div>
+        <div class="vt-kpi"><span class="label">Long / Short</span><span class="value">@s.Positions.Count(p => p.IsLong) / @s.Positions.Count(p => !p.IsLong)</span><span class="sub">hedge-mode sides</span></div>
     </div>
-    @if (state == null)
+
+    @if (s.Positions.Count == 0)
     {
-        <div class="vt-empty"><div class="ico">▣</div>Нет snapshot. Когда бот откроет позицию — статус появится здесь и в логах SUPERVISOR.</div>
+        <div class="vt-card"><div class="vt-empty"><div class="ico">▣</div><div>Открытых позиций нет</div></div></div>
     }
     else
     {
-        <div class="vt-grid vt-grid-3" style="margin-bottom:16px;">
-            <div class="vt-kpi">
-                <span class="label">Symbol</span>
-                <span class="value" style="font-size:18px;">@state.Symbol</span>
-            </div>
-            <div class="vt-kpi">
-                <span class="label">Balance</span>
-                <span class="value">@state.BalanceUsdt.ToString("0.##")</span>
-            </div>
-            <div class="vt-kpi">
-                <span class="label">Regime</span>
-                <span class="value" style="font-size:16px;">@state.SmartRegime</span>
-                <span class="sub">@state.MarketRegime · conf @state.Confidence%</span>
-            </div>
-        </div>
-        <div class="vt-hint">
-            Полный список позиций Binance читается ботом (PositionSupervisor). Для live REST-позиций
-            подключи API-ключ только на стороне worker-процесса. Dashboard показывает engine context
-            и ссылки на executed / missed.
-        </div>
-        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
-            <a class="vt-btn" href="executed-signals">Executed signals</a>
-            <a class="vt-btn" href="engine">Engine state</a>
-            <a class="vt-btn primary" href="utilities">Utilities / tools</a>
+        <div class="vt-grid" style="grid-template-columns:repeat(auto-fill,minmax(360px,1fr))">
+            @foreach (var p in s.Positions)
+            {
+                <div class="vt-card">
+                    <div class="vt-card-header" style="margin-bottom:12px">
+                        <div class="vt-row" style="gap:10px">
+                            <span style="font-size:16px;font-weight:700">@p.Symbol</span>
+                            <span class="vt-badge @(p.IsLong ? "long" : "short")">@p.Side · @(p.Leverage)x</span>
+                            @if (!p.Managed) { <span class="vt-badge neutral">manual</span> }
+                        </div>
+                        <div style="text-align:right">
+                            <div class="mono @Fmt.Cls(p.UnrealizedPnl)" style="font-size:18px;font-weight:700">@Fmt.Signed(p.UnrealizedPnl)</div>
+                            <div class="mono dim" style="font-size:11px">ROE @Fmt.SignedPct(p.RoePercent)</div>
+                        </div>
+                    </div>
+
+                    <div class="vt-grid vt-grid-3" style="gap:10px;margin-bottom:14px">
+                        <div><div class="vt-kpi-label">Entry</div><div class="mono">@Fmt.Price(p.Entry)</div></div>
+                        <div><div class="vt-kpi-label">Mark</div><div class="mono">@Fmt.Price(p.Mark)</div></div>
+                        <div><div class="vt-kpi-label">Liq.</div><div class="mono down">@Fmt.Price(p.Liquidation)</div></div>
+                        <div><div class="vt-kpi-label">Size</div><div class="mono">@Fmt.Qty(p.Qty)</div></div>
+                        <div><div class="vt-kpi-label">Notional</div><div class="mono">@Fmt.Money(p.Notional)</div></div>
+                        <div><div class="vt-kpi-label">R multiple</div><div class="mono @Fmt.Cls(p.RMultiple ?? 0)">@(p.RMultiple?.ToString("+0.00;-0.00") ?? "—")</div></div>
+                    </div>
+
+                    @if (p.Managed)
+                    {
+                        <div class="vt-row" style="margin-bottom:6px">
+                            <span class="vt-kpi-label">SL</span><span class="mono down">@(p.StopLoss.HasValue ? Fmt.Price(p.StopLoss.Value) : "—")</span>
+                            <span class="vt-spacer"></span>
+                            <span class="vt-kpi-label">TP1</span><span class="mono up">@(p.TakeProfits.Count > 0 ? Fmt.Price(p.TakeProfits[0]) : "—")</span>
+                        </div>
+                        <div class="vt-range" style="margin:10px 0 14px">
+                            @if (p.Progress.HasValue)
+                            {
+                                <span class="mark" style="left:@((int)(p.Progress.Value * 100))%"></span>
+                            }
+                        </div>
+                        <div class="vt-row" style="font-size:11.5px">
+                            <span class="muted">Сопровождение</span>
+                            <span class="vt-stage"><i class="on"></i><i class="@(p.Stage >= 1 ? "on" : "")"></i><i class="@(p.Stage >= 2 ? "on" : "")"></i></span>
+                            <span class="dim">@StageText(p.Stage)</span>
+                            <span class="vt-spacer"></span>
+                            <span class="dim">TP filled @Fmt.Pct(p.FilledFraction, 0) · @Fmt.Ago(p.OpenedAt)</span>
+                        </div>
+                        @if (p.TakeProfits.Count > 0)
+                        {
+                            <div class="vt-row" style="margin-top:10px;gap:6px">
+                                @for (int i = 0; i < p.TakeProfits.Count; i++)
+                                {
+                                    var idx = i;
+                                    <span class="vt-badge @(TpHit(p, idx) ? "ok" : "neutral")">TP@(idx + 1) @Fmt.Price(p.TakeProfits[idx])</span>
+                                }
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <div class="vt-hint">Позиция открыта не ботом — Vertex её не сопровождает (SL/TP/трейлинг не трогаются).</div>
+                    }
+                </div>
+            }
         </div>
     }
-</div>
+}
 
 @code {
-    private CancellationTokenSource? _cts;
+    private TerminalSnapshot? s;
+    private Timer? _timer;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        state = EngineService.Load();
-        _cts = new CancellationTokenSource();
-        _ = Loop(_cts.Token);
+        await Load(false);
+        _timer = new Timer(async _ => { await Load(false); await InvokeAsync(StateHasChanged); }, null, 5000, 5000);
     }
 
-    private async Task Loop(CancellationToken ct)
+    private async Task Load(bool force)
     {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await Task.Delay(5000, ct);
-                state = EngineService.Load();
-                await InvokeAsync(StateHasChanged);
-            }
-            catch (OperationCanceledException) { break; }
-            catch { }
-        }
+        try { s = await Data.GetAsync(force: force); } catch { }
     }
 
-    public void Dispose()
+    private static string StageText(int stage) => stage switch
     {
-        try { _cts?.Cancel(); _cts?.Dispose(); } catch { }
+        1 => "SL в безубытке (после TP1)",
+        2 => "SL на TP1 (runner)",
+        _ => "начальный SL"
+    };
+
+    private static bool TpHit(PositionRow p, int idx)
+    {
+        // 40/30/30: TP1 ≈ 40% исполнено, TP2 ≈ 70%
+        decimal[] thresholds = { 0.36m, 0.63m, 0.99m };
+        return idx < thresholds.Length && p.FilledFraction >= thresholds[idx];
     }
 
-    private Models.EngineStateModel? state;
+    public void Dispose() => _timer?.Dispose();
 }

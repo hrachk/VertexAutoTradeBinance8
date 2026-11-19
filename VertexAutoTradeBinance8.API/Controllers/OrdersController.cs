@@ -1,6 +1,7 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.API.Models;
+using VertexAutoTradeBinance8.API.Security;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
@@ -9,6 +10,7 @@ namespace VertexAutoTradeBinance8.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[RequireApiToken]
 public class OrdersController : ControllerBase
 {
     private readonly ILogger<OrdersController> _logger;
@@ -63,7 +65,7 @@ signal.EntryPrice,
 signal.StopLoss,
 request.RiskMultiplier,
 signal.SafetyRiskMultiplier,
-signal.Leverage ?? 1m,
+Math.Clamp(_tradingOptions.Leverage, 1, 50),
 signal.Side,
 signal.TakeProfits,
 ct);
@@ -71,7 +73,9 @@ ct);
         if (qty <= 0m)
             return BadRequest(new { error = "Calculated quantity is 0. Check risk settings / prices." });
 
-        await _executor.ExecuteAsync(signal, qty, ct);
+        var result = await _executor.ExecuteAsync(signal, qty, ct);
+        if (!result.Success)
+            return BadRequest(new { error = result.Error });
 
         _logger.LogInformation("Manual order created via API: {Symbol} {Side} qty={Qty}",
             signal.Symbol, signal.Side, qty);

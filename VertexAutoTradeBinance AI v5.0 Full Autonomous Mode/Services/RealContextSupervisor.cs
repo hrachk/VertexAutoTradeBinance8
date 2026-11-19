@@ -46,7 +46,7 @@ namespace VertexAutoTradeBinance8.Services
     //    // ==========================================================
     //    public async Task RunAsync(string symbol, CancellationToken ct)
     //    {
-    //        using var client = _factory.CreateRestClient();
+    //        var client = _factory.CreateRestClient();
 
     //        // === 1) Читаем позицию ===
     //        var pos = await LoadPosition(client, symbol);
@@ -139,7 +139,7 @@ namespace VertexAutoTradeBinance8.Services
     //    // ==========================================================
     //    private async Task AutoRepairSLTP(RealPositionContext ctx)
     //    {
-    //        using var client = _factory.CreateRestClient();
+    //        var client = _factory.CreateRestClient();
 
     //        var ordersRes = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(ctx.Symbol);
     //        var orders = ordersRes.Success && ordersRes.Data != null ?
@@ -204,7 +204,7 @@ namespace VertexAutoTradeBinance8.Services
     //            _ => ctx.EntryPrice
     //        };
 
-    //        using var client = _factory.CreateRestClient();
+    //        var client = _factory.CreateRestClient();
     //        await UpdateSL(client, ctx, sl);
     //    }
 

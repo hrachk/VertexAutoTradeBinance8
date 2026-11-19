@@ -361,3 +361,14 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# ---- Vertex: secrets & runtime data (never commit) ----
+appsettings.Local.json
+**/appsettings.Local.json
+*.secrets.json
+.env
+.env.*
+!.env.example
+publish/
+artifacts/
+VertexShared/*.json
+!VertexShared/trading_control.json

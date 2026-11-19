@@ -33,44 +33,73 @@
     <div class="vt-card">
         @if (tab == 0)
         {
-            <div class="vt-card-title" style="margin-bottom:14px;">Risk & position sizing</div>
+            <div class="vt-card-title" style="margin-bottom:6px;">Risk & position sizing</div>
+            <div class="vt-hint" style="margin-bottom:16px;">Объём считается от риска: <span class="mono">qty = equity × risk% ÷ |entry − SL|</span>. Плечо влияет только на маржу, не на риск. Изменения риска применяются после рестарта бота.</div>
             <div class="vt-form-grid">
                 <div class="vt-field">
-                    <label class="vt-label">Deposit (USDT)</label>
-                    <input class="vt-input" type="number" step="0.01" @bind="dto.Deposit" />
+                    <label class="vt-label">Base risk % / trade</label>
+                    <input class="vt-input" type="number" step="0.05" min="0.05" max="5" @bind="dto.BaseRiskPercent" />
+                    <div class="vt-hint">1.0 = 1% баланса теряется при SL. Рекомендуется 0.5–1.0</div>
                 </div>
                 <div class="vt-field">
-                    <label class="vt-label">Risk per trade</label>
-                    <input class="vt-input" type="number" step="0.001" @bind="dto.RiskPerTrade" />
-                    <div class="vt-hint">Fraction of deposit, e.g. 0.025 = 2.5%</div>
+                    <label class="vt-label">Max risk % (cap)</label>
+                    <input class="vt-input" type="number" step="0.05" min="0.05" max="5" @bind="dto.MaxRiskPercent" />
+                    <div class="vt-hint">Потолок после AI-множителей</div>
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Daily loss stop %</label>
+                    <input class="vt-input" type="number" step="0.5" min="0" max="50" @bind="dto.MaxDailyLossPercent" />
+                    <div class="vt-hint">Стоп новых входов до 00:00 UTC. 0 = выкл.</div>
                 </div>
                 <div class="vt-field">
                     <label class="vt-label">Leverage</label>
-                    <input class="vt-input" type="number" min="1" max="125" @bind="dto.Leverage" />
+                    <input class="vt-input" type="number" min="1" max="50" @bind="dto.Leverage" />
+                    <div class="vt-hint">Выставляется на бирже на каждый символ</div>
                 </div>
                 <div class="vt-field">
-                    <label class="vt-label">Cooldown (seconds)</label>
-                    <input class="vt-input" type="number" @bind="dto.CooldownSeconds" />
+                    <label class="vt-label">Min SL distance %</label>
+                    <input class="vt-input" type="number" step="0.05" @bind="dto.MinStopDistancePercent" />
+                    <div class="vt-hint">Ниже — комиссии съедают R</div>
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Max SL distance %</label>
+                    <input class="vt-input" type="number" step="0.5" @bind="dto.MaxStopDistancePercent" />
                 </div>
                 <div class="vt-field">
                     <label class="vt-label">Timeframe (minutes)</label>
                     <input class="vt-input" type="number" @bind="dto.TimeframeMinutes" />
+                    <div class="vt-hint">Минимальный TF для входов</div>
                 </div>
                 <div class="vt-field">
-                    <label class="vt-label">Max risk %</label>
-                    <input class="vt-input" type="number" step="0.1" @bind="dto.MaxRiskPercent" />
+                    <label class="vt-label">Entry fill timeout (s)</label>
+                    <input class="vt-input" type="number" min="10" max="600" @bind="dto.EntryFillTimeoutSeconds" />
                 </div>
                 <div class="vt-field">
-                    <label class="vt-label">Base risk %</label>
-                    <input class="vt-input" type="number" step="0.1" @bind="dto.BaseRiskPercent" />
-                </div>
-                <div class="vt-field">
-                    <label class="vt-label">Min notional</label>
+                    <label class="vt-label">Min notional (USDT)</label>
                     <input class="vt-input" type="number" step="0.1" @bind="dto.MinNotional" />
                 </div>
                 <div class="vt-field">
-                    <label class="vt-label">Min notional guard</label>
-                    <input class="vt-input" type="number" step="0.1" @bind="dto.MinNotionalGuard" />
+                    <label class="vt-label">Anti-duplicate cooldown (s)</label>
+                    <input class="vt-input" type="number" @bind="dto.CooldownSeconds" />
+                </div>
+            </div>
+
+            <div class="vt-card-title" style="margin:18px 0 12px;">Profit management</div>
+            <div class="vt-form-grid">
+                <div class="vt-field">
+                    <label class="vt-switch"><input type="checkbox" @bind="dto.BreakEvenAfterTp1" /><span>SL → безубыток после TP1</span></label>
+                </div>
+                <div class="vt-field">
+                    <label class="vt-switch"><input type="checkbox" @bind="dto.LockProfitAfterTp2" /><span>SL → TP1 после TP2 (runner)</span></label>
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">BE buffer %</label>
+                    <input class="vt-input" type="number" step="0.01" @bind="dto.BreakEvenBufferPercent" />
+                    <div class="vt-hint">Покрывает комиссии round-trip</div>
+                </div>
+                <div class="vt-field">
+                    <label class="vt-switch"><input type="checkbox" @bind="dto.AllowOneMinuteEntries" /><span>Разрешить входы по 1m</span></label>
+                    <div class="vt-hint">Не рекомендуется: шум + комиссии</div>
                 </div>
             </div>
         }
@@ -116,7 +145,7 @@
                         <input type="checkbox" @bind="dto.BlockWeekends" />
                         <span>@(dto.BlockWeekends ? "YES — no new entries on Sat/Sun" : "NO — trade on weekends")</span>
                     </label>
-                    <div class="vt-hint">Пишется в C:\VertexShared\trading_control.json (live, без рестарта бота)</div>
+                    <div class="vt-hint">Пишется в общий trading_control.json (VERTEX_DATA_DIR) — применяется без рестарта бота</div>
                 </div>
 
                 <div class="vt-field">

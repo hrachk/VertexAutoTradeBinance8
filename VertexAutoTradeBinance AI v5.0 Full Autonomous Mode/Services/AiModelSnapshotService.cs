@@ -1,4 +1,4 @@
-﻿// ================================================================
+// ================================================================
 // AI Snapshot Service
 // ================================================================
 using System.Text.Json;
@@ -12,7 +12,7 @@ public class AiModelSnapshotService
     public AiModelSnapshotService(ILogger<AiModelSnapshotService> logger)
     {
         _logger = logger;
-        _folder = Path.Combine(AppContext.BaseDirectory, "ai-models");
+        _folder = VertexAutoTradeBinance8.Configuration.VertexPaths.AiModelsDir;
 
         try
         {

@@ -44,7 +44,7 @@ namespace VertexAutoTradeBinance8.Services
 
             try
             {
-                using var client = _factory.CreateRestClient();
+                var client = _factory.CreateRestClient();
 
                 var acc = await client.UsdFuturesApi.Account.GetAccountInfoV3Async();
                 if (!acc.Success || acc.Data == null)

@@ -29,7 +29,7 @@ public class TradeController : ControllerBase
     {
         try
         {
-            using var client = _factory.CreateRestClient();
+            var client = _factory.CreateRestClient();
             var bal = await client.UsdFuturesApi.Account.GetBalancesAsync(ct: ct);
             if (!bal.Success)
                 return Ok(new { ok = false, error = bal.Error?.Message ?? "balance failed", available = 0m, wallet = 0m });
@@ -101,7 +101,7 @@ public class TradeController : ControllerBase
 
         try
         {
-            using var client = _factory.CreateRestClient();
+            var client = _factory.CreateRestClient();
             var symbol = req.Symbol.ToUpperInvariant();
 
             // leverage
@@ -209,7 +209,7 @@ public class TradeController : ControllerBase
     {
         try
         {
-            using var client = _factory.CreateRestClient();
+            var client = _factory.CreateRestClient();
             var symbol = req.Symbol.ToUpperInvariant();
             var pos = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
             if (!pos.Success)

@@ -26,6 +26,18 @@ namespace VertexAutoTradeBinance8.Services
             public int RestoreFailCount { get; set; }
             public bool AllowManualOverride { get; set; } = false;
             public bool UserClearedProtection { get; set; } = false;
+
+            // ---- v6: состояние сопровождения ----
+            /// <summary>Объём сразу после входа (для детекта исполнения TP1/TP2).</summary>
+            public decimal InitialQty { get; set; }
+            /// <summary>Изначальный SL (1R = |entry - InitialSL|).</summary>
+            public decimal InitialSL { get; set; }
+            /// <summary>0 = начальный SL, 1 = SL в безубытке (после TP1), 2 = SL на TP1 (после TP2).</summary>
+            public int Stage { get; set; }
+            /// <summary>Id записи в executed_signals.json.</summary>
+            public string? ExecRecordId { get; set; }
+            /// <summary>Максимальный объём, наблюдавшийся у позиции.</summary>
+            public decimal PeakQty { get; set; }
         }
 
         private readonly ConcurrentDictionary<string, ManagedInfo> _map =
@@ -34,8 +46,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ILogger<ManagedPositionRegistry> _logger;
         private readonly object _ioLock = new();
 
-        private static readonly string FilePath =
-            Path.Combine(AppContext.BaseDirectory, "managed_positions.json");
+        private static string FilePath => VertexAutoTradeBinance8.Configuration.VertexPaths.ManagedPositions;
 
         private readonly JsonSerializerOptions _jsonOptions = new()
         {
@@ -106,7 +117,7 @@ namespace VertexAutoTradeBinance8.Services
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "[MANAGED] Failed to load managed_positions.json — starting empty");
-                    try { File.WriteAllText(FilePath, "[]"); } catch { }
+                    try { File.Copy(FilePath, FilePath + ".corrupt-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss"), true); } catch { } // не затираем данные
                 }
             }
         }
@@ -162,10 +173,17 @@ namespace VertexAutoTradeBinance8.Services
             PositionSide side,
             decimal entry,
             decimal calculatedSl,
-            IEnumerable<decimal>? tps)
+            IEnumerable<decimal>? tps,
+            decimal initialQty = 0m,
+            string? execRecordId = null)
         {
             _map[Key(symbol, side)] = new ManagedInfo
             {
+                InitialQty = initialQty,
+                PeakQty = initialQty,
+                InitialSL = calculatedSl,
+                Stage = 0,
+                ExecRecordId = execRecordId,
                 Symbol = symbol,
                 Side = side,
                 EntryPrice = entry,
@@ -184,7 +202,7 @@ namespace VertexAutoTradeBinance8.Services
                 symbol, side, entry, calculatedSl);
         }
 
-        public void RegisterFromSignal(TradeSignal signal, decimal? filledEntry = null)
+        public void RegisterFromSignal(TradeSignal signal, decimal? filledEntry = null, decimal filledQty = 0m, string? execRecordId = null)
         {
             var side = signal.Side == SignalSide.Buy ? PositionSide.Long : PositionSide.Short;
             var entry = filledEntry is > 0 ? filledEntry.Value : signal.EntryPrice;
@@ -192,7 +210,7 @@ namespace VertexAutoTradeBinance8.Services
             if (signal.TakeProfit is > 0) tps.Add(signal.TakeProfit.Value);
             if (signal.TakeProfits != null)
                 tps.AddRange(signal.TakeProfits.Where(x => x > 0));
-            Register(signal.Symbol, side, entry, signal.StopLoss, tps.Distinct());
+            Register(signal.Symbol, side, entry, signal.StopLoss, tps.Distinct(), filledQty, execRecordId);
         }
 
         public void Unregister(string symbol, PositionSide side)
@@ -243,6 +261,13 @@ namespace VertexAutoTradeBinance8.Services
             if (tps != null)
                 info.CalculatedTPs = tps.Where(x => x > 0).ToList();
 
+            SaveToDisk();
+        }
+
+        /// <summary>Сохранить изменённое состояние (Stage/SL/PeakQty).</summary>
+        public void Save(ManagedInfo info)
+        {
+            _map[Key(info.Symbol, info.Side)] = info;
             SaveToDisk();
         }
 

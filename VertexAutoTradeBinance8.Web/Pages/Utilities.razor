@@ -12,10 +12,13 @@
         <div class="vt-card-title" style="margin-bottom:12px;">Paths & files</div>
         <table class="vt-table">
             <tbody>
-                <tr><td class="sym">Engine state</td><td>C:\VertexShared\engine_state.json</td></tr>
-                <tr><td class="sym">AI learning</td><td>ai_learning.json (bot bin)</td></tr>
-                <tr><td class="sym">Missed trades</td><td>missed_trades.json</td></tr>
-                <tr><td class="sym">Bot settings</td><td>AI v5.0 …/appsettings.json</td></tr>
+                <tr><td class="sym">Data dir</td><td>@VertexAutoTradeBinance8.Configuration.VertexPaths.DataDir</td></tr>
+                <tr><td class="sym">Trade journal</td><td>executed_signals.json</td></tr>
+                <tr><td class="sym">Managed positions</td><td>managed_positions.json</td></tr>
+                <tr><td class="sym">Engine state</td><td>engine_state.json</td></tr>
+                <tr><td class="sym">Trading control</td><td>trading_control.json</td></tr>
+                <tr><td class="sym">AI models</td><td>ai-models/</td></tr>
+                <tr><td class="sym">Logs</td><td>logs/bot-*.log · web-*.log</td></tr>
             </tbody>
         </table>
         <div class="vt-hint" style="margin-top:10px;">Web dashboard читает snapshot и JSON-отчёты, которые пишет worker-бот.</div>
@@ -26,9 +29,9 @@
         <ul style="margin:0;padding-left:18px;color:var(--vt-text-muted);line-height:1.8;">
             <li>Binance.Net 11.11+ · Algo Order API для SL/TP</li>
             <li>Hedge mode: не слать reduceOnly с positionSide</li>
-            <li>EngineState path совпадает у bot и web</li>
+            <li>Bot и Web используют одну папку данных (VERTEX_DATA_DIR)</li>
             <li>После Save settings — рестарт worker</li>
-            <li>API keys только в worker appsettings</li>
+            <li>API-ключи только через env / appsettings.Local.json — не в git</li>
         </ul>
     </div>
 

@@ -1,59 +1,17 @@
-﻿using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using VertexAutoTradeBinance8.Configuration;
-using VertexAutoTradeBinance8.Services;
-using VertexAutoTradeBinance8.Strategy;
+using VertexAutoTradeBinance8.Hosting;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
-Console.InputEncoding = System.Text.Encoding.UTF8;
+
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddVertexConfiguration(builder.Environment.ContentRootPath);
 
-// ─────────────────────────────────────────────────────────────
-// Logging
-// ─────────────────────────────────────────────────────────────
 builder.Logging.ClearProviders();
-builder.Logging.AddConsole();
+builder.Logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; });
+builder.Logging.AddProvider(new FileLoggerProvider("api"));
 
-// ─────────────────────────────────────────────────────────────
-// Configuration binding (Binance, Trading)
-// ─────────────────────────────────────────────────────────────
-builder.Services.Configure<BinanceOptions>(builder.Configuration.GetSection("Binance"));
-builder.Services.Configure<TradingOptions>(builder.Configuration.GetSection("Trading"));
+// Торговое ядро — та же регистрация, что у Worker (раньше здесь не хватало зависимостей → DI падал)
+builder.Services.AddVertexCore(builder.Configuration);
 
-// ─────────────────────────────────────────────────────────────
-// Core services из твоего основного проекта
-// ─────────────────────────────────────────────────────────────
-builder.Services.AddSingleton<BinanceClientFactory>();
-builder.Services.AddSingleton<MarketDataService>();
-builder.Services.AddSingleton<RiskManager>();
-builder.Services.AddSingleton<OrderExecutor>();
-
-builder.Services.AddSingleton<AiCorrelationService>();
-builder.Services.AddSingleton<AiMarketRegimeService>();
-builder.Services.AddSingleton<AiPatternEngineService>();
-builder.Services.AddSingleton<AdaptiveStrategyService>();
-builder.Services.AddSingleton<AiSelfLearningService>();
-builder.Services.AddSingleton<AiModelSnapshotService>();
-builder.Services.AddSingleton<TradeResultMonitorService>();
-
-builder.Services.AddSingleton<AiLiquidityClusterService>();
-builder.Services.AddSingleton<StrategyEngine>();
-builder.Services.AddSingleton<SymbolInfoService>();
-builder.Services.AddSingleton<LiquidityGuardService>();
-builder.Services.AddSingleton<PositionGuardService>();
-builder.Services.AddSingleton<PositionProtectorService>();
-builder.Services.AddSingleton<PnLMonitorService>();
-builder.Services.AddSingleton<OrderCleanerService>();
-builder.Services.AddSingleton<PositionSupervisorService>();
-builder.Services.AddSingleton<PredictiveEngineV4ConfirmationService>();
-builder.Services.AddSingleton<AiStopLossOptimizer>();
-builder.Services.AddSingleton<AiRiskScalerV2>();
-builder.Services.AddSingleton<SmartRegimeService>();
-
-// ─────────────────────────────────────────────────────────────
-// ASP.NET Core
-// ─────────────────────────────────────────────────────────────
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -68,7 +26,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseRouting();
-
 app.MapControllers();
+app.MapGet("/health", () => Results.Ok(new { status = "ok", utc = DateTime.UtcNow }));
 
 app.Run();

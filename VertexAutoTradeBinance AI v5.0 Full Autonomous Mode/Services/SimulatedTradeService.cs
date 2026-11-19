@@ -1,4 +1,4 @@
-﻿using Binance.Net.Enums;
+using Binance.Net.Enums;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -24,69 +24,71 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         /// <summary>
-        /// Запускает симуляцию сделки, если позиция была пропущена
+        /// Paper-fill пропущенной сделки.
+        /// FIX: раньше «следующие свечи после сигнала» на деле были ПОСЛЕДНИМИ 30 свечами
+        /// ДО сигнала → AI обучался на мусоре. Теперь симуляция отложена: через 60 минут
+        /// берём только свечи, открывшиеся ПОСЛЕ сигнала.
         /// </summary>
-        public async Task SimulateMissedTradeAsync(TradeSignal signal, string reason)
+        public Task SimulateMissedTradeAsync(TradeSignal signal, string reason)
         {
-            try
+            var snapshot = new TradeSignal
             {
-                _logger.LogInformation(
-                    "[SIM][{symbol}] Старт симуляции пропущенной сделки. Причина: {reason}",
-                    signal.Symbol, reason);
+                Symbol = signal.Symbol,
+                Side = signal.Side,
+                EntryPrice = signal.EntryPrice,
+                StopLoss = signal.StopLoss,
+                TakeProfit = signal.TakeProfit ?? signal.TakeProfits?.FirstOrDefault(),
+                Time = DateTime.UtcNow
+            };
 
-                // Загружаем следующие 20 свечей после сигнала
-                var klines = await _marketData.GetFuturesKlinesAsync(
-                    signal.Symbol,
-                    KlineInterval.FiveMinutes,
-                    30);
-
-                if (klines == null || klines.Count == 0)
-                    return;
-
-                decimal entry = signal.EntryPrice;
-                decimal sl = signal.StopLoss;
-                decimal tp = signal.TakeProfit ?? (signal.EntryPrice * 1.01m);
-
-                bool hitSL = false;
-                bool hitTP = false;
-
-                foreach (var candle in klines)
+            _ = Task.Run(async () =>
+            {
+                try
                 {
-                    if (signal.Side == SignalSide.Buy)
+                    await Task.Delay(TimeSpan.FromMinutes(60));
+                    var all = await _marketData.GetKlines(snapshot.Symbol, KlineInterval.FiveMinutes, 30);
+                    var after = all.Where(k => k.OpenTime >= snapshot.Time && k.CloseTime <= DateTime.UtcNow).ToList();
+                    if (after.Count == 0 || snapshot.EntryPrice <= 0 || snapshot.StopLoss <= 0)
+                        return;
+
+                    decimal entry = snapshot.EntryPrice;
+                    decimal sl = snapshot.StopLoss;
+                    decimal tp = snapshot.TakeProfit is > 0 ? snapshot.TakeProfit.Value
+                        : (snapshot.Side == SignalSide.Buy ? entry + Math.Abs(entry - sl) * 1.5m : entry - Math.Abs(entry - sl) * 1.5m);
+
+                    bool filled = false, hitSL = false, hitTP = false;
+                    foreach (var c in after)
                     {
-                        if (candle.LowPrice <= sl) { hitSL = true; break; }
-                        if (candle.HighPrice >= tp) { hitTP = true; break; }
+                        if (!filled)
+                        {
+                            filled = c.LowPrice <= entry && c.HighPrice >= entry;
+                            if (!filled) continue;
+                        }
+                        // консервативно: если в одной свече и SL и TP — считаем SL
+                        if (snapshot.Side == SignalSide.Buy)
+                        {
+                            if (c.LowPrice <= sl) { hitSL = true; break; }
+                            if (c.HighPrice >= tp) { hitTP = true; break; }
+                        }
+                        else
+                        {
+                            if (c.HighPrice >= sl) { hitSL = true; break; }
+                            if (c.LowPrice <= tp) { hitTP = true; break; }
+                        }
                     }
-                    else
-                    {
-                        if (candle.HighPrice >= sl) { hitSL = true; break; }
-                        if (candle.LowPrice <= tp) { hitTP = true; break; }
-                    }
+                    if (!filled) return;
+
+                    decimal result = hitSL ? -Math.Abs(entry - sl) : hitTP ? Math.Abs(tp - entry) : 0m;
+                    _learningService.RecordSimulatedTrade(snapshot.Symbol, snapshot.Side.ToString(), entry, sl, tp, result, reason);
+                    _logger.LogInformation("[SIM][{symbol}] missed-trade outcome ({reason}) → {result}", snapshot.Symbol, reason, result);
                 }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[SIM] simulation failed");
+                }
+            });
 
-                decimal result;
-                if (hitSL) result = -Math.Abs(entry - sl);
-                else if (hitTP) result = Math.Abs(tp - entry);
-                else result = 0;
-
-                // Передаём в обучающую систему
-                _learningService.RecordSimulatedTrade(
-                    signal.Symbol,
-                    signal.Side.ToString(),
-                    entry,
-                    sl,
-                    tp,
-                    result,
-                    reason);
-
-                _logger.LogInformation(
-                    "[SIM][{symbol}] Завершена симуляция → Outcome: {result}",
-                    signal.Symbol, result);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[SIM] Ошибка симуляции сделки");
-            }
+            return Task.CompletedTask;
         }
     }
 }

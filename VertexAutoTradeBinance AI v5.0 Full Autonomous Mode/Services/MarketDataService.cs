@@ -1,4 +1,4 @@
-﻿/* MarketDataService v4.0 — LiquidityCluster Ready */
+/* MarketDataService v4.0 — LiquidityCluster Ready */
 
 using Binance.Net.Enums;
 using Binance.Net.Interfaces;
@@ -31,7 +31,7 @@ public class MarketDataService
         KlineInterval interval,
         int limit = 100)
     {
-        using var client = _factory.CreateRestClient();
+        var client = _factory.CreateRestClient();
 
         var result = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
             symbol,
@@ -49,20 +49,39 @@ public class MarketDataService
     }
 
     // ============================================================
-    // 2) Klines (BinanceFuturesUsdtKline) — без изменений
+    // 2) Klines (BinanceFuturesUsdtKline) — с коротким кэшем
+    //    FIX: одни и те же свечи запрашивались 3–6 раз за цикл на символ
+    //    (TF-selector, strategy, risk, executor, supervisor) → weight limit / бан IP.
     // ============================================================
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime at, List<BinanceFuturesUsdtKline> data)> _klineCache = new();
+
+    private static TimeSpan KlineTtl(KlineInterval interval) => interval switch
+    {
+        KlineInterval.OneMinute => TimeSpan.FromSeconds(4),
+        KlineInterval.ThreeMinutes => TimeSpan.FromSeconds(6),
+        KlineInterval.FiveMinutes => TimeSpan.FromSeconds(8),
+        KlineInterval.FifteenMinutes => TimeSpan.FromSeconds(15),
+        KlineInterval.ThirtyMinutes => TimeSpan.FromSeconds(30),
+        KlineInterval.OneHour => TimeSpan.FromSeconds(60),
+        _ => TimeSpan.FromMinutes(2)
+    };
+
     public async Task<IReadOnlyList<BinanceFuturesUsdtKline>> GetKlines(
         string symbol,
         KlineInterval interval,
         int limit = 200)
     {
-        using var client = _factory.CreateRestClient();
+        var key = $"{symbol}|{interval}";
+        if (_klineCache.TryGetValue(key, out var hit) &&
+            DateTime.UtcNow - hit.at < KlineTtl(interval) &&
+            hit.data.Count >= Math.Min(limit, 200))
+        {
+            return hit.data.Count <= limit ? hit.data : hit.data.Skip(hit.data.Count - limit).ToList();
+        }
 
-        var result = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
-            symbol,
-            interval,
-            limit: limit
-        );
+        var client = _factory.CreateRestClient();
+        var fetch = Math.Max(limit, 200);
+        var result = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(symbol, interval, limit: fetch);
 
         if (!result.Success || result.Data == null)
         {
@@ -70,9 +89,30 @@ public class MarketDataService
             return Array.Empty<BinanceFuturesUsdtKline>();
         }
 
-        return result.Data
-            .Cast<BinanceFuturesUsdtKline>()
-            .ToList();
+        var list = result.Data.Cast<BinanceFuturesUsdtKline>().ToList();
+        _klineCache[key] = (DateTime.UtcNow, list);
+        return list.Count <= limit ? list : list.Skip(list.Count - limit).ToList();
+    }
+
+    /// <summary>
+    /// Только ЗАКРЫТЫЕ свечи. Последний элемент ответа Binance — формирующаяся свеча:
+    /// её close/high/low меняются каждую секунду → сигналы «перерисовываются».
+    /// FIX: стратегия теперь принимает решение только по закрытым барам.
+    /// </summary>
+    public async Task<IReadOnlyList<BinanceFuturesUsdtKline>> GetClosedKlines(
+        string symbol,
+        KlineInterval interval,
+        int limit = 200)
+    {
+        var all = await GetKlines(symbol, interval, limit + 1);
+        return DropFormingCandle(all);
+    }
+
+    public static IReadOnlyList<BinanceFuturesUsdtKline> DropFormingCandle(IReadOnlyList<BinanceFuturesUsdtKline> all)
+    {
+        if (all.Count == 0) return all;
+        var now = DateTime.UtcNow;
+        return all[^1].CloseTime > now ? all.Take(all.Count - 1).ToList() : all;
     }
 
     // ============================================================
@@ -125,7 +165,7 @@ public class MarketDataService
         string symbol,
         int depth = 50)
     {
-        using var client = _factory.CreateRestClient();
+        var client = _factory.CreateRestClient();
 
         var result = await client.UsdFuturesApi.ExchangeData.GetOrderBookAsync(symbol, depth);
 

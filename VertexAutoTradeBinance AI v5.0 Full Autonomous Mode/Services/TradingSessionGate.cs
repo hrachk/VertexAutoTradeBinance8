@@ -52,7 +52,7 @@ namespace VertexAutoTradeBinance8.Services
                 return true;
             }
 
-            var windows = cfg.Windows;
+            var windows = cfg.EffectiveWindows;
             if (windows == null || windows.Count == 0)
             {
                 reason = "no windows configured — allow";

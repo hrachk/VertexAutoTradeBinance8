@@ -1,14 +1,20 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
 {
     /// <summary>
-    /// ExecutedSignalService:
-    ///  - пишет/читает executed_signals.json
-    ///  - используется Engine / OrderExecutor / PositionSupervisor
-    ///  - UI читает файл и рисует карточки
+    /// Журнал сделок бота (executed_signals.json в общей папке VertexPaths.DataDir).
+    ///
+    /// v6 fixes:
+    ///  • Файл в общей папке — Web UI видит те же сделки, что и бот.
+    ///  • У записи есть Id: открытие/закрытие обновляют КОНКРЕТНУЮ сделку,
+    ///    а не «последнюю запись символа» (раньше close мог попасть в неисполненный сигнал).
+    ///  • Время открытия больше не затирается временем закрытия (ClosedAt отдельно).
+    ///  • Кэш в памяти + перечитывание при изменении файла другим процессом.
+    ///  • Атомарная запись; размер журнала ограничен.
     /// </summary>
     public class ExecutedSignalService
     {
@@ -16,97 +22,77 @@ namespace VertexAutoTradeBinance8.Services
         private readonly object _lock = new();
         public static event Action? ExecutedSignalsChanged;
 
-        private static readonly string FilePath =
-            Path.Combine(AppContext.BaseDirectory, "executed_signals.json");
+        private const int MaxRecords = 5000;
 
-        private readonly JsonSerializerOptions _jsonOptions = new()
+        private static string FilePath => VertexPaths.ExecutedSignals;
+
+        private List<ExecutedSignalRecord> _cache = new();
+        private DateTime _cacheFileStamp = DateTime.MinValue;
+
+        private static readonly JsonSerializerOptions JsonOptions = new()
         {
             WriteIndented = true,
-            Converters =
-            {
-                new JsonStringEnumConverter()
-            }
+            Converters = { new JsonStringEnumConverter() }
         };
 
         public ExecutedSignalService(ILogger<ExecutedSignalService> logger)
         {
             _logger = logger;
-            EnsureFileExists();
+            lock (_lock) EnsureLoadedUnlocked();
         }
 
         // ============================================================
-        // HELPERS
+        // STORAGE
         // ============================================================
 
-        /// <summary>
-        /// Создание файла и директории, если их нет.
-        /// </summary>
-        private void EnsureFileExists()
+        private void EnsureLoadedUnlocked()
         {
             try
             {
-                var dir = Path.GetDirectoryName(FilePath);
-                if (!string.IsNullOrWhiteSpace(dir))
-                    Directory.CreateDirectory(dir);
+                var stamp = File.Exists(FilePath) ? File.GetLastWriteTimeUtc(FilePath) : DateTime.MinValue;
+                if (stamp == _cacheFileStamp && (_cache.Count > 0 || stamp == DateTime.MinValue))
+                    return;
 
-                if (!File.Exists(FilePath))
-                {
-                    File.WriteAllText(FilePath, "[]");
-                    _logger.LogInformation("[EXEC] executed_signals.json created");
-                }
+                var json = VertexPaths.ReadAllTextShared(FilePath);
+                _cache = string.IsNullOrWhiteSpace(json)
+                    ? new List<ExecutedSignalRecord>()
+                    : JsonSerializer.Deserialize<List<ExecutedSignalRecord>>(json, JsonOptions) ?? new();
+
+                // legacy записи без Id
+                foreach (var r in _cache.Where(r => string.IsNullOrWhiteSpace(r.Id)))
+                    r.Id = Guid.NewGuid().ToString("N");
+
+                _cacheFileStamp = stamp;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[EXEC] Failed to ensure executed_signals.json exists");
+                _logger.LogError(ex, "[EXEC] Failed to load {path} — keeping in-memory journal", FilePath);
             }
         }
 
-        private List<ExecutedSignalRecord> LoadInternal()
+        private void SaveUnlocked()
         {
             try
             {
-                EnsureFileExists();
+                if (_cache.Count > MaxRecords)
+                    _cache = _cache.OrderByDescending(x => x.Time).Take(MaxRecords).ToList();
 
-                var json = File.ReadAllText(FilePath);
-                if (string.IsNullOrWhiteSpace(json))
-                {
-                    File.WriteAllText(FilePath, "[]");
-                    return new();
-                }
-
-                return JsonSerializer.Deserialize<List<ExecutedSignalRecord>>(json, _jsonOptions)
-                       ?? new();
+                VertexPaths.WriteAllTextAtomic(FilePath, JsonSerializer.Serialize(_cache, JsonOptions));
+                _cacheFileStamp = File.GetLastWriteTimeUtc(FilePath);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[EXEC] Failed to load executed_signals.json");
-
-                // Пытаемся пересоздать безопасный файл
-                try
-                {
-                    File.WriteAllText(FilePath, "[]");
-                }
-                catch { }
-
-                return new();
+                _logger.LogError(ex, "[EXEC] Failed to save {path}", FilePath);
             }
         }
 
-        private void SaveInternal(List<ExecutedSignalRecord> list)
+        private static void RaiseChanged()
         {
-            try
-            {
-                var json = JsonSerializer.Serialize(list, _jsonOptions);
-                File.WriteAllText(FilePath, json);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[EXEC] Failed to save executed_signals.json");
-            }
+            try { ExecutedSignalsChanged?.Invoke(); } catch { /* UI handlers не должны ронять бота */ }
         }
 
         // ============================================================
-        // API
+        // WRITE API
         // ============================================================
 
         public ExecutedSignalRecord AddSignalCreated(
@@ -140,20 +126,82 @@ namespace VertexAutoTradeBinance8.Services
 
             lock (_lock)
             {
-                var list = LoadInternal();
-                list.Add(record);
-                SaveInternal(list);
-                ExecutedSignalsChanged?.Invoke();
-
-
+                EnsureLoadedUnlocked();
+                _cache.Add(record);
+                SaveUnlocked();
             }
+            RaiseChanged();
 
-            _logger.LogInformation("[EXEC][{symbol}] SignalCreated saved (qty={qty}, ntn={ntn:F2})",
-                signal.Symbol, qty, notional);
-
+            _logger.LogInformation("[EXEC][{symbol}] SignalCreated id={id} qty={qty} ntn={ntn:F2}",
+                signal.Symbol, record.Id, qty, notional);
             return record;
         }
 
+        /// <summary>Обновление конкретной записи по Id.</summary>
+        public bool UpdateById(
+            string id,
+            TradeExecutionStatus status,
+            decimal? qty = null,
+            decimal? notional = null,
+            decimal? entryPrice = null,
+            decimal? exitPrice = null,
+            decimal? pnl = null,
+            decimal? roi = null,
+            decimal? fees = null,
+            decimal? stopLoss = null,
+            List<decimal>? takeProfits = null,
+            string? closeReason = null)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return false;
+
+            lock (_lock)
+            {
+                EnsureLoadedUnlocked();
+                var rec = _cache.FirstOrDefault(x => x.Id == id);
+                if (rec == null)
+                {
+                    _logger.LogWarning("[EXEC] UpdateById: record {id} not found (status={st})", id, status);
+                    return false;
+                }
+
+                Apply(rec, status, qty, notional, entryPrice, exitPrice, pnl, roi, fees, stopLoss, takeProfits, closeReason);
+                SaveUnlocked();
+            }
+            RaiseChanged();
+            return true;
+        }
+
+        /// <summary>
+        /// Закрытие последней ОТКРЫТОЙ сделки по symbol+side (если Id неизвестен — после рестарта).
+        /// </summary>
+        public bool CloseLatestOpen(
+            string symbol,
+            SignalSide side,
+            TradeExecutionStatus status,
+            decimal exitPrice,
+            decimal pnl,
+            decimal roi,
+            decimal? fees,
+            string closeReason)
+        {
+            lock (_lock)
+            {
+                EnsureLoadedUnlocked();
+                var rec = _cache
+                    .Where(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase) &&
+                                x.Side == side && x.IsOpen)
+                    .OrderByDescending(x => x.Time)
+                    .FirstOrDefault();
+                if (rec == null) return false;
+
+                Apply(rec, status, null, null, null, exitPrice, pnl, roi, fees, null, null, closeReason);
+                SaveUnlocked();
+            }
+            RaiseChanged();
+            return true;
+        }
+
+        /// <summary>Legacy API: обновление последней записи символа (не используйте для закрытий).</summary>
         public void UpdateStatus(
             string symbol,
             DateTime time,
@@ -166,121 +214,90 @@ namespace VertexAutoTradeBinance8.Services
         {
             lock (_lock)
             {
-                var list = LoadInternal();
-
-                var rec = list
-                    .Where(x => x.Symbol == symbol && x.Time <= time)
+                EnsureLoadedUnlocked();
+                var rec = _cache
+                    .Where(x => x.Symbol == symbol && x.Time <= time && !x.IsClosed)
                     .OrderByDescending(x => x.Time)
                     .FirstOrDefault();
-
                 if (rec == null)
                 {
-                    _logger.LogWarning("[EXEC][{symbol}] UpdateStatus: record not found (status={status})",
-                        symbol, status);
+                    _logger.LogWarning("[EXEC][{symbol}] UpdateStatus: record not found (status={status})", symbol, status);
                     return;
                 }
+                Apply(rec, status, qty, notional, null, exitPrice, pnl, roi, null, null, null, null);
+                SaveUnlocked();
+            }
+            RaiseChanged();
+        }
 
-                rec.Status = status;
+        private void Apply(
+            ExecutedSignalRecord rec,
+            TradeExecutionStatus status,
+            decimal? qty, decimal? notional, decimal? entryPrice, decimal? exitPrice,
+            decimal? pnl, decimal? roi, decimal? fees, decimal? stopLoss, List<decimal>? tps, string? closeReason)
+        {
+            rec.Status = status;
+            if (qty.HasValue) rec.Qty = qty.Value;
+            if (notional.HasValue) rec.Notional = notional.Value;
+            if (entryPrice is > 0) rec.Entry = entryPrice.Value;
+            if (exitPrice.HasValue) rec.ExitPrice = exitPrice.Value;
+            if (pnl.HasValue) rec.PnL = pnl.Value;
+            if (roi.HasValue) rec.RoiPercent = roi.Value;
+            if (fees.HasValue) rec.Fees = fees.Value;
+            if (stopLoss is > 0) rec.StopLoss = stopLoss.Value;
+            if (tps is { Count: > 0 }) rec.TakeProfits = tps.ToList();
 
-                if (qty.HasValue) rec.Qty = qty.Value;
-                if (notional.HasValue) rec.Notional = notional.Value;
-                if (exitPrice.HasValue) rec.ExitPrice = exitPrice.Value;
-                if (pnl.HasValue) rec.PnL = pnl.Value;
-                if (roi.HasValue) rec.RoiPercent = roi.Value;
+            if (status == TradeExecutionStatus.PositionOpened && rec.OpenedAt == null)
+                rec.OpenedAt = DateTime.UtcNow;
 
-                // На закрытии фиксируем время EXIT (для post-close cooldown)
-                if (status == TradeExecutionStatus.PositionClosedTp ||
-                    status == TradeExecutionStatus.PositionClosedSl ||
-                    status == TradeExecutionStatus.PositionClosedManual)
-                {
-                    rec.Time = time; // close timestamp
-                    _lastCloseUtc[symbol] = time;
-                    _lastCloseSide[symbol] = rec.Side;
-                    _logger.LogInformation(
-                        "[EXEC][{symbol}] CLOSE recorded @ {t:u} side={side} → cooldown (any + same-side)",
-                        symbol, time, rec.Side);
-                }
-
-                SaveInternal(list);
-                ExecutedSignalsChanged?.Invoke();
-
-                _logger.LogInformation("[EXEC][{symbol}] Status updated → {status}", symbol, status);
+            if (rec.IsClosed)
+            {
+                rec.ClosedAt = DateTime.UtcNow;
+                rec.CloseReason = closeReason ?? rec.CloseReason;
+                _logger.LogInformation(
+                    "[EXEC][{symbol}] CLOSE id={id} side={side} status={st} pnl={pnl:F4} → cooldown armed",
+                    rec.Symbol, rec.Id, rec.Side, status, rec.PnL ?? 0);
             }
         }
 
-        // In-memory last close (быстрый путь; файл — для рестарта)
-        private readonly Dictionary<string, DateTime> _lastCloseUtc = new(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, SignalSide> _lastCloseSide = new(StringComparer.OrdinalIgnoreCase);
+        // ============================================================
+        // READ API
+        // ============================================================
 
         private ExecutedSignalRecord? FindLastCloseUnlocked(string symbol)
         {
-            var list = LoadInternal();
-            return list
-                .Where(x =>
-                    string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase) &&
-                    (x.Status == TradeExecutionStatus.PositionClosedTp ||
-                     x.Status == TradeExecutionStatus.PositionClosedSl ||
-                     x.Status == TradeExecutionStatus.PositionClosedManual))
-                .OrderByDescending(x => x.Time)
+            EnsureLoadedUnlocked();
+            return _cache
+                .Where(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase) && x.IsClosed)
+                .OrderByDescending(x => x.EffectiveCloseTime)
                 .FirstOrDefault();
         }
 
-        /// <summary>
-        /// true если по символу было полное закрытие меньше чем cooldownMinutes назад (любая сторона).
-        /// </summary>
         public bool IsInPostCloseCooldown(string symbol, int cooldownMinutes)
         {
-            if (cooldownMinutes <= 0 || string.IsNullOrWhiteSpace(symbol))
-                return false;
-
-            var now = DateTime.UtcNow;
-            var window = TimeSpan.FromMinutes(cooldownMinutes);
-
+            if (cooldownMinutes <= 0 || string.IsNullOrWhiteSpace(symbol)) return false;
             lock (_lock)
             {
-                if (_lastCloseUtc.TryGetValue(symbol, out var mem) && now - mem < window)
-                    return true;
-
-                var lastClose = FindLastCloseUnlocked(symbol);
-                if (lastClose == null)
-                    return false;
-
-                _lastCloseUtc[symbol] = lastClose.Time;
-                _lastCloseSide[symbol] = lastClose.Side;
-                return now - lastClose.Time < window;
+                var last = FindLastCloseUnlocked(symbol);
+                return last != null && DateTime.UtcNow - last.EffectiveCloseTime < TimeSpan.FromMinutes(cooldownMinutes);
             }
         }
 
         public DateTime? GetLastCloseUtc(string symbol)
         {
-            lock (_lock)
-            {
-                if (_lastCloseUtc.TryGetValue(symbol, out var mem))
-                    return mem;
-                return FindLastCloseUnlocked(symbol)?.Time;
-            }
+            lock (_lock) return FindLastCloseUnlocked(symbol)?.EffectiveCloseTime;
         }
 
         public SignalSide? GetLastCloseSide(string symbol)
         {
-            lock (_lock)
-            {
-                if (_lastCloseSide.TryGetValue(symbol, out var side))
-                    return side;
-                var last = FindLastCloseUnlocked(symbol);
-                if (last == null) return null;
-                _lastCloseSide[symbol] = last.Side;
-                _lastCloseUtc[symbol] = last.Time;
-                return last.Side;
-            }
+            lock (_lock) return FindLastCloseUnlocked(symbol)?.Side;
         }
 
         /// <summary>
-        /// Умный re-entry:
-        /// - strategy уже решила side по текущему рынку (не «помнит» прошлую сделку);
-        /// - короткий rest на любой вход после close;
-        /// - длинный rest только на ПОВТОР той же стороны (анти-инерция / revenge same-side).
-        /// Противоположный side после короткого rest — можно, если стратегия дала сигнал.
+        /// Re-entry policy:
+        ///  - короткий отдых после закрытия на любую сторону;
+        ///  - длинный отдых на ПОВТОР той же стороны;
+        ///  - после убыточного закрытия (SL) отдых удваивается (анти-revenge).
         /// </summary>
         public bool ShouldBlockReentry(
             string symbol,
@@ -290,61 +307,41 @@ namespace VertexAutoTradeBinance8.Services
             out string reason)
         {
             reason = "";
-            if (string.IsNullOrWhiteSpace(symbol))
-                return false;
-
-            var now = DateTime.UtcNow;
+            if (string.IsNullOrWhiteSpace(symbol)) return false;
 
             lock (_lock)
             {
-                DateTime? closeTime = null;
-                SignalSide? closeSide = null;
+                var last = FindLastCloseUnlocked(symbol);
+                if (last == null) return false;
 
-                if (_lastCloseUtc.TryGetValue(symbol, out var memT))
+                var elapsed = DateTime.UtcNow - last.EffectiveCloseTime;
+                bool wasLoss = (last.PnL ?? 0) < 0;
+                int anyMin = wasLoss ? anySideCooldownMinutes * 2 : anySideCooldownMinutes;
+
+                if (anyMin > 0 && elapsed < TimeSpan.FromMinutes(anyMin))
                 {
-                    closeTime = memT;
-                    if (_lastCloseSide.TryGetValue(symbol, out var memS))
-                        closeSide = memS;
-                }
-
-                if (closeTime == null || closeSide == null)
-                {
-                    var last = FindLastCloseUnlocked(symbol);
-                    if (last != null)
-                    {
-                        closeTime = last.Time;
-                        closeSide = last.Side;
-                        _lastCloseUtc[symbol] = last.Time;
-                        _lastCloseSide[symbol] = last.Side;
-                    }
-                }
-
-                if (closeTime == null)
-                    return false;
-
-                var elapsed = now - closeTime.Value;
-
-                // 1) короткий rest на любой re-entry
-                if (anySideCooldownMinutes > 0 &&
-                    elapsed < TimeSpan.FromMinutes(anySideCooldownMinutes))
-                {
-                    var left = anySideCooldownMinutes - elapsed.TotalMinutes;
-                    reason = $"post-close rest {left:F0}m left (any side)";
+                    reason = $"post-close rest {anyMin - elapsed.TotalMinutes:F0}m left (any side{(wasLoss ? ", after loss ×2" : "")})";
                     return true;
                 }
 
-                // 2) длинный rest только если стратегия снова предлагает ТУ ЖЕ сторону
-                if (sameSideCooldownMinutes > 0 &&
-                    closeSide.HasValue &&
-                    closeSide.Value == proposedSide &&
+                if (sameSideCooldownMinutes > 0 && last.Side == proposedSide &&
                     elapsed < TimeSpan.FromMinutes(sameSideCooldownMinutes))
                 {
-                    var left = sameSideCooldownMinutes - elapsed.TotalMinutes;
-                    reason = $"same-side={proposedSide} blocked {left:F0}m left after last close (need new context/trend)";
+                    reason = $"same-side={proposedSide} blocked {sameSideCooldownMinutes - elapsed.TotalMinutes:F0}m left";
                     return true;
                 }
-
                 return false;
+            }
+        }
+
+        /// <summary>Реализованный PnL за текущие сутки UTC (для дневного стопа).</summary>
+        public decimal GetRealizedPnlTodayUtc()
+        {
+            var today = DateTime.UtcNow.Date;
+            lock (_lock)
+            {
+                EnsureLoadedUnlocked();
+                return _cache.Where(x => x.IsClosed && x.EffectiveCloseTime >= today).Sum(x => x.PnL ?? 0m);
             }
         }
 
@@ -352,9 +349,8 @@ namespace VertexAutoTradeBinance8.Services
         {
             lock (_lock)
             {
-                return LoadInternal()
-                    .OrderByDescending(x => x.Time)
-                    .ToList();
+                EnsureLoadedUnlocked();
+                return _cache.OrderByDescending(x => x.Time).ToList();
             }
         }
     }

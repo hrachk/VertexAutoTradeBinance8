@@ -37,7 +37,7 @@ namespace VertexAutoTradeBinance8.Services
             if (signal == null)
                 return;
 
-            using var client = _factory.CreateRestClient();
+            var client = _factory.CreateRestClient();
 
             // ===========================
             // 1) Получаем позиции

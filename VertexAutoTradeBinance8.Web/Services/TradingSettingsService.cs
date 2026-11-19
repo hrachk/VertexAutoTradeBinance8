@@ -107,6 +107,14 @@ public class TradingSettingsService
                 dto.BaseRiskPercent = GetDec(trading, "BaseRiskPercent", 1.0m);
                 dto.MinNotional = GetDec(trading, "MinNotional", 10m);
                 dto.MinNotionalGuard = GetDec(trading, "MinNotionalGuard", 30m);
+                dto.MaxDailyLossPercent = GetDec(trading, "MaxDailyLossPercent", 4.0m);
+                dto.MinStopDistancePercent = GetDec(trading, "MinStopDistancePercent", 0.30m);
+                dto.MaxStopDistancePercent = GetDec(trading, "MaxStopDistancePercent", 6.0m);
+                dto.BreakEvenBufferPercent = GetDec(trading, "BreakEvenBufferPercent", 0.12m);
+                dto.EntryFillTimeoutSeconds = GetInt(trading, "EntryFillTimeoutSeconds", 45);
+                dto.BreakEvenAfterTp1 = trading["BreakEvenAfterTp1"]?.GetValue<bool>() ?? true;
+                dto.LockProfitAfterTp2 = trading["LockProfitAfterTp2"]?.GetValue<bool>() ?? true;
+                dto.AllowOneMinuteEntries = trading["AllowOneMinuteEntries"]?.GetValue<bool>() ?? false;
                 dto.TradingEnabled = trading["TradingEnabled"]?.GetValue<bool>() ?? true;
                 dto.MaxOpenPositions = GetInt(trading, "MaxOpenPositions", 4);
                 dto.PostCloseCooldownMinutes = GetInt(trading, "PostCloseCooldownMinutes", 45);
@@ -226,6 +234,18 @@ public class TradingSettingsService
             trading["BaseRiskPercent"] = dto.BaseRiskPercent;
             trading["MinNotional"] = dto.MinNotional;
             trading["MinNotionalGuard"] = dto.MinNotionalGuard;
+            trading["MaxDailyLossPercent"] = Math.Clamp(dto.MaxDailyLossPercent, 0m, 50m);
+            trading["MinStopDistancePercent"] = Math.Clamp(dto.MinStopDistancePercent, 0.05m, 5m);
+            trading["MaxStopDistancePercent"] = Math.Clamp(dto.MaxStopDistancePercent, 0.5m, 25m);
+            trading["BreakEvenBufferPercent"] = Math.Clamp(dto.BreakEvenBufferPercent, 0m, 2m);
+            trading["EntryFillTimeoutSeconds"] = Math.Clamp(dto.EntryFillTimeoutSeconds, 10, 600);
+            trading["BreakEvenAfterTp1"] = dto.BreakEvenAfterTp1;
+            trading["LockProfitAfterTp2"] = dto.LockProfitAfterTp2;
+            trading["AllowOneMinuteEntries"] = dto.AllowOneMinuteEntries;
+            // защита от опасных значений риска
+            trading["BaseRiskPercent"] = Math.Clamp(dto.BaseRiskPercent, 0.05m, 5m);
+            trading["MaxRiskPercent"] = Math.Clamp(dto.MaxRiskPercent, 0.05m, 5m);
+            trading["Leverage"] = Math.Clamp(dto.Leverage, 1, 50);
             trading["TradingEnabled"] = dto.TradingEnabled;
             trading["MaxOpenPositions"] = dto.MaxOpenPositions;
             trading["PostCloseCooldownMinutes"] = dto.PostCloseCooldownMinutes;
@@ -454,6 +474,16 @@ public class TradingSettingsDto
     public string LondonEndUtc { get; set; } = "16:00";
     public string NewYorkStartUtc { get; set; } = "12:00";
     public string NewYorkEndUtc { get; set; } = "21:00";
+
+    // v6 risk & management
+    public decimal MaxDailyLossPercent { get; set; } = 4.0m;
+    public decimal MinStopDistancePercent { get; set; } = 0.30m;
+    public decimal MaxStopDistancePercent { get; set; } = 6.0m;
+    public bool BreakEvenAfterTp1 { get; set; } = true;
+    public bool LockProfitAfterTp2 { get; set; } = true;
+    public decimal BreakEvenBufferPercent { get; set; } = 0.12m;
+    public int EntryFillTimeoutSeconds { get; set; } = 45;
+    public bool AllowOneMinuteEntries { get; set; }
 
     // Cooldowns
     public int PostCloseCooldownMinutes { get; set; } = 45;

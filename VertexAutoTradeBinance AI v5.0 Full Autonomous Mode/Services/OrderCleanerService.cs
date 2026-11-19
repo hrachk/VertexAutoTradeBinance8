@@ -32,7 +32,7 @@ namespace VertexAutoTradeBinance8.Services
             TradeSignal signal,
             CancellationToken ct = default)
         {
-            using var client = _factory.CreateRestClient();
+            var client = _factory.CreateRestClient();
 
             var openOrdersResult =
                 await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
@@ -135,7 +135,7 @@ namespace VertexAutoTradeBinance8.Services
             string symbol,
             CancellationToken ct = default)
         {
-            using var client = _factory.CreateRestClient();
+            var client = _factory.CreateRestClient();
 
             int cleared = 0;
 

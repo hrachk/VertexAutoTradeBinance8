@@ -1,0 +1,65 @@
+@* SVG equity curve (кумулятивный реализованный PnL). Без JS-зависимостей. *@
+@using System.Globalization
+<svg class="vt-chart" viewBox="0 0 @W @H" preserveAspectRatio="none" style="height:@(Height)px">
+    <defs>
+        <linearGradient id="eqfill-@_id" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stop-color="@Color" stop-opacity="0.32" />
+            <stop offset="100%" stop-color="@Color" stop-opacity="0" />
+        </linearGradient>
+    </defs>
+    <g class="grid">
+        @for (int i = 1; i < 4; i++)
+        {
+            <line x1="0" x2="@W" y1="@(H * i / 4.0)" y2="@(H * i / 4.0)" />
+        }
+    </g>
+    @if (_pts.Count >= 2)
+    {
+        <line x1="0" x2="@W" y1="@F(_zeroY)" y2="@F(_zeroY)" stroke="#2a3446" stroke-dasharray="4 4" />
+        <path d="@_area" fill="url(#eqfill-@_id)" />
+        <path d="@_line" fill="none" stroke="@Color" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round" />
+        <circle cx="@F(_pts[^1].x)" cy="@F(_pts[^1].y)" r="3.5" fill="@Color" />
+    }
+</svg>
+@if (_pts.Count < 2 && ShowEmpty)
+{
+    <div class="vt-empty" style="margin-top:-@(Height)px;height:@(Height)px">Кривая появится после первых закрытых сделок</div>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<(DateTime t, decimal equity)> Points { get; set; } = Array.Empty<(DateTime, decimal)>();
+    [Parameter] public int Height { get; set; } = 240;
+    [Parameter] public bool ShowEmpty { get; set; } = true;
+
+    private const double W = 1000, H = 300;
+    private readonly string _id = Guid.NewGuid().ToString("N")[..6];
+    private List<(double x, double y)> _pts = new();
+    private string _line = "", _area = "";
+    private double _zeroY;
+    private string Color => Points.Count > 0 && Points[^1].equity < 0 ? "#f0465a" : "#19c37d";
+
+    private static string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    protected override void OnParametersSet()
+    {
+        _pts.Clear();
+        var src = new List<decimal> { 0m };
+        src.AddRange(Points.Select(p => p.equity));
+        if (src.Count < 2) { _line = _area = ""; return; }
+
+        double min = (double)Math.Min(0m, src.Min()), max = (double)Math.Max(0m, src.Max());
+        if (Math.Abs(max - min) < 1e-9) { max += 1; min -= 1; }
+        double pad = (max - min) * 0.08;
+        min -= pad; max += pad;
+
+        for (int i = 0; i < src.Count; i++)
+        {
+            double x = W * i / (src.Count - 1);
+            double y = H - ((double)src[i] - min) / (max - min) * H;
+            _pts.Add((x, y));
+        }
+        _zeroY = H - (0 - min) / (max - min) * H;
+        _line = "M" + string.Join(" L", _pts.Select(p => $"{F(p.x)},{F(p.y)}"));
+        _area = _line + $" L{F(W)},{F(H)} L0,{F(H)} Z";
+    }
+}

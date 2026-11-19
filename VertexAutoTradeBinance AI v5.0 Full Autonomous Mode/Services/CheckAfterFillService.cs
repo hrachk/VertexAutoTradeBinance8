@@ -47,7 +47,7 @@ namespace VertexAutoTradeBinance8.Services
 
         private async Task ScanAllSymbols(CancellationToken ct)
         {
-            using var client = _factory.CreateRestClient();
+            var client = _factory.CreateRestClient();
             var positions = await client.UsdFuturesApi.Account.GetPositionInformationAsync();
 
             if (!positions.Success || positions.Data == null)
@@ -91,7 +91,7 @@ namespace VertexAutoTradeBinance8.Services
             TradeSignal signal,
             CancellationToken ct)
         {
-            using var client = _factory.CreateRestClient();
+            var client = _factory.CreateRestClient();
 
             var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
             decimal step = filters.step <= 0 ? 0.001m : filters.step;
