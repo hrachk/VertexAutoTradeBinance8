@@ -141,13 +141,29 @@ public sealed class StrategyCoreEngine
         _ = EvaluateIfQualityAsync(sym);
     }
 
+    // The WS close path evaluates almost every bar before the 45s scan reaches it, so the
+    // scan only ever printed reasons=[same_bar:28] and the real verdicts were invisible.
+    // Collect them here and print them with the next scan.
+    private readonly ConcurrentDictionary<string, int> _wsReasons = new(StringComparer.OrdinalIgnoreCase);
+    private int _wsEvaluated, _wsEmitted;
+
     private async Task EvaluateIfQualityAsync(string symbol)
     {
         try
         {
             if (!await IsQualitySymbolAsync(symbol).ConfigureAwait(false))
                 return;
-            await EvaluateAsync(symbol).ConfigureAwait(false);
+            var (ev, em, reason) = await EvaluateAsync(symbol).ConfigureAwait(false);
+            if (ev) Interlocked.Increment(ref _wsEvaluated);
+            if (em) Interlocked.Increment(ref _wsEmitted);
+            if (ev && !string.IsNullOrEmpty(reason))
+            {
+                var key = reason;
+                int colon = key.IndexOf(':');
+                if (colon > 0) key = key.Substring(0, colon);
+                _wsReasons.AddOrUpdate(key, 1, (_, c) => c + 1);
+                _log.LogInformation("[CORE][EVAL][{sym}] {r}", symbol, reason);
+            }
         }
         catch (Exception ex)
         {
@@ -176,6 +192,8 @@ public sealed class StrategyCoreEngine
                 try
                 {
                     var (ev, em, reason) = await EvaluateAsync(sym).ConfigureAwait(false);
+                    if (ev && !em && !string.IsNullOrEmpty(reason))
+                        _log.LogInformation("[CORE][EVAL][{sym}] {r}", sym, reason);
                     if (ev) evaluated++;
                     if (em) emitted++;
                     if (reason == "thin_klines") thin++;
@@ -202,6 +220,17 @@ public sealed class StrategyCoreEngine
             int freshAttempts = batch.Count - sameBar - cooldown;
             if (emitted == 0 && freshAttempts > 0) _zeroEmitStreak++;
             else if (emitted > 0) _zeroEmitStreak = 0;
+
+            int wsEv = Interlocked.Exchange(ref _wsEvaluated, 0);
+            int wsEm = Interlocked.Exchange(ref _wsEmitted, 0);
+            if (wsEv > 0)
+            {
+                var snap = _wsReasons.ToArray();
+                _wsReasons.Clear();
+                _log.LogInformation("[CORE][BAR] evaluated={e} emitted={m} reasons=[{r}]",
+                    wsEv, wsEm,
+                    string.Join(",", snap.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key}:{kv.Value}")));
+            }
 
             var topReasons = string.Join(",",
                 reasonBag.OrderByDescending(kv => kv.Value).Take(5).Select(kv => $"{kv.Key}:{kv.Value}"));
