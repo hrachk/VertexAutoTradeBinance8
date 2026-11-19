@@ -34,7 +34,7 @@ public class TradingOptions
     // ---  НОВЫЕ ПОЛЯ ---
 
     /// <summary>Базовый риск → по умолчанию 1.0% если не указано</summary>
-    public decimal BaseRiskPercent { get; set; } = 1.0m;
+    public decimal BaseRiskPercent { get; set; } = 1.0m; // В ПРОЦЕНТАХ: 1.0 = 1% баланса на SL
 
     /// <summary>Минимальный размер позиции после AI-скейлинга</summary>
     public decimal MinNotionalGuard { get; set; } = 30m;
@@ -72,6 +72,60 @@ public class TradingOptions
 
     /// <summary>Максимум одновременно открытых позиций (все символы). Default 4.</summary>
     public int MaxOpenPositions { get; set; } = 4;
+
+    // ======================= v6 PRODUCTION RISK =======================
+
+    /// <summary>
+    /// Жёсткий потолок риска на сделку в % от wallet balance (после всех AI-множителей).
+    /// BaseRiskPercent=1.0 означает 1% (раньше трактовалось как 100% → риск резался только cap'ом 20%).
+    /// </summary>
+    public decimal MaxRiskPercent { get; set; } = 1.5m;
+
+    /// <summary>
+    /// Дневной стоп: если реализованный убыток за текущие сутки UTC ≥ X% баланса —
+    /// новые входы запрещены до 00:00 UTC. 0 = выключено.
+    /// </summary>
+    public decimal MaxDailyLossPercent { get; set; } = 4.0m;
+
+    /// <summary>Минимальная дистанция SL в % от цены (иначе комиссии съедают R). Default 0.30%.</summary>
+    public decimal MinStopDistancePercent { get; set; } = 0.30m;
+
+    /// <summary>Максимальная дистанция SL в % от цены (защита от гигантских стопов). Default 6%.</summary>
+    public decimal MaxStopDistancePercent { get; set; } = 6.0m;
+
+    /// <summary>
+    /// Если TP1 для нужного RR лежит дальше X·ATR — сигнал отклоняется
+    /// (раньше TP просто растягивали до любого расстояния и RR-фильтр никогда не срабатывал).
+    /// </summary>
+    public decimal MaxTp1AtrMultiple { get; set; } = 5.0m;
+
+    /// <summary>Разрешить входы по сигналам 1m (по умолчанию нет — шум + комиссии).</summary>
+    public bool AllowOneMinuteEntries { get; set; } = false;
+
+    /// <summary>Сколько секунд ждать исполнения лимитного входа.</summary>
+    public int EntryFillTimeoutSeconds { get; set; } = 45;
+
+    /// <summary>После исполнения TP1 перевести SL в безубыток (+комиссии).</summary>
+    public bool BreakEvenAfterTp1 { get; set; } = true;
+
+    /// <summary>После исполнения TP2 подтянуть SL на уровень TP1.</summary>
+    public bool LockProfitAfterTp2 { get; set; } = true;
+
+    /// <summary>Буфер безубытка над входом, % от цены (комиссии round-trip ≈ 0.08–0.10%).</summary>
+    public decimal BreakEvenBufferPercent { get; set; } = 0.12m;
+
+    /// <summary>
+    /// Если minNotional биржи требует позицию, риск которой больше целевого в X раз — пропуск.
+    /// Раньше позиция «бустилась» до minNotional×1.4 без оглядки на риск.
+    /// </summary>
+    public decimal MaxRiskOvershootForMinNotional { get; set; } = 1.5m;
+
+    /// <summary>Распределение объёма по TP1/TP2/TP3 (по умолчанию 40/30/30).
+    /// Default пустой: ConfigurationBinder ДОПИСЫВАЕТ элементы к непустому массиву по умолчанию.</summary>
+    public decimal[] TpSplit { get; set; } = Array.Empty<decimal>();
+
+    public decimal[] EffectiveTpSplit =>
+        TpSplit is { Length: >= 3 } && TpSplit.Take(3).Sum() > 0 ? TpSplit.Take(3).ToArray() : new[] { 0.40m, 0.30m, 0.30m };
 }
 
 
@@ -106,9 +160,13 @@ public class TradingSessionsOptions
     /// Разрешённые сессии. По умолчанию London + NewYork (эффективный блок дня).
     /// Overlap 12:00–16 UTC автоматически внутри объединения окон.
     /// </summary>
-    public List<SessionWindowOptions> Windows { get; set; } = new()
+    public List<SessionWindowOptions> Windows { get; set; } = new(); // пусто → DefaultWindows (binder дописывает к непустому default)
+
+    public static List<SessionWindowOptions> DefaultWindows => new()
     {
         new() { Name = "London", StartUtc = "07:00", EndUtc = "16:00" },
         new() { Name = "NewYork", StartUtc = "12:00", EndUtc = "21:00" }
     };
+
+    public List<SessionWindowOptions> EffectiveWindows => Windows is { Count: > 0 } ? Windows : DefaultWindows;
 }

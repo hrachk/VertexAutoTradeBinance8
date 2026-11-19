@@ -43,34 +43,7 @@ namespace VertexAutoTradeBinance8.Services
 
         public string PathUsed => _path;
 
-        private static string ResolvePath()
-        {
-            var env = Environment.GetEnvironmentVariable("VERTEX_SHARED");
-            if (!string.IsNullOrWhiteSpace(env))
-            {
-                try { Directory.CreateDirectory(env); } catch { }
-                return Path.Combine(env, "trading_control.json");
-            }
-
-            if (OperatingSystem.IsWindows())
-            {
-                try
-                {
-                    Directory.CreateDirectory(@"C:\VertexShared");
-                    return @"C:\VertexShared\trading_control.json";
-                }
-                catch { }
-            }
-
-            var userShared = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                "VertexShared");
-            try { Directory.CreateDirectory(userShared); } catch { }
-            if (Directory.Exists(userShared))
-                return Path.Combine(userShared, "trading_control.json");
-
-            return Path.Combine(AppContext.BaseDirectory, "trading_control.json");
-        }
+        private static string ResolvePath() => VertexAutoTradeBinance8.Configuration.VertexPaths.TradingControl;
 
         private void EnsureFile()
         {

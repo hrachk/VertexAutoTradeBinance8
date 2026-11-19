@@ -20,7 +20,7 @@ namespace VertexAutoTradeBinance8.Services
         /// </summary>
         public async Task<List<string>> GetTopSymbolsAsync()
         {
-            using var client = _factory.CreateRestClient();
+            var client = _factory.CreateRestClient();
 
             var res = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync();
             if (!res.Success || res.Data == null)

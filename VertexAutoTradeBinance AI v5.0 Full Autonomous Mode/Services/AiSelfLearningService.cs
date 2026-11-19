@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -38,10 +38,10 @@ namespace VertexAutoTradeBinance8.Services
         private readonly object _lock = new();
 
         private static readonly string FilePath =
-      Path.Combine(AppContext.BaseDirectory, "ai-models","ai_learning.json");
+      Path.Combine(VertexAutoTradeBinance8.Configuration.VertexPaths.AiModelsDir, "ai_learning.json");
 
         private static readonly string BackupPath =
-            Path.Combine(AppContext.BaseDirectory, "ai-models","ai_learning_backup.json");
+            Path.Combine(VertexAutoTradeBinance8.Configuration.VertexPaths.AiModelsDir, "ai_learning_backup.json");
 
         // Снимок статистики каждые N минут (для trade-based / signal-based)
         private DateTime _lastSnapshot = DateTime.MinValue;
@@ -156,7 +156,7 @@ namespace VertexAutoTradeBinance8.Services
 
         private List<MissedTradeRecord> LoadMissedTradesFromFile()
         {
-            var path = Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
+            var path = VertexAutoTradeBinance8.Configuration.VertexPaths.MissedTrades;
 
             if (!File.Exists(path))
                 return new List<MissedTradeRecord>();

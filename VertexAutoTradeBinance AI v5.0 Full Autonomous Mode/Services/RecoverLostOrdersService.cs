@@ -48,7 +48,7 @@ namespace VertexAutoTradeBinance8.Services
             if (symbols.Count == 0)
                 return;
 
-            using var client = _factory.CreateRestClient();
+            var client = _factory.CreateRestClient();
 
             // берём все позиции разом
             var posRes = await client.UsdFuturesApi.Account.GetPositionInformationAsync();

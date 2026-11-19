@@ -90,14 +90,21 @@ namespace VertexAutoTradeBinance8.Strategy
             int period,
             int index)
         {
-            int start = Math.Max(0, index - period + 1);
-            decimal k = 2m / (period + 1);
+            // FIX: раньше EMA «прогревалась» только на period барах с seed = первый close
+            // (по сути WMA-подобная кривая, сильно отличающаяся от EMA21 на графике Binance).
+            // Теперь: seed = SMA первых period баров, далее рекурсия по ВСЕЙ истории до index.
+            if (klines.Count == 0) return 0m;
+            index = Math.Min(index, klines.Count - 1);
+            if (index + 1 < period)
+                return klines[index].ClosePrice;
 
-            decimal ema = klines[start].ClosePrice;
-            for (int i = start + 1; i <= index; i++)
-            {
+            decimal sma = 0m;
+            for (int i = 0; i < period; i++) sma += klines[i].ClosePrice;
+            decimal ema = sma / period;
+
+            decimal k = 2m / (period + 1);
+            for (int i = period; i <= index; i++)
                 ema = klines[i].ClosePrice * k + ema * (1 - k);
-            }
             return ema;
         }
 
@@ -747,7 +754,7 @@ namespace VertexAutoTradeBinance8.Strategy
             IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
             // Шапка блока
-            _logger.LogInformation(
+            _logger.LogDebug(
 $@"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📌 {symbol} [{interval}] — STRATEGY ENGINE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -765,7 +772,7 @@ $@"━━━━━━━━━━━━━━━━━━━━━━━━━�
 
             if (testMode)
             {
-                _logger.LogInformation(
+                _logger.LogDebug(
 $@"🧪 TestMode включён (Level = {level})
    • AllowSoftEntryAlways : {allowSoftEntryAlways}
    • RelaxRR              : {relaxRr}
@@ -776,6 +783,11 @@ $@"🧪 TestMode включён (Level = {level})
             }
 
             // 0) Базовые проверки по данным
+            // FIX: решение только по ЗАКРЫТЫМ свечам (последняя свеча Binance — формирующаяся,
+            // её close/high/low меняются → сигналы «перерисовывались», входы были поспешными).
+            if (klines != null)
+                klines = MarketDataService.DropFormingCandle(klines);
+
             if (klines == null)
             {
                 _logger.LogError("❌ Ошибка: klines == null → пропускаем символ.");
@@ -811,15 +823,15 @@ $@"🧪 TestMode включён (Level = {level})
 
                 if (!ignoreCorrelation && corr.HasValue && Math.Abs(corr.Value) < 0.10m)
                 {
-                    _logger.LogInformation(
+                    _logger.LogDebug(
                         $"🔒 CorrFilter: |corrBTC|={corr.Value:F2} < 0.10 → символ пропущен.");
-                    _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    _logger.LogDebug("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                     return null;
                 }
 
                 if (ignoreCorrelation && corr.HasValue)
                 {
-                    _logger.LogInformation(
+                    _logger.LogDebug(
                         $"🧪 TestMode: CorrFilter отключён (corrBTC={corr.Value:F2}) → продолжаем.");
                 }
             }
@@ -855,7 +867,7 @@ $@"🧪 TestMode включён (Level = {level})
                 _logger.LogError(
                     ex,
                     $"❌ SmartRegimeService.Evaluate ERROR → символ пропущен.");
-                _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                _logger.LogDebug("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 return null;
             }
 
@@ -879,7 +891,7 @@ $@"🧪 TestMode включён (Level = {level})
                 // HYBRID snapshot errors не критичны
             }
 
-            _logger.LogInformation(
+            _logger.LogDebug(
 $@"📊 Режим рынка:
    • Base Regime : {regime}
    • Smart Regime: {smart.SmartType}
@@ -904,7 +916,7 @@ $@"📊 Режим рынка:
                 adaptiveThresholdFrac = adaptiveThreshold / 100m;
                 safetyBuffer = 0.20m;
 
-                _logger.LogInformation(
+                _logger.LogDebug(
                     $"🧪 TestMode: порог confidence снижен → Thr={adaptiveThreshold}%  Buffer≈{safetyBuffer:P0}");
             }
 
@@ -912,16 +924,16 @@ $@"📊 Режим рынка:
 
             if (!fastTrendOverride && smart.Confidence < adaptiveThresholdFrac - safetyBuffer)
             {
-                _logger.LogInformation(
+                _logger.LogDebug(
                     $"🚫 Confidence слишком низкий: {smart.Confidence:P0} < {adaptiveThreshold}% (после буфера) → сигнал не ищем.");
-                _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                _logger.LogDebug("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 return null;
             }
 
             if (smart.IsDangerChopZone)
             {
-                _logger.LogInformation("🚫 Зона хаоса (ChopZone/Danger) → сигнал отключён.");
-                _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                _logger.LogDebug("🚫 Зона хаоса (ChopZone/Danger) → сигнал отключён.");
+                _logger.LogDebug("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 return null;
             }
 
@@ -934,7 +946,7 @@ $@"📊 Режим рынка:
             if (allowSoftEntryAlways && !isWeekendUtc)
             {
                 softModeAllowed = true;
-                _logger.LogInformation(
+                _logger.LogDebug(
                     "🧪 AllowSoftEntryAlways=TRUE → soft разрешён (не рекомендуется на live).");
             }
 
@@ -959,7 +971,7 @@ $@"📊 Режим рынка:
             if (isChop)
             {
                 baseSignal = null;
-                _logger.LogInformation("[STRAT][{symbol}] CHOP — no entries", symbol);
+                _logger.LogDebug("[STRAT][{symbol}] CHOP — no entries", symbol);
             }
             else if (isRangeLikeRegime)
             {
@@ -1011,7 +1023,7 @@ $@"📊 Режим рынка:
 
 
 
-                    _logger.LogInformation(
+                    _logger.LogDebug(
                         $"🟡 SOFT-вход по тренду: side={soft.Side}, entry={soft.EntryPrice:F4}, SL={soft.StopLoss:F4}");
                     LastSoftEntry = true;
                     LastBlockedByLiquidity = false;
@@ -1035,14 +1047,14 @@ $@"📊 Режим рынка:
 
                 if (!longOk && !shortOk)
                 {
-                    _logger.LogInformation(
+                    _logger.LogDebug(
                         "[STRAT][{symbol}] REJECT counter-regime: side={side} regime={reg} slope={slope:F2}%",
                         symbol, baseSignal.Side, regime, smart.TrendSlopePercent);
                     baseSignal = null;
                 }
                 else if (smart.Confidence < 0.48m && !fastTrendOverride)
                 {
-                    _logger.LogInformation(
+                    _logger.LogDebug(
                         "[STRAT][{symbol}] REJECT low conf {c:P0} < 48%",
                         symbol, smart.Confidence);
                     baseSignal = null;
@@ -1056,8 +1068,8 @@ $@"📊 Режим рынка:
 
             if (baseSignal == null)
             {
-                _logger.LogInformation("🔴 Итог: сигнала НЕТ (ни базового, ни soft).");
-                _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                _logger.LogDebug("🔴 Итог: сигнала НЕТ (ни базового, ни soft).");
+                _logger.LogDebug("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
                 LastSoftEntry = false;
                 LastBlockedByLiquidity = false;
@@ -1097,15 +1109,15 @@ $@"📊 Режим рынка:
                             confidence: smart.Confidence
                         );
 
-                        _logger.LogInformation(
+                        _logger.LogDebug(
                             $"🚫 Блок по AI-паттерну: dir={pattern.Direction}, score={pattern.Score:F2}, thr={blockScore:F2}.");
-                        _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        _logger.LogDebug("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                         return null;
                     }
 
                     if (relaxPatternBlock && !sameDir && pattern.Score >= 0.60m && pattern.Score < blockScore)
                     {
-                        _logger.LogInformation(
+                        _logger.LogDebug(
                             $"🧪 TestMode: паттерн против сигнала, но RelaxPatternBlock=TRUE → не блокируем (score={pattern.Score:F2}).");
                     }
                 }
@@ -1136,15 +1148,15 @@ $@"📊 Режим рынка:
 
                     if (relaxLiquidity && beforeLiq != null)
                     {
-                        _logger.LogInformation(
+                        _logger.LogDebug(
                             "🧪 TestMode: RelaxLiquidity=TRUE → игнорируем блок по ликвидности, берём базовый сигнал.");
                         baseSignal = beforeLiq;
                     }
                     else
                     {
-                        _logger.LogInformation(
+                        _logger.LogDebug(
                             "🚫 Сигнал заблокирован по ликвидности (опасная стена/дисбаланс).");
-                        _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        _logger.LogDebug("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                         LastSoftEntry = false;
                         LastBlockedByLiquidity = true;
                         CurrentMode = "LiquidityBlocked";
@@ -1182,9 +1194,9 @@ $@"📊 Режим рынка:
 
                 if (slDist <= 0 || tpDist <= 0)
                 {
-                    _logger.LogInformation(
+                    _logger.LogDebug(
                         $"🚫 RR filter: некорректные расстояния slDist={slDist:F6}, tpDist={tpDist:F6} → сигнал отброшен.");
-                    _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    _logger.LogDebug("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                     return null;
                 }
 
@@ -1198,40 +1210,20 @@ $@"📊 Режим рынка:
                     minRr *= 0.80m;
                     if (minRr < 1.2m) minRr = 1.2m;
 
-                    _logger.LogInformation(
+                    _logger.LogDebug(
                         $"🧪 TestMode: RelaxRR=TRUE → minRR {original:F2} → {minRr:F2}.");
                 }
 
                 if (rr < minRr)
                 {
-                    // Structure SL часто шире ATR*mult → RR падает.
-                    // Растягиваем TP до minRr вместо мгновенного kill.
+                    // Растягиваем TP до minRr, НО только если такая цель реалистична.
+                    // FIX: раньше TP растягивался на любое расстояние, а проверка
+                    // rr < minRr*0.98 после растяжки не могла сработать никогда → RR-фильтр был мёртв.
                     decimal needTpDist = slDist * minRr;
-                    if (baseSignal.Side == SignalSide.Buy)
-                    {
-                        baseSignal.TakeProfits[0] = baseSignal.EntryPrice + needTpDist;
-                        if (baseSignal.TakeProfits.Count > 1)
-                            baseSignal.TakeProfits[1] = baseSignal.EntryPrice + needTpDist * 1.35m;
-                        if (baseSignal.TakeProfits.Count > 2)
-                            baseSignal.TakeProfits[2] = baseSignal.EntryPrice + needTpDist * 1.7m;
-                    }
-                    else
-                    {
-                        baseSignal.TakeProfits[0] = baseSignal.EntryPrice - needTpDist;
-                        if (baseSignal.TakeProfits.Count > 1)
-                            baseSignal.TakeProfits[1] = baseSignal.EntryPrice - needTpDist * 1.35m;
-                        if (baseSignal.TakeProfits.Count > 2)
-                            baseSignal.TakeProfits[2] = baseSignal.EntryPrice - needTpDist * 1.7m;
-                    }
+                    decimal atrNow = baseSignal.Atr ?? 0m;
+                    decimal maxTpAtr = _opt.MaxTp1AtrMultiple > 0 ? _opt.MaxTp1AtrMultiple : 5.0m;
 
-                    tp1 = baseSignal.TakeProfits[0];
-                    tpDist = Math.Abs(tp1 - baseSignal.EntryPrice);
-                    rr = tpDist / slDist;
-
-                    _logger.LogInformation(
-                        $"⚠ RR stretch: was below minRR={minRr:F2} → TP1 adjusted to {tp1:F4}, RR={rr:F2}");
-
-                    if (rr < minRr * 0.98m)
+                    if (atrNow > 0 && needTpDist > atrNow * maxTpAtr)
                     {
                         _aiLearning.RecordMarketStateTriggered(
                             reason: "RR_BLOCK",
@@ -1240,20 +1232,54 @@ $@"📊 Режим рынка:
                             regime: smart.BaseRegime,
                             slope: smart.TrendSlopePercent,
                             volatility: smart.VolatilityPercent,
-                            atr: baseSignal.Atr ?? 0,
-                            confidence: smart.Confidence
-                        );
+                            atr: atrNow,
+                            confidence: smart.Confidence);
 
                         _logger.LogInformation(
-                            $"🚫 RR filter: RR={rr:F2} < minRR={minRr:F2} after stretch → сигнал отброшен.");
-                        _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                            "[STRAT][{symbol}] RR reject: TP1 for RR {minRr:F2} needs {need:F2} ATR > max {max:F2} ATR (SL too wide)",
+                            symbol, minRr, needTpDist / atrNow, maxTpAtr);
                         return null;
                     }
+
+                    int dirSign = baseSignal.Side == SignalSide.Buy ? 1 : -1;
+                    var old = baseSignal.TakeProfits.ToList();
+                    decimal[] mults = { 1.0m, 1.35m, 1.7m };
+                    for (int i = 0; i < baseSignal.TakeProfits.Count && i < 3; i++)
+                    {
+                        decimal stretched = baseSignal.EntryPrice + dirSign * needTpDist * mults[i];
+                        // TP никогда не приближается относительно исходной лестницы
+                        baseSignal.TakeProfits[i] = dirSign > 0 ? Math.Max(old[i], stretched) : Math.Min(old[i], stretched);
+                    }
+
+                    tp1 = baseSignal.TakeProfits[0];
+                    tpDist = Math.Abs(tp1 - baseSignal.EntryPrice);
+                    rr = tpDist / slDist;
+
+                    _logger.LogDebug(
+                        $"⚠ RR stretch: was below minRR={minRr:F2} → TP1 adjusted to {tp1:F4}, RR={rr:F2}");
                 }
 
-                _logger.LogInformation(
+                _logger.LogDebug(
                     $"✅ RR OK: RR={rr:F2} ≥ minRR={minRr:F2}.");
             }
+
+            // 9) Границы дистанции SL (комиссии vs. гигантские стопы)
+            if (baseSignal.EntryPrice > 0)
+            {
+                decimal slPct = Math.Abs(baseSignal.EntryPrice - baseSignal.StopLoss) / baseSignal.EntryPrice * 100m;
+                decimal minPct = _opt.MinStopDistancePercent > 0 ? _opt.MinStopDistancePercent : 0.30m;
+                decimal maxPct = _opt.MaxStopDistancePercent > 0 ? _opt.MaxStopDistancePercent : 6.0m;
+                if (slPct < minPct || slPct > maxPct)
+                {
+                    _logger.LogDebug(
+                        "[STRAT][{symbol}] reject: SL distance {d:F2}% outside [{min:F2}%..{max:F2}%]",
+                        symbol, slPct, minPct, maxPct);
+                    return null;
+                }
+            }
+
+            baseSignal.Timeframe = interval.ToString();
+            baseSignal.TakeProfit = baseSignal.TakeProfits.Count > 0 ? baseSignal.TakeProfits[0] : null;
 
             // Финальный красивый блок
             decimal? tp1F = baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 0
@@ -1269,7 +1295,7 @@ $@"📊 Режим рынка:
             string dirEmoji = baseSignal.Side == SignalSide.Buy ? "🟢 LONG" : "🔴 SHORT";
 
             _logger.LogInformation(
-$@"📌 Итоговый сигнал:
+$@"📌 {symbol} [{interval}] Итоговый сигнал:
    • Направление : {dirEmoji}
    • Entry       : {baseSignal.EntryPrice:F4}
    • Stop Loss   : {baseSignal.StopLoss:F4}
@@ -1278,7 +1304,7 @@ $@"📌 Итоговый сигнал:
    • TP3         : {(tp3F.HasValue ? tp3F.Value.ToString("F4") : "-")}
    • Reason      : {baseSignal.Reason}");
 
-            _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            _logger.LogDebug("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
             return baseSignal;
         }

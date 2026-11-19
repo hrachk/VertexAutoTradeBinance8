@@ -41,7 +41,7 @@ namespace VertexAutoTradeBinance8.Services
                 return false;
             }
 
-            using var client = _factory.CreateRestClient();
+            var client = _factory.CreateRestClient();
 
             var posRes = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, null, ct);
             if (!posRes.Success || posRes.Data == null)

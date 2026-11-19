@@ -1,8 +1,5 @@
-﻿using Microsoft.Extensions.Options;
-using VertexAutoTradeBinance8.Configuration;
-using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Hosting;
 using VertexAutoTradeBinance8.Services;
-using VertexAutoTradeBinance8.Strategy;
 
 namespace VertexAutoTradeBinance8;
 
@@ -13,87 +10,43 @@ public class Program
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.InputEncoding = System.Text.Encoding.UTF8;
 
-
         using IHost host = Host.CreateDefaultBuilder(args)
-            .ConfigureLogging(logging =>
+            .UseContentRoot(AppContext.BaseDirectory)
+            .ConfigureAppConfiguration((ctx, cfg) => cfg.AddVertexConfiguration(ctx.HostingEnvironment.ContentRootPath))
+            .ConfigureLogging((ctx, logging) =>
             {
                 logging.ClearProviders();
-                logging.AddConsole();
+                logging.AddConfiguration(ctx.Configuration.GetSection("Logging"));
+                logging.AddSimpleConsole(o =>
+                {
+                    o.SingleLine = true;
+                    o.TimestampFormat = "HH:mm:ss ";
+                    o.UseUtcTimestamp = true;
+                });
+                logging.AddProvider(new FileLoggerProvider("bot"));
             })
+            .UseWindowsServiceIfAvailable()
             .ConfigureServices((ctx, services) =>
             {
-                services.Configure<Configuration.BinanceOptions>(ctx.Configuration.GetSection("Binance"));
-                services.Configure<Configuration.TradingOptions>(ctx.Configuration.GetSection("Trading"));
-                services.Configure<Configuration.TradingOptions>(ctx.Configuration.GetSection("TestMode"));
+                services.Configure<HostOptions>(o =>
+                {
+                    // ошибка в фоновом сервисе не должна тихо гасить торговлю/сопровождение
+                    o.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore;
+                    o.ShutdownTimeout = TimeSpan.FromSeconds(20);
+                });
 
-
-
-                services.AddSingleton<BinanceClientFactory>();
-                services.AddSingleton<MarketDataService>();
-                services.AddSingleton<RiskManager>();
-                services.AddSingleton<OrderExecutor>();
-
-                services.AddSingleton<AiCorrelationService>();
-                services.AddSingleton<AiMarketRegimeService>();
-                services.AddSingleton<AiPatternEngineService>();
-                services.AddSingleton<AdaptiveStrategyService>();
- 
-                services.AddSingleton<AiSelfLearningService>();  // Ensure that all dependencies are resolved correctly
-
-
-                services.AddSingleton<SimulatedTradeService>();
-
-
-                services.AddSingleton<AiModelSnapshotService>();
-                services.AddSingleton<TradeResultMonitorService>();
-                services.AddSingleton<CheckAfterFillService>();
-                services.AddSingleton<TradeSignalMemoryService>();
-                services.AddSingleton<OrderTracerService>();
-                services.AddSingleton<RecoverLostOrdersService>();
-                services.AddSingleton<TradeSignalMemoryService>();
-                services.AddSingleton<ManualPositionHandler>();
-                services.AddSingleton<ManagedPositionRegistry>();
-                services.AddSingleton<TradingSessionGate>();
-                services.AddSingleton<TradingControlService>();
-                services.AddSingleton<AiLeverageService>();
-
-                services.AddSingleton<AiLiquidityClusterService>();
-                services.AddSingleton<StrategyEngine>();
-                services.AddSingleton<SymbolInfoService>();
-                services.AddSingleton<LiquidityGuardService>();
-                services.AddSingleton<PositionGuardService>();
-                services.AddSingleton<PositionProtectorService>();
-                services.AddSingleton<PnLMonitorService>();
-                services.AddSingleton<OrderCleanerService>();
-                services.AddSingleton<PositionSupervisorService>();
-                services.AddSingleton<SmartRegimeService>();
-                 services.AddSingleton<TradeStateManager>();
-
-                services.AddSingleton<EngineStateBuilder>();
-               
-
-                services.Configure<EngineStateSettings>(ctx.Configuration.GetSection("EngineState"));
-                services.AddSingleton<EngineStateSnapshotService>();
-
-                services.AddSingleton(sp => sp.GetRequiredService<IOptions<TradingOptions>>().Value);
-
-               
-                services.AddSingleton<PredictiveEngineV4ConfirmationService>();
-                services.AddSingleton<AiStopLossOptimizer>();
-                services.AddSingleton<AiRiskScalerV2>(); // опционально, можно создавать вручную
-
+                services.AddVertexCore(ctx.Configuration);
                 services.AddHostedService<BackgroundMarketScannerService>();
-                services.AddSingleton<SymbolLiquidityScanner>();
                 services.AddHostedService<TradingWorker>();
-                services.AddSingleton<AiTimeframeSelectorService>();
-
-                services.AddSingleton<ExecutedSignalService>();
-                services.AddSingleton<SymbolRegistryService>();
-
-
             })
             .Build();
 
         await host.RunAsync();
     }
+}
+
+internal static class HostBuilderWindowsServiceExtensions
+{
+    /// <summary>Заглушка: в .NET 8 без пакета WindowsServices — запуск как консоль / через NSSM / systemd.</summary>
+    public static IHostBuilder UseWindowsServiceIfAvailable(this IHostBuilder b) => b;
 }

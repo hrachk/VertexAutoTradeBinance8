@@ -14,6 +14,7 @@ public class PositionGuardService
 {
     private readonly ILogger<PositionGuardService> _logger;
     private readonly BinanceClientFactory _factory;
+    private readonly AccountStateCache? _account;
     private readonly int _maxEntries;
 
     /// <summary>Сколько успешных входов сделано, пока позиция жива (symbol → count).</summary>
@@ -23,10 +24,12 @@ public class PositionGuardService
     public PositionGuardService(
         ILogger<PositionGuardService> logger,
         BinanceClientFactory factory,
+        AccountStateCache? account = null,
         IOptions<TradingOptions>? options = null)
     {
         _logger = logger;
         _factory = factory;
+        _account = account;
         var cfg = options?.Value?.MaxEntriesPerSymbol ?? 2;
         _maxEntries = cfg < 1 ? 1 : (cfg > 3 ? 3 : cfg); // clamp 1..3
     }
@@ -39,13 +42,22 @@ public class PositionGuardService
     /// </summary>
     public async Task<int> GetCurrentPositionSideAsync(string symbol)
     {
-        using var client = _factory.CreateRestClient();
-        var result = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol);
-        if (!result.Success || result.Data == null)
-            return 0;
+        IEnumerable<Binance.Net.Objects.Models.Futures.BinancePositionDetailsUsdt> data;
+        if (_account != null)
+        {
+            data = await _account.GetOpenPositionsAsync(CancellationToken.None);
+        }
+        else
+        {
+            var client = _factory.CreateRestClient();
+            var result = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol);
+            if (!result.Success || result.Data == null)
+                return 0;
+            data = result.Data;
+        }
 
         decimal net = 0;
-        foreach (var p in result.Data.Where(x =>
+        foreach (var p in data.Where(x =>
                      string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)))
         {
             net += p.Quantity;
@@ -58,7 +70,7 @@ public class PositionGuardService
 
     public async Task<decimal> GetOpenQtyAbsAsync(string symbol)
     {
-        using var client = _factory.CreateRestClient();
+        var client = _factory.CreateRestClient();
         var result = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol);
         if (!result.Success || result.Data == null)
             return 0;

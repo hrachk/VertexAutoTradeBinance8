@@ -126,7 +126,7 @@ public class SymbolRegistryService
             foreach (var b in cfgBan)
                 if (!string.IsNullOrWhiteSpace(b)) ban.Add(b.Trim());
 
-        using var client = _factory.CreateRestClient();
+        var client = _factory.CreateRestClient();
         var tickers = await client.UsdFuturesApi.ExchangeData.GetTickersAsync();
 
         if (!tickers.Success || tickers.Data == null)

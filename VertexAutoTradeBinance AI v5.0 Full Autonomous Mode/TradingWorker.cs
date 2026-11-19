@@ -2,19 +2,33 @@
 using Binance.Net.Objects.Models.Futures;
 using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
+using VertexAutoTradeBinance8.Helpers;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Formatting;
 using VertexAutoTradeBinance8.Strategy;
-using static VertexAutoTradeBinance8.Services.AiTimeframeSelectorService;
 
 namespace VertexAutoTradeBinance8
 {
+    /// <summary>
+    /// TradingWorker v7 — главный цикл.
+    ///
+    /// Исправлено относительно v6:
+    ///  • Любое исключение в цикле больше не убивает BackgroundService (а с ним и host).
+    ///  • Fail-closed: если биржа не ответила по позициям — входы запрещены (раньше «fail-open»).
+    ///  • SL-оптимизация выполняется ДО расчёта объёма (раньше qty считался от одного SL,
+    ///    а ордер ставился с другим → фактический риск отличался от расчётного).
+    ///  • Убран «ADD ×1.25/×1.40» после расчёта риска (раздувал риск сверх лимита).
+    ///  • Один вход на символ: нет ни усреднения, ни встречной (hedge) позиции.
+    ///  • Сигналы 1m по умолчанию не торгуются (только 5m+), решение — по закрытым свечам.
+    ///  • Supervisor обходит ВСЕ managed-позиции, в т.ч. выпавшие из ротации символов.
+    ///  • Дневной стоп по реализованному убытку.
+    ///  • Проверка hedge-mode: если не удалось включить — входы блокируются (ордера с positionSide
+    ///    в one-way режиме отклоняются биржей).
+    /// </summary>
     public class TradingWorker : BackgroundService
     {
         private readonly ILogger<TradingWorker> _logger;
-
-        private readonly BinanceOptions _binance;
         private readonly IOptionsMonitor<TradingOptions> _optionsMon;
         private TradingOptions _options => _optionsMon.CurrentValue;
 
@@ -25,52 +39,29 @@ namespace VertexAutoTradeBinance8
         private readonly BinanceClientFactory _factory;
         private readonly LiquidityGuardService _liq;
         private readonly PositionGuardService _guard;
-        private readonly PositionProtectorService _protector;
-        private readonly OrderCleanerService _cleaner;
         private readonly PredictiveEngineV4ConfirmationService _predict;
         private readonly PositionSupervisorService _supervisor;
-
         private readonly AiStopLossOptimizer _slOpt;
         private readonly AiRiskScalerV2 _riskScaler;
-
         private readonly AiSelfLearningService _learn;
         private readonly AiModelSnapshotService _snapshot;
-
-        private readonly Dictionary<string, DateTime> _lastTfRun = new();
-        private readonly Dictionary<string, DateTime> _lastTrade = new();
-
         private readonly SymbolRegistryService _symbols;
         private readonly AiTimeframeSelectorService _tfSelector;
-        private readonly EngineStateBuilder  _engineState;
-        private readonly EngineStateSnapshotService  _engineStateSnapshot;
-        private readonly ExecutedSignalService _executedSignals;
+        private readonly EngineStateBuilder _engineState;
+        private readonly EngineStateSnapshotService _engineStateSnapshot;
+        private readonly ExecutedSignalService _journal;
         private readonly TradingSessionGate _sessionGate;
         private readonly TradingControlService _tradeCtrl;
-        private readonly Dictionary<string, DateTime> _lastClose = new(StringComparer.OrdinalIgnoreCase);
+        private readonly AccountStateCache _account;
+        private readonly ManagedPositionRegistry _managed;
 
-
-        private static readonly KlineInterval[] TFS = {
-            KlineInterval.OneMinute,
-            KlineInterval.FiveMinutes,
-            KlineInterval.FifteenMinutes,
-            KlineInterval.OneHour,
-            KlineInterval.OneDay
-        };
-
-        private readonly Dictionary<KlineInterval, TimeSpan> _min = new()
-        {
-            {KlineInterval.OneMinute, TimeSpan.FromSeconds(2)},
-            {KlineInterval.FiveMinutes, TimeSpan.FromSeconds(25)},
-            {KlineInterval.FifteenMinutes, TimeSpan.FromSeconds(60)},
-            {KlineInterval.OneHour, TimeSpan.FromMinutes(5)},
-            {KlineInterval.OneDay, TimeSpan.FromMinutes(30)}
-        };
-
+        private readonly Dictionary<string, DateTime> _lastTrade = new(StringComparer.OrdinalIgnoreCase);
         private DateTime _lastQuantTick = DateTime.UtcNow;
+        private DateTime _lastEngineStateSave = DateTime.MinValue;
+        private string? _entriesBlockedReason;
 
         public TradingWorker(
             ILogger<TradingWorker> logger,
-            IOptions<BinanceOptions> binance,
             IOptionsMonitor<TradingOptions> options,
             MarketDataService market,
             StrategyEngine strategy,
@@ -79,8 +70,6 @@ namespace VertexAutoTradeBinance8
             BinanceClientFactory factory,
             LiquidityGuardService liq,
             PositionGuardService guard,
-            PositionProtectorService protector,
-            OrderCleanerService cleaner,
             PredictiveEngineV4ConfirmationService predict,
             AiStopLossOptimizer slOpt,
             AiRiskScalerV2 riskScaler,
@@ -93,13 +82,12 @@ namespace VertexAutoTradeBinance8
             EngineStateSnapshotService engineStateSnapshot,
             ExecutedSignalService executedSignals,
             TradingSessionGate sessionGate,
-            TradingControlService tradeCtrl)
+            TradingControlService tradeCtrl,
+            AccountStateCache account,
+            ManagedPositionRegistry managed)
         {
             _logger = logger;
-
-            _binance = binance.Value;
             _optionsMon = options;
-
             _market = market;
             _strategy = strategy;
             _risk = risk;
@@ -107,203 +95,200 @@ namespace VertexAutoTradeBinance8
             _factory = factory;
             _liq = liq;
             _guard = guard;
-            _protector = protector;
-            _cleaner = cleaner;
             _predict = predict;
             _slOpt = slOpt;
             _riskScaler = riskScaler;
             _supervisor = supervisor;
-
             _learn = learn;
             _snapshot = snapshot;
             _symbols = symbols;
             _tfSelector = tfSelector;
             _engineState = engineState;
             _engineStateSnapshot = engineStateSnapshot;
-            _executedSignals = executedSignals;
+            _journal = executedSignals;
             _sessionGate = sessionGate;
             _tradeCtrl = tradeCtrl;
-            learn.ForceSnapshot();
+            _account = account;
+            _managed = managed;
         }
 
         // ================================================================
-        // MAIN LOOP v6 — QUANT REALTIME ENGINE
-        // ================================================================
-        // ================================================================
-        // MAIN LOOP v6 — QUANT REALTIME ENGINE
+        // MAIN LOOP
         // ================================================================
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
-            await _symbols.LoadAsync(ct);
+            _logger.LogWarning("TradingWorker v7 started — env={env}, data={dir}", _factory.EnvironmentName, VertexPaths.DataDir);
 
-            _logger.LogWarning("TradingWorker v6 QUANT-REALTIME started");
-
-            await EnableHedgeMode();
-
-            // Загрузка AI-снапшота
-            try
+            if (!_factory.HasCredentials)
             {
-                var state = await _snapshot.LoadLatestAsync(ct);
-                if (state != null)
-                    _learn.ImportState(state);
+                _entriesBlockedReason = "API credentials not configured";
+                _logger.LogCritical("[WORKER] {r} — running in OBSERVE-ONLY mode", _entriesBlockedReason);
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "AI snapshot load failed");
-            }
+
+            await SafeStartupAsync(ct);
 
             while (!ct.IsCancellationRequested)
             {
-                await RunQuantRealtimeTick(ct);
-                _sessionGate.LogStatusThrottled();
-
-                foreach (var symbol in _symbols.ActiveSymbols)
+                try
                 {
-                    var m1 = await _market.GetMarketSnapshot(symbol, KlineInterval.OneMinute, ct);
-                    var m5 = await _market.GetMarketSnapshot(symbol, KlineInterval.FiveMinutes, ct);
+                    await RunQuantRealtimeTick(ct);
+                    _sessionGate.LogStatusThrottled();
 
-                    if (m1 == null || m5 == null)
-                        continue;
+                    // 1) Сопровождение всех позиций бота (независимо от ротации символов)
+                    await _supervisor.SuperviseAllAsync(ct);
 
-                    var decision = _tfSelector.SelectTF(m1, m5);
-
-                    KlineInterval? finalTf = decision switch
+                    // 2) Поиск новых входов
+                    foreach (var symbol in _symbols.ActiveSymbols)
                     {
-                        AiTimeframeSelectorService.DominantTF.OneMinute => KlineInterval.OneMinute,
-                        AiTimeframeSelectorService.DominantTF.FiveMinutes => KlineInterval.FiveMinutes,
-                        AiTimeframeSelectorService.DominantTF.Both => KlineInterval.FiveMinutes,
-                        _ => null
-                    };
+                        ct.ThrowIfCancellationRequested();
+                        try
+                        {
+                            var tf = await ProcessSymbol(symbol, ct);
+                            SaveEngineStateThrottled(symbol, tf);
+                        }
+                        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "[WORKER][{symbol}] symbol cycle failed", symbol);
+                        }
 
-                    if (finalTf == null)
-                        continue;
+                        await Task.Delay(25, ct);
+                    }
 
-                    // --- 1) Обработка сигнала
-                    await ProcessSymbol(symbol, finalTf.Value, ct);
-
-                    // --- 2) SUPERVISOR (ставит SL/TP на ВСЕ открытые позиции)
-                    await _supervisor.SuperviseAsync(symbol, null, ct);
-
-                    // --- 3) Engine state (UI)
-                    var engineState = _engineState.Build(symbol, finalTf.Value.ToString());
-                    _engineStateSnapshot.Save(engineState);
-
-                    await Task.Delay(25, ct);
+                    await Task.Delay(250, ct);
                 }
-
-
-                await PeriodicSnapshot(ct);
-                await Task.Delay(80, ct);
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[WORKER] main loop error — retry in 5s");
+                    try { await Task.Delay(5000, ct); } catch { break; }
+                }
             }
+
+            try { await _snapshot.SaveSnapshotAsync(_learn.ExportState(), CancellationToken.None); } catch { }
+            _logger.LogWarning("TradingWorker stopped");
         }
 
-
-        // QUANT REALTIME TICK — каждые 60 секунд
-        // ================================================================
-        private async Task RunQuantRealtimeTick(CancellationToken ct)
+        private async Task SafeStartupAsync(CancellationToken ct)
         {
-            if ((DateTime.UtcNow - _lastQuantTick).TotalSeconds < 60)
-                return;
-
-            _lastQuantTick = DateTime.UtcNow;
+            try { await _symbols.LoadAsync(ct); }
+            catch (Exception ex) { _logger.LogError(ex, "[WORKER] symbol registry load failed"); }
 
             try
             {
-                _logger.LogInformation("QUANT-REALTIME update: AI-learning refresh");
+                var state = await _snapshot.LoadLatestAsync(ct);
+                if (state != null) _learn.ImportState(state);
+                _learn.ForceSnapshot();
+            }
+            catch (Exception ex) { _logger.LogError(ex, "AI snapshot load failed"); }
 
-                var state = _learn.ExportState();
-                await _snapshot.SaveSnapshotAsync(state, ct);
+            if (_factory.HasCredentials)
+            {
+                try { await EnsureHedgeModeAsync(ct); }
+                catch (Exception ex)
+                {
+                    _entriesBlockedReason = "hedge mode check failed";
+                    _logger.LogError(ex, "[WORKER] hedge mode check failed — entries blocked");
+                }
+            }
+        }
+
+        private async Task RunQuantRealtimeTick(CancellationToken ct)
+        {
+            if ((DateTime.UtcNow - _lastQuantTick).TotalSeconds < 60) return;
+            _lastQuantTick = DateTime.UtcNow;
+            try
+            {
+                await _snapshot.SaveSnapshotAsync(_learn.ExportState(), ct);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[QUANT] snapshot save failed");
             }
         }
-         
 
-        /// <summary>
-        /// Re-entry policy (не «слепой» повтор стороны):
-        ///  1) Strategy каждый цикл заново считает side по текущим klines/trend.
-        ///  2) Короткий rest после close на ЛЮБОЙ вход (остыть).
-        ///  3) Длинный rest только на ТУ ЖЕ сторону что был last close.
-        ///  4) Противоположная сторона — можно раньше, если анализ дал сигнал.
-        ///  5) Короткий anti-dupe после open.
-        /// </summary>
-        private bool InCooldown(string symbol, SignalSide? proposedSide = null)
+        private void SaveEngineStateThrottled(string symbol, KlineInterval? tf)
         {
-            var now = DateTime.UtcNow;
-
-            int anyMin = _options.PostCloseCooldownMinutes > 0
-                ? _options.PostCloseCooldownMinutes
-                : 45;
-            int sameMin = _options.SameSideCooldownMinutes > 0
-                ? _options.SameSideCooldownMinutes
-                : 240;
-
-            // --- post-close: side-aware ---
-            if (proposedSide.HasValue)
+            if ((DateTime.UtcNow - _lastEngineStateSave).TotalSeconds < 2) return;
+            _lastEngineStateSave = DateTime.UtcNow;
+            try
             {
-                if (_executedSignals.ShouldBlockReentry(
-                        symbol, proposedSide.Value, anyMin, sameMin, out var why))
-                {
-                    _logger.LogInformation(
-                        "[COOLDOWN][{symbol}] skip re-entry side={side}: {why}",
-                        symbol, proposedSide.Value, why);
-                    return true;
-                }
+                var state = _engineState.Build(symbol, (tf ?? KlineInterval.FiveMinutes).ToString());
+                _engineStateSnapshot.Save(state);
             }
-            else
+            catch (Exception ex)
             {
-                // fallback без side — только короткий any-side rest
-                if (_executedSignals.IsInPostCloseCooldown(symbol, anyMin))
-                    return true;
+                _logger.LogDebug(ex, "[WORKER] engine state save failed");
             }
+        }
 
-            // --- short cooldown after successful OPEN (anti duplicate orders) ---
-            int openCd = _options.CooldownMinutes > 0
-                ? _options.CooldownMinutes
-                : Math.Max(1, _options.CooldownSeconds / 60);
+        // ================================================================
+        // RE-ENTRY POLICY
+        // ================================================================
+        private bool InCooldown(string symbol, SignalSide side, out string why)
+        {
+            why = "";
+            int anyMin = _options.PostCloseCooldownMinutes > 0 ? _options.PostCloseCooldownMinutes : 45;
+            int sameMin = _options.SameSideCooldownMinutes > 0 ? _options.SameSideCooldownMinutes : 240;
 
-            if (_lastTrade.TryGetValue(symbol, out var lastOpen) &&
-                now - lastOpen < TimeSpan.FromMinutes(openCd))
+            if (_journal.ShouldBlockReentry(symbol, side, anyMin, sameMin, out why))
+                return true;
+
+            int openCd = _options.CooldownMinutes > 0 ? _options.CooldownMinutes : Math.Max(1, _options.CooldownSeconds / 60);
+            if (_lastTrade.TryGetValue(symbol, out var lastOpen) && DateTime.UtcNow - lastOpen < TimeSpan.FromMinutes(openCd))
             {
+                why = "anti-duplicate after open";
                 return true;
             }
-
             return false;
         }
 
-        private void MarkTrade(string symbol) =>
-            _lastTrade[symbol] = DateTime.UtcNow;
-
-        private void MarkClose(string symbol) =>
-            _lastClose[symbol] = DateTime.UtcNow;
-
-        // ================================================================
-        // MAIN PER-SYMBOL PROCESSOR v6
-        // ================================================================
-        private async Task ProcessSymbol(string symbol, KlineInterval tf, CancellationToken ct)
+        private KlineInterval ResolveTradingTf(AiTimeframeSelectorService.DominantTF decision)
         {
-            ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏳ RUN", "Получение");
+            var configured = (_options.TimeframeMinutes > 0 ? _options.TimeframeMinutes : 5).ToTimeframeString().ToKlineInterval();
+            var selected = decision == AiTimeframeSelectorService.DominantTF.OneMinute
+                ? KlineInterval.OneMinute
+                : KlineInterval.FiveMinutes;
 
-            IReadOnlyList<BinanceFuturesUsdtKline>? klines;
-            try
-            {
-                klines = await _market.GetKlines(symbol, tf, 200);
-            }
-            catch
-            {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ ERR", "GetKlines");
-                return;
-            }
+            if (selected == KlineInterval.OneMinute && !_options.AllowOneMinuteEntries)
+                selected = KlineInterval.FiveMinutes;
 
-            if (klines == null || klines.Count < 60)
+            // торгуем не мельче настроенного TF
+            return (int)selected >= (int)configured ? selected : configured;
+        }
+
+        // ================================================================
+        // PER-SYMBOL PROCESSOR
+        // ================================================================
+        private async Task<KlineInterval?> ProcessSymbol(string symbol, CancellationToken ct)
+        {
+            // --- TF selection (кэшированные свечи) ---
+            var m1 = await _market.GetMarketSnapshot(symbol, KlineInterval.OneMinute, ct);
+            var m5 = await _market.GetMarketSnapshot(symbol, KlineInterval.FiveMinutes, ct);
+            if (m1 == null || m5 == null) return null;
+
+            var decision = _tfSelector.SelectTF(m1, m5);
+            if (decision == AiTimeframeSelectorService.DominantTF.None)
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, KlineInterval.FiveMinutes, "⏸ FLAT", "TF selector: none");
+                return null;
+            }
+            var tf = ResolveTradingTf(decision);
+
+            ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏳ RUN", "Анализ");
+
+            var raw = await _market.GetKlines(symbol, tf, 201);
+            IReadOnlyList<BinanceFuturesUsdtKline> klines = MarketDataService.DropFormingCandle(raw);
+            if (klines.Count < 60)
             {
                 ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏸ HOLD", "Мало свечей");
-                return;
+                return tf;
             }
 
-            // ------------------ 1. STRATEGY ------------------------
+            // --- 1. STRATEGY ---
             TradeSignal? signal;
             try
             {
@@ -313,243 +298,198 @@ namespace VertexAutoTradeBinance8
             {
                 _logger.LogError(ex, "[STRATEGY ERROR] {symbol} {tf}", symbol, tf);
                 ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ ERR", ex.GetType().Name);
-                return;
+                return tf;
             }
 
             if (signal == null)
             {
                 ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🔴 NO", "Нет сигнала");
-                return;
+                return tf;
             }
 
-            // Cooldown AFTER signal: side уже от стратегии (текущий тренд), не от прошлой сделки
-            if (InCooldown(symbol, signal.Side))
+            // --- 2. RE-ENTRY POLICY ---
+            if (InCooldown(symbol, signal.Side, out var why))
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🕒 CD", "Re-entry hold");
-                return;
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🕒 CD", why);
+                _logger.LogDebug("[COOLDOWN][{symbol}] {why}", symbol, why);
+                return tf;
             }
 
-            // Запрет усреднения / повторного входа на той же стороне
-            if (await HasOpenPositionOnSideAsync(symbol, signal.Side, ct))
+            // --- 3. ONE POSITION PER SYMBOL (fail-closed) ---
+            bool hasPos = await _account.HasAnyPositionAsync(symbol, ct);
+            if (!_account.IsFresh)
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏸ POS", "Already open on side");
-                _logger.LogInformation("[TRADE][{symbol}] skip — already has open position on {side}", symbol, signal.Side);
-                return;
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⚠ API", "positions unknown");
+                return tf;
+            }
+            if (hasPos || _managed.IsManagedAny(symbol))
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏸ POS", "Position open");
+                return tf;
             }
 
-            // ------------------ 2. AI CONFIRM ------------------------
+            // --- 4. AI CONFIRM ---
             var ai = _predict.Decide(symbol, tf, klines, signal);
             if (!ai.Allow)
             {
                 ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟡 AI-BLK", ai.Reason);
-                return;
+                return tf;
             }
 
             decimal riskMult = _riskScaler.Scale(ai.Grade);
             if (riskMult <= 0)
             {
                 ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟡 RISK", "AI block");
-                return;
+                return tf;
             }
 
-            // ------------------ 3. Liquidity Guard -------------------
+            // --- 5. LIQUIDITY GUARD ---
             var liq = _liq.Analyze(symbol, tf, klines, signal.Side, signal.IsSuperSignal);
             if (liq.Block)
             {
                 ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟡 LIQ", liq.Reason.ToString());
-                return;
+                return tf;
             }
 
-            // ------------------ 3b. POSITION GUARD (max 2 entries / symbol) ----------
-            bool wantLong = signal.Side == SignalSide.Buy;
-            var entryDecision = await _guard.EvaluateAsync(symbol, wantLong, signal.IsSuperSignal);
-            if (entryDecision.Block)
-            {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🛡 GUARD", entryDecision.Reason);
-                _logger.LogInformation("[GUARD][{symbol}] skip: {reason}", symbol, entryDecision.Reason);
-                return;
-            }
-
-            // ------------------ 4. RISK-MANAGER v6 --------------------
-            decimal safety = signal?.SafetyRiskMultiplier ?? 1.0m;
-
-
-            decimal qty = await _risk.CalculateSafeQty(signal,
-                signal.Symbol,
-                signal.EntryPrice,
-                signal.StopLoss,
-                riskMult,
-                safety,
-                signal.Leverage ?? 1m,
-                signal.Side,
-                signal.TakeProfits,
-                ct);
-
-
-            if (qty <= 0)
-            {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ QTY=0", "SIZE ZERO");
-                return;
-            }
-
-            // Добор: чуть больше объём (×1.25 / ×1.40 super), но не бесконечные мелкие входы
-            if (entryDecision.IsAdd && entryDecision.QtyMultiplier > 1m)
-            {
-                qty = qty * entryDecision.QtyMultiplier;
-                _logger.LogInformation("[GUARD][{symbol}] ADD size boost ×{m} → qty={q}",
-                    symbol, entryDecision.QtyMultiplier, qty);
-            }
-
-            // ------------------ 5. SL OPTIMIZATION -------------------
+            // --- 6. SL OPTIMIZATION (ДО расчёта объёма!) ---
             signal.StopLoss = _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
-
-            // ------------------ 5b. GLOBAL TRADING ON/OFF (live control file + appsettings) ----------
-            // Primary: trading_control.json (Web UI writes here — no restart needed)
-            // Fallback: Trading:TradingEnabled in appsettings
-            var liveOn = _tradeCtrl.IsTradingEnabled();
-            var cfgOn = _options.TradingEnabled;
-            if (!liveOn || !cfgOn)
+            if (!StopDistanceOk(signal, out var slWhy))
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏸ OFF", liveOn ? "cfg OFF" : "UI OFF");
-                _logger.LogInformation(
-                    "[TRADE][{symbol}] SKIP entry — live={live} cfg={cfg} file={path}",
-                    symbol, liveOn, cfgOn, _tradeCtrl.PathUsed);
-                return;
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟡 SL", slWhy);
+                _logger.LogInformation("[TRADE][{symbol}] skip — {why}", symbol, slWhy);
+                return tf;
             }
 
-            // ------------------ 5c. MAX OPEN POSITIONS (default 4) ---------------
-            var openCount = await CountOpenPositionsAsync(ct);
-            var maxOpen = _options.MaxOpenPositions > 0 ? _options.MaxOpenPositions : 4;
+            // --- 7. GLOBAL GATES ---
+            if (!EntryGatesOpen(out var gate))
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "👁 OBS", gate);
+                _logger.LogInformation("[TRADE][{symbol}] signal {side} ready but entries closed — {gate}", symbol, signal.Side, gate);
+                return tf;
+            }
+
+            int openCount = await _account.CountOpenPositionsAsync(ct);
+            int maxOpen = _options.MaxOpenPositions > 0 ? _options.MaxOpenPositions : 4;
             if (openCount >= maxOpen)
             {
                 ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⛔ MAX", $"Open {openCount}/{maxOpen}");
-                _logger.LogInformation(
-                    "[TRADE][{symbol}] MaxOpenPositions reached ({n}/{max}) — skip entry",
-                    symbol, openCount, maxOpen);
-                return;
+                return tf;
             }
 
-            // ------------------ 6. SESSION GATE (London + NY + early start) ----------
-            // Вне сессий: анализ уже прошёл выше; новый вход запрещён. Supervisor снаружи цикла жив.
-            if (!_sessionGate.IsTradingAllowed(out var sessionReason, out var activeSession))
+            if (await DailyLossLimitHitAsync(ct))
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "👁 OBS", "Session off");
-                _logger.LogInformation(
-                    "[SESSION][{symbol}] signal ready but OBSERVE ONLY — {reason}",
-                    symbol, sessionReason);
-                return;
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⛔ DAY", "Daily loss limit");
+                return tf;
             }
 
-            // ------------------ 7. CLEANUP OLD ORDERS -----------------
-            await _cleaner.CleanupOutdatedOrdersAsync(symbol, signal, ct);
+            var entryDecision = await _guard.EvaluateAsync(symbol, signal.Side == SignalSide.Buy, signal.IsSuperSignal);
+            if (entryDecision.Block)
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🛡 GUARD", entryDecision.Reason);
+                return tf;
+            }
 
-            // ------------------ 8. EXECUTE ORDER ----------------------
-            _logger.LogInformation(
-                "[SESSION][{symbol}] TRADING window active={sess} — executing",
-                symbol, activeSession);
+            // --- 8. POSITION SIZE ---
+            decimal leverage = Math.Clamp(_options.Leverage, 1, 50);
+            decimal qty = await _risk.CalculateSafeQty(signal, signal.Symbol, signal.EntryPrice, signal.StopLoss,
+                riskMult, signal.SafetyRiskMultiplier, leverage, signal.Side, signal.TakeProfits, ct);
+
+            if (qty <= 0)
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ QTY=0", "Size zero");
+                return tf;
+            }
+
+            // --- 9. EXECUTE ---
+            _logger.LogInformation("[TRADE][{symbol}] EXECUTE {side} qty={qty} entry={e} SL={sl} TP={tp}",
+                symbol, signal.Side, qty, signal.EntryPrice, signal.StopLoss, string.Join("/", signal.TakeProfits.Select(x => x.ToString("0.#####"))));
+
             var result = await _executor.ExecuteAsync(signal, qty, ct);
+            _lastTrade[symbol] = DateTime.UtcNow; // и при неудаче — пауза, чтобы не долбить биржу тем же сигналом
             if (!result.Success)
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ ORD", "ORDER ERROR");
-                return;
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ ORD", result.Error ?? "order error");
+                return tf;
             }
 
-            // ------------------ 8. COOLDOWN + entry count -------------
-            MarkTrade(symbol);
             _guard.RegisterSuccessfulEntry(symbol);
-
-            // ------------------ 9. SUPERVISOR -------------------------
             await _supervisor.SuperviseAsync(symbol, signal, ct);
 
-            // ------------------ 10. UI -------------------------------
-            var tag = entryDecision.IsAdd ? "ADD" : "NEW";
-            ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟩 OK", $"{tag} qty={qty:F4}");
- 
+            ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟩 OK", $"{signal.Side} qty={qty}");
+            return tf;
         }
-       
-        // ================================================================
-        // HEDGE MODE (once)
-        // ================================================================
-        private async Task EnableHedgeMode()
-        {
-            using var client = _factory.CreateRestClient();
 
-            var current = await client.UsdFuturesApi.Account.GetPositionModeAsync();
+        private bool StopDistanceOk(TradeSignal s, out string why)
+        {
+            why = "";
+            if (s.EntryPrice <= 0 || s.StopLoss <= 0) { why = "invalid SL"; return false; }
+            bool sideOk = s.Side == SignalSide.Buy ? s.StopLoss < s.EntryPrice : s.StopLoss > s.EntryPrice;
+            if (!sideOk) { why = "SL on wrong side of entry"; return false; }
+
+            decimal pct = Math.Abs(s.EntryPrice - s.StopLoss) / s.EntryPrice * 100m;
+            decimal min = _options.MinStopDistancePercent > 0 ? _options.MinStopDistancePercent : 0.30m;
+            decimal max = _options.MaxStopDistancePercent > 0 ? _options.MaxStopDistancePercent : 6.0m;
+            if (pct < min) { why = $"SL {pct:F2}% < min {min:F2}% (fees)"; return false; }
+            if (pct > max) { why = $"SL {pct:F2}% > max {max:F2}%"; return false; }
+            return true;
+        }
+
+        private bool EntryGatesOpen(out string reason)
+        {
+            if (_entriesBlockedReason != null) { reason = _entriesBlockedReason; return false; }
+
+            if (!_tradeCtrl.IsTradingEnabled()) { reason = "trading OFF (UI)"; return false; }
+            if (!_options.TradingEnabled) { reason = "trading OFF (config)"; return false; }
+
+            if (!_sessionGate.IsTradingAllowed(out var sessionReason, out _))
+            {
+                reason = sessionReason;
+                return false;
+            }
+
+            reason = "";
+            return true;
+        }
+
+        private async Task<bool> DailyLossLimitHitAsync(CancellationToken ct)
+        {
+            if (_options.MaxDailyLossPercent <= 0) return false;
+            var (wallet, _) = await _account.GetBalancesAsync(ct);
+            if (wallet <= 0) return false;
+
+            decimal pnlToday = _journal.GetRealizedPnlTodayUtc();
+            decimal limit = wallet * _options.MaxDailyLossPercent / 100m;
+            if (pnlToday <= -limit)
+            {
+                _logger.LogWarning("[RISK] DAILY STOP: realized today {pnl:F2} ≤ -{lim:F2} USDT — no new entries until 00:00 UTC",
+                    pnlToday, limit);
+                return true;
+            }
+            return false;
+        }
+
+        // ================================================================
+        // HEDGE MODE
+        // ================================================================
+        private async Task EnsureHedgeModeAsync(CancellationToken ct)
+        {
+            var client = _factory.CreateRestClient();
+            var current = await client.UsdFuturesApi.Account.GetPositionModeAsync(ct: ct);
             if (current.Success && current.Data?.IsHedgeMode == true)
             {
                 _logger.LogInformation("Hedge Mode already active.");
                 return;
             }
 
-            var set = await client.UsdFuturesApi.Account.ModifyPositionModeAsync(true);
-            _logger.LogInformation("HedgeMode Set: {res}", set.Success);
+            var set = await client.UsdFuturesApi.Account.ModifyPositionModeAsync(true, ct: ct);
+            if (set.Success)
+            {
+                _logger.LogWarning("Hedge Mode enabled.");
+                return;
+            }
+
+            _entriesBlockedReason = "hedge mode is OFF and cannot be enabled (close open positions first)";
+            _logger.LogCritical("[WORKER] {r}: {err}", _entriesBlockedReason, set.Error);
         }
-
-        // ================================================================
-        // SNAPSHOT SYNC
-        // ================================================================
-        private async Task PeriodicSnapshot(CancellationToken ct)
-        {
-            try
-            {
-                if (DateTime.UtcNow.Second < 2)
-                {
-                    var state = _learn.ExportState();
-                    await _snapshot.SaveSnapshotAsync(state, ct);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Snapshot save error");
-            }
-        }
-
-        // ================================================================
-        // COUNT OPEN FUTURES POSITIONS (all symbols)
-        // ================================================================
-        private async Task<int> CountOpenPositionsAsync(CancellationToken ct)
-        {
-            try
-            {
-                using var client = _factory.CreateRestClient();
-                var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
-                if (!res.Success || res.Data == null)
-                    return 0;
-                return res.Data.Count(p => Math.Abs(p.Quantity) > 0);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[TRADE] CountOpenPositions failed — allow entry (fail-open)");
-                return 0;
-            }
-        }
-
-
-        /// <summary>
-        /// Проверяет, есть ли уже открытая позиция на этой стороне по символу.
-        /// Один вход на сторону — без усреднения.
-        /// </summary>
-        private async Task<bool> HasOpenPositionOnSideAsync(string symbol, SignalSide side, CancellationToken ct)
-        {
-            try
-            {
-                using var client = _factory.CreateRestClient();
-                var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
-                if (!res.Success || res.Data == null)
-                    return false;
-
-                var wantSide = side == SignalSide.Buy ? PositionSide.Long : PositionSide.Short;
-                return res.Data.Any(p =>
-                    p.Symbol == symbol &&
-                    (p.PositionSide == wantSide || p.PositionSide == PositionSide.Both) &&
-                    Math.Abs(p.Quantity) > 0);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[TRADE] HasOpenPositionOnSide failed for {symbol} — allow entry (fail-open)", symbol);
-                return false;
-            }
-        }
-
     }
 }

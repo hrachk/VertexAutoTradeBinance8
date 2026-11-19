@@ -4,6 +4,7 @@ using VertexAutoTradeBinance8.Services;
 namespace VertexAutoTradeBinance8.API.Controllers
 {
     [ApiController]
+    [VertexAutoTradeBinance8.API.Security.RequireApiToken]
     [Route("api/ai/[controller]")]
     public class SelfLearningController : ControllerBase
     {
