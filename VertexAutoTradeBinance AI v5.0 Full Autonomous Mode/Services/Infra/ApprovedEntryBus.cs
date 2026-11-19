@@ -64,7 +64,17 @@ public sealed class ApprovedEntryFileBus : IApprovedEntryPublisher, IApprovedEnt
                 if (list.Count > MaxKeep) list = list.Take(MaxKeep).ToList();
                 var tmp = _path + ".tmp";
                 File.WriteAllText(tmp, System.Text.Json.JsonSerializer.Serialize(list, new System.Text.Json.JsonSerializerOptions { WriteIndented = false }));
-                File.Move(tmp, _path, overwrite: true);
+                // Web reads this file every few seconds. On Windows a rename onto a file that is
+                // open elsewhere throws "Access to the path is denied" — the XAGUSDT approval at
+                // 00:16:38 on 2026-11-19 was lost that way and never reached the Demo book.
+                for (int attempt = 0; ; attempt++)
+                {
+                    try { File.Move(tmp, _path, overwrite: true); break; }
+                    catch (Exception ex) when ((ex is UnauthorizedAccessException || ex is IOException) && attempt < 8)
+                    {
+                        Thread.Sleep(40 * (attempt + 1));
+                    }
+                }
             }
             _log.LogInformation(
                 "[ENTRY-PIPE] APPROVED {sym} {side} qty={q} lev={lev} entry={e} sl={sl}",
@@ -98,7 +108,12 @@ public sealed class ApprovedEntryFileBus : IApprovedEntryPublisher, IApprovedEnt
         if (!File.Exists(_path)) return new List<ApprovedEntry>();
         try
         {
-            var json = File.ReadAllText(_path);
+            // Share read/write/delete so the engine can replace the file while Web reads it.
+            string json;
+            using (var fs = new FileStream(_path, FileMode.Open, FileAccess.Read,
+                       FileShare.ReadWrite | FileShare.Delete))
+            using (var sr = new StreamReader(fs))
+                json = sr.ReadToEnd();
             return System.Text.Json.JsonSerializer.Deserialize<List<ApprovedEntry>>(json) ?? new();
         }
         catch { return new List<ApprovedEntry>(); }

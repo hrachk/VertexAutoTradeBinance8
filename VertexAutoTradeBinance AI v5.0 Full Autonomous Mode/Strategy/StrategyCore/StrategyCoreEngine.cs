@@ -346,7 +346,27 @@ public sealed class StrategyCoreEngine
         return (true, true, "ok");
     }
 
-    /// <summary>Facade first; if thin, direct public REST (bypasses snapshot REST policy).</summary>
+    /// <summary>True when the newest bar opened more than two bar lengths ago (stream stopped updating).</summary>
+    private static bool IsStale(List<BinanceFuturesUsdtKline> bars, TimeSpan bar)
+    {
+        if (bars.Count == 0) return true;
+        var last = bars[^1].OpenTime;
+        if (last.Kind == DateTimeKind.Unspecified) last = DateTime.SpecifyKind(last, DateTimeKind.Utc);
+        return DateTime.UtcNow - last.ToUniversalTime() > bar + bar;
+    }
+
+    private static TimeSpan IntervalSpan(KlineInterval i) => i switch
+    {
+        KlineInterval.OneMinute => TimeSpan.FromMinutes(1),
+        KlineInterval.FiveMinutes => TimeSpan.FromMinutes(5),
+        KlineInterval.FifteenMinutes => TimeSpan.FromMinutes(15),
+        KlineInterval.OneHour => TimeSpan.FromHours(1),
+        KlineInterval.FourHour => TimeSpan.FromHours(4),
+        KlineInterval.OneDay => TimeSpan.FromDays(1),
+        _ => TimeSpan.FromHours(1),
+    };
+
+    /// <summary>Facade first; if thin or stale, direct public REST (bypasses snapshot REST policy).</summary>
     private async Task<List<BinanceFuturesUsdtKline>?> LoadKlinesAsync(string symbol)
     {
         IReadOnlyList<BinanceFuturesUsdtKline>? fromMd = null;
@@ -361,7 +381,16 @@ public sealed class StrategyCoreEngine
         }
 
         if (fromMd != null && fromMd.Count >= MinBars)
-            return fromMd.OrderBy(k => k.OpenTime).ToList();
+        {
+            var ordered = fromMd.OrderBy(k => k.OpenTime).ToList();
+            if (!IsStale(ordered, TimeSpan.FromMinutes(15)))
+                return ordered;
+            // The cache keeps serving the same bars after its WS stream is dropped
+            // ([TRACKED] drop … not in universe). The last closed bar then never changes,
+            // every scan returns same_bar, and CORE goes silent (client_001 19.11 01:00–11:00:
+            // 70 evaluations instead of ~1100). Stale cache → REST.
+            _log.LogInformation("[CORE][{sym}] 15m cache stale (last={t:HH:mm}Z) → REST", symbol, ordered[^1].OpenTime);
+        }
 
         // Direct REST fallback — critical for day-long silence when facade returns 20 bars
         try
@@ -833,7 +862,11 @@ public sealed class StrategyCoreEngine
             {
                 var fromMd = await _md.GetKlinesAsync(symbol, interval, need: need).ConfigureAwait(false);
                 if (fromMd != null && fromMd.Count >= 40)
-                    return fromMd.OrderBy(k => k.OpenTime).ToList();
+                {
+                    var ordered = fromMd.OrderBy(k => k.OpenTime).ToList();
+                    if (!IsStale(ordered, IntervalSpan(interval)))
+                        return ordered;
+                }
             }
         }
         catch { }
