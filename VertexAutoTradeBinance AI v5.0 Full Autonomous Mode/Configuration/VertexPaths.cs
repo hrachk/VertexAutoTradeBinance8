@@ -78,4 +78,51 @@ public static class VertexPaths
         }
         return null;
     }
+
+    /// <summary>
+    /// Однократная миграция данных старых версий (JSON лежали в bin/ рядом с exe):
+    /// копируем в общую папку, только если там файла ещё нет.
+    /// </summary>
+    public static IReadOnlyList<string> MigrateLegacyData(string legacyBaseDir)
+    {
+        var moved = new List<string>();
+        try
+        {
+            if (string.IsNullOrWhiteSpace(legacyBaseDir) ||
+                Path.GetFullPath(legacyBaseDir).TrimEnd(Path.DirectorySeparatorChar) ==
+                Path.GetFullPath(DataDir).TrimEnd(Path.DirectorySeparatorChar))
+                return moved;
+
+            foreach (var name in new[] { "executed_signals.json", "managed_positions.json", "missed_trades.json", "trading_control.json", "engine_state.json" })
+            {
+                var src = Path.Combine(legacyBaseDir, name);
+                var dst = File(name);
+                if (System.IO.File.Exists(src) && !System.IO.File.Exists(dst))
+                {
+                    System.IO.File.Copy(src, dst);
+                    moved.Add(name);
+                }
+            }
+
+            var oldModels = Path.Combine(legacyBaseDir, "ai-models");
+            if (Directory.Exists(oldModels))
+            {
+                var dstDir = AiModelsDir;
+                foreach (var f in Directory.GetFiles(oldModels, "*.json"))
+                {
+                    var dst = Path.Combine(dstDir, Path.GetFileName(f));
+                    if (!System.IO.File.Exists(dst))
+                    {
+                        System.IO.File.Copy(f, dst);
+                        moved.Add("ai-models/" + Path.GetFileName(f));
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // миграция best-effort
+        }
+        return moved;
+    }
 }

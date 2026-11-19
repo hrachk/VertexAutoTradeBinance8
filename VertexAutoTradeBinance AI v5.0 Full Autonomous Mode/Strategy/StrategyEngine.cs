@@ -1172,6 +1172,9 @@ $@"📊 Режим рынка:
                 // оставляем baseSignal как есть
             }
 
+            if (baseSignal == null)
+                return null;
+
             // 7) AI Dynamic Risk Tag — с защитой
             try
             {

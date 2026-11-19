@@ -1,0 +1,185 @@
+@page "/trades"
+@page "/executed-signals"
+@using VertexAutoTradeBinance8.Models
+@using VertexAutoTradeBinance8.Web.Shared.Ui
+@inject ExecutedSignalUiService Journal
+@implements IDisposable
+
+<PageTitle>Vertex · Trade journal</PageTitle>
+
+<div class="vt-page-title">
+    <div>
+        <h1>Trade journal</h1>
+        <p>Все входы бота: исполненные, закрытые, отменённые · реальный PnL с учётом комиссий</p>
+    </div>
+    <div class="vt-page-actions">
+        <input class="vt-input" style="width:160px" placeholder="Symbol…" @bind="symbol" @bind:event="oninput" @bind:after="Apply" />
+        <div class="vt-tabs">
+            @foreach (var p in new[] { "1D", "7D", "30D", "ALL" })
+            {
+                <button class="vt-tab @(period == p ? "active" : "")" @onclick="() => SetPeriod(p)">@p</button>
+            }
+        </div>
+    </div>
+</div>
+
+<div class="vt-row" style="margin-bottom:14px">
+    <div class="vt-tabs">
+        @foreach (var f in new[] { "ALL", "OPEN", "CLOSED", "WIN", "LOSS", "FAILED" })
+        {
+            <button class="vt-tab @(filter == f ? "active" : "")" @onclick="() => SetFilter(f)">@f <span class="dim">@Count(f)</span></button>
+        }
+    </div>
+    <span class="vt-spacer"></span>
+    <span class="vt-hint mono">@rows.Count rows · @Fmt.Local(DateTime.UtcNow, "HH:mm:ss")</span>
+</div>
+
+<div class="vt-kpi-grid" style="margin-bottom:16px">
+    <div class="vt-kpi @(stats.NetPnl >= 0 ? "green" : "red")"><span class="label">Net PnL</span><span class="value">@Fmt.Signed(stats.NetPnl)</span><span class="sub">за период · fees @Fmt.Money(stats.Fees)</span></div>
+    <div class="vt-kpi"><span class="label">Trades</span><span class="value">@stats.Trades</span><span class="sub">@stats.Wins W / @stats.Losses L</span></div>
+    <div class="vt-kpi"><span class="label">Win rate</span><span class="value">@Fmt.Pct(stats.WinRate)</span><span class="sub">закрытые сделки</span></div>
+    <div class="vt-kpi"><span class="label">Profit factor</span><span class="value">@(stats.Trades == 0 ? "—" : stats.ProfitFactor.ToString("0.00"))</span><span class="sub">gross @Fmt.Money(stats.GrossProfit) / @Fmt.Money(Math.Abs(stats.GrossLoss))</span></div>
+    <div class="vt-kpi"><span class="label">Expectancy</span><span class="value @Fmt.Cls(Expectancy)">@Fmt.Signed(Expectancy)</span><span class="sub">USDT / сделка</span></div>
+</div>
+
+<div class="vt-card flush">
+    @if (rows.Count == 0)
+    {
+        <div class="vt-empty"><div class="ico">◎</div><div>Нет записей для выбранного фильтра</div></div>
+    }
+    else
+    {
+        <div class="vt-table-wrap" style="max-height:none">
+            <table class="vt-table">
+                <thead>
+                    <tr>
+                        <th>Opened</th><th>Symbol</th><th>Side</th><th>Status</th>
+                        <th class="r">Entry</th><th class="r">Exit</th><th class="r">SL</th><th class="r">TP1</th>
+                        <th class="r">Qty</th><th class="r">Notional</th><th class="r">PnL</th><th class="r">ROI</th><th>Hold</th><th>Reason</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in rows.Take(500))
+                    {
+                        <tr>
+                            <td class="dim">@Fmt.Local(r.OpenedAt ?? r.Time)</td>
+                            <td class="sym">@r.Symbol</td>
+                            <td><span class="vt-badge @(r.Side == SignalSide.Buy ? "long" : "short")">@(r.Side == SignalSide.Buy ? "LONG" : "SHORT")</span></td>
+                            <td><span class="vt-badge @Badge(r)">@StatusText(r)</span></td>
+                            <td class="r">@Fmt.Price(r.Entry)</td>
+                            <td class="r">@(r.ExitPrice is > 0 ? Fmt.Price(r.ExitPrice.Value) : "—")</td>
+                            <td class="r down">@Fmt.Price(r.StopLoss)</td>
+                            <td class="r up">@(r.TakeProfits.Count > 0 ? Fmt.Price(r.TakeProfits[0]) : "—")</td>
+                            <td class="r">@Fmt.Qty(r.Qty)</td>
+                            <td class="r">@Fmt.Money(r.Notional)</td>
+                            <td class="r @Fmt.Cls(r.PnL ?? 0)">@(r.PnL.HasValue ? Fmt.Signed(r.PnL.Value, 3) : "—")</td>
+                            <td class="r @Fmt.Cls(r.RoiPercent ?? 0)">@(r.RoiPercent.HasValue ? Fmt.SignedPct(r.RoiPercent.Value) : "—")</td>
+                            <td class="dim">@Hold(r)</td>
+                            <td class="dim" style="font-family:var(--vt-font);max-width:260px;overflow:hidden;text-overflow:ellipsis" title="@r.Reason">@(r.CloseReason ?? ShortReason(r.Reason))</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private List<ExecutedSignalRecord> all = new();
+    private List<ExecutedSignalRecord> rows = new();
+    private JournalStats stats = new();
+    private string filter = "ALL", period = "7D", symbol = "";
+    private Timer? _timer;
+
+    private decimal Expectancy => stats.Trades > 0 ? stats.NetPnl / stats.Trades : 0m;
+
+    protected override void OnInitialized()
+    {
+        Reload();
+        _timer = new Timer(_ => { Reload(); InvokeAsync(StateHasChanged); }, null, 6000, 6000);
+    }
+
+    private void Reload()
+    {
+        try { all = Journal.GetAll(); } catch { }
+        Apply();
+    }
+
+    private IEnumerable<ExecutedSignalRecord> InPeriod()
+    {
+        var from = period switch
+        {
+            "1D" => DateTime.UtcNow.Date,
+            "7D" => DateTime.UtcNow.AddDays(-7),
+            "30D" => DateTime.UtcNow.AddDays(-30),
+            _ => DateTime.MinValue
+        };
+        var q = all.Where(x => (x.ClosedAt ?? x.Time) >= from);
+        if (!string.IsNullOrWhiteSpace(symbol))
+            q = q.Where(x => x.Symbol.Contains(symbol.Trim(), StringComparison.OrdinalIgnoreCase));
+        return q;
+    }
+
+    private static bool Match(ExecutedSignalRecord x, string f) => f switch
+    {
+        "OPEN" => x.IsOpen,
+        "CLOSED" => x.IsClosed,
+        "WIN" => x.IsClosed && (x.PnL ?? 0) > 0,
+        "LOSS" => x.IsClosed && (x.PnL ?? 0) <= 0,
+        "FAILED" => x.Status is TradeExecutionStatus.Cancelled or TradeExecutionStatus.PositionError,
+        _ => true
+    };
+
+    private int Count(string f) => InPeriod().Count(x => Match(x, f));
+
+    private void Apply()
+    {
+        var p = InPeriod().ToList();
+        rows = p.Where(x => Match(x, filter)).OrderByDescending(x => x.OpenedAt ?? x.Time).ToList();
+        stats = TerminalDataService.BuildStats(p);
+    }
+
+    private void SetFilter(string f) { filter = f; Apply(); }
+    private void SetPeriod(string p) { period = p; Apply(); }
+
+    private static string StatusText(ExecutedSignalRecord r) => r.Status switch
+    {
+        TradeExecutionStatus.PositionClosedTp => "closed +",
+        TradeExecutionStatus.PositionClosedSl => "closed −",
+        TradeExecutionStatus.PositionClosedManual => "manual",
+        TradeExecutionStatus.PositionOpened => "open",
+        TradeExecutionStatus.OrderCreated => "pending",
+        TradeExecutionStatus.SignalCreated => "signal",
+        TradeExecutionStatus.Cancelled => "not filled",
+        TradeExecutionStatus.PositionError => "error",
+        _ => r.Status.ToString()
+    };
+
+    private static string Badge(ExecutedSignalRecord r) => r.Status switch
+    {
+        TradeExecutionStatus.PositionClosedTp => "ok",
+        TradeExecutionStatus.PositionClosedSl => "err",
+        TradeExecutionStatus.PositionOpened => "info",
+        TradeExecutionStatus.PositionError => "err",
+        TradeExecutionStatus.Cancelled => "neutral",
+        _ => "warn"
+    };
+
+    private static string Hold(ExecutedSignalRecord r)
+    {
+        if (r.OpenedAt == null) return "—";
+        var end = r.ClosedAt ?? (r.IsOpen ? DateTime.UtcNow : (DateTime?)null);
+        if (end == null) return "—";
+        var d = end.Value - r.OpenedAt.Value;
+        return d.TotalHours >= 1 ? $"{(int)d.TotalHours}h {d.Minutes}m" : $"{(int)d.TotalMinutes}m";
+    }
+
+    private static string ShortReason(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason)) return "—";
+        var i = reason.IndexOf('|');
+        return i > 0 ? reason[..i] : reason;
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}

@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using VertexAutoTradeBinance8.Web.Models;
 
 namespace VertexAutoTradeBinance8.Web.Services;
@@ -14,8 +14,10 @@ public class EngineStateService
     {
         _logger = logger;
 
-        FilePath = config["EngineState:Path"]
-                   ?? throw new Exception("EngineState path not found in config");
+        var cfgPath = config["EngineState:Path"];
+        FilePath = string.IsNullOrWhiteSpace(cfgPath)
+            ? VertexAutoTradeBinance8.Configuration.VertexPaths.EngineState
+            : cfgPath;
     }
 
     public EngineStateModel? Load()

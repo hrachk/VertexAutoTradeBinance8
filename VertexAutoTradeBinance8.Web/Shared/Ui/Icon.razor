@@ -1,0 +1,28 @@
+@* Набор линейных SVG-иконок (24x24, stroke). Без внешних зависимостей. *@
+<svg viewBox="0 0 24 24" aria-hidden="true">@((MarkupString)Path)</svg>
+
+@code {
+    [Parameter] public string Name { get; set; } = "dot";
+
+    private string Path => Name switch
+    {
+        "dashboard" => "<rect x='3' y='3' width='7' height='9' rx='1.5'/><rect x='14' y='3' width='7' height='5' rx='1.5'/><rect x='14' y='12' width='7' height='9' rx='1.5'/><rect x='3' y='16' width='7' height='5' rx='1.5'/>",
+        "positions" => "<path d='M3 17l5-5 4 4 8-8'/><path d='M15 8h5v5'/>",
+        "trades" => "<path d='M4 6h16M4 12h16M4 18h10'/>",
+        "orders" => "<rect x='4' y='3' width='16' height='18' rx='2'/><path d='M8 8h8M8 12h8M8 16h5'/>",
+        "market" => "<path d='M4 19V9M9 19V5M14 19v-7M19 19v-4'/>",
+        "engine" => "<circle cx='12' cy='12' r='3'/><path d='M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1'/>",
+        "missed" => "<circle cx='12' cy='12' r='9'/><path d='M5.6 5.6l12.8 12.8'/>",
+        "ai" => "<path d='M12 3l2.4 5.1L20 9l-4 4 1 6-5-2.8L7 19l1-6-4-4 5.6-.9z'/>",
+        "learning" => "<path d='M3 7l9-4 9 4-9 4-9-4z'/><path d='M7 9v5c0 1.7 2.2 3 5 3s5-1.3 5-3V9'/>",
+        "reports" => "<path d='M4 20V4h11l5 5v11z'/><path d='M14 4v6h6M8 15h8M8 11h3'/>",
+        "settings" => "<circle cx='12' cy='12' r='3'/><path d='M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z'/>",
+        "tools" => "<path d='M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z'/>",
+        "logs" => "<path d='M5 4h14v16H5z'/><path d='M8 8h8M8 12h8M8 16h4'/>",
+        "heatmap" => "<rect x='3' y='3' width='8' height='8' rx='1'/><rect x='13' y='3' width='8' height='8' rx='1'/><rect x='3' y='13' width='8' height='8' rx='1'/><rect x='13' y='13' width='8' height='8' rx='1'/>",
+        "power" => "<path d='M12 3v8'/><path d='M6.3 7.3a8 8 0 1011.4 0'/>",
+        "shield" => "<path d='M12 3l8 3v6c0 4.4-3.4 8.4-8 9-4.6-.6-8-4.6-8-9V6z'/>",
+        "clock" => "<circle cx='12' cy='12' r='9'/><path d='M12 7v5l3 2'/>",
+        _ => "<circle cx='12' cy='12' r='3'/>"
+    };
+}

@@ -10,6 +10,10 @@ public class Program
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.InputEncoding = System.Text.Encoding.UTF8;
 
+        var migrated = VertexAutoTradeBinance8.Configuration.VertexPaths.MigrateLegacyData(AppContext.BaseDirectory);
+        if (migrated.Count > 0)
+            Console.WriteLine($"[DATA] migrated legacy files → {VertexAutoTradeBinance8.Configuration.VertexPaths.DataDir}: {string.Join(", ", migrated)}");
+
         using IHost host = Host.CreateDefaultBuilder(args)
             .UseContentRoot(AppContext.BaseDirectory)
             .ConfigureAppConfiguration((ctx, cfg) => cfg.AddVertexConfiguration(ctx.HostingEnvironment.ContentRootPath))
@@ -25,7 +29,7 @@ public class Program
                 });
                 logging.AddProvider(new FileLoggerProvider("bot"));
             })
-            .UseWindowsServiceIfAvailable()
+            .UseWindowsService(o => o.ServiceName = "VertexAutoTradeBot")
             .ConfigureServices((ctx, services) =>
             {
                 services.Configure<HostOptions>(o =>
@@ -43,10 +47,4 @@ public class Program
 
         await host.RunAsync();
     }
-}
-
-internal static class HostBuilderWindowsServiceExtensions
-{
-    /// <summary>Заглушка: в .NET 8 без пакета WindowsServices — запуск как консоль / через NSSM / systemd.</summary>
-    public static IHostBuilder UseWindowsServiceIfAvailable(this IHostBuilder b) => b;
 }

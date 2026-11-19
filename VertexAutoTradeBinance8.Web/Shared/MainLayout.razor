@@ -1,143 +1,102 @@
 @inherits LayoutComponentBase
-@inject EngineStateService EngineService
+@using VertexAutoTradeBinance8.Web.Shared.Ui
+@inject TerminalDataService Data
 @implements IDisposable
 
 <div class="vt-shell">
-    <header class="vt-header">
+    <aside class="vt-sidebar">
         <div class="vt-brand">
             <div class="vt-brand-mark">V</div>
-            <div>
-                VERTEX <span class="sub">TERMINAL</span>
-            </div>
+            <div>VERTEX<span class="sub">AUTOTRADE · USDⓈ-M</span></div>
         </div>
+        <NavMenu />
+        <div class="vt-sidebar-foot">
+            <div class="vt-row" style="gap:6px;margin-bottom:6px">
+                <span class="vt-badge @(snap?.Environment == "Live" ? "danger" : "info")">@(snap?.Environment ?? "—")</span>
+                <span class="vt-badge @(snap?.EngineAlive == true ? "ok" : "warn")">engine @(snap?.EngineAlive == true ? "online" : "offline")</span>
+            </div>
+            Vertex v6 · algo SL/TP · AI regime<br />
+            <span class="mono">@DateTime.UtcNow.ToString("HH:mm") UTC</span>
+        </div>
+    </aside>
 
+    <header class="vt-header">
         <div class="vt-header-center">
             <div class="vt-header-stat">
-                <span class="lbl">Balance</span>
-                <span class="val">@FormatMoney(balance) USDT</span>
+                <span class="lbl">Equity</span>
+                <span class="val">@(snap == null ? "—" : Fmt.Money(snap.Equity))</span>
             </div>
             <div class="vt-header-stat">
-                <span class="lbl">Symbol</span>
-                <span class="val">@(string.IsNullOrEmpty(symbol) ? "—" : symbol)</span>
+                <span class="lbl">Available</span>
+                <span class="val">@(snap == null ? "—" : Fmt.Money(snap.Available))</span>
             </div>
             <div class="vt-header-stat">
-                <span class="lbl">Regime</span>
-                <span class="val">@(string.IsNullOrEmpty(regime) ? "—" : regime)</span>
+                <span class="lbl">Unrealized</span>
+                <span class="val @Fmt.Cls(snap?.Unrealized ?? 0)">@(snap == null ? "—" : Fmt.Signed(snap.Unrealized))</span>
             </div>
             <div class="vt-header-stat">
-                <span class="lbl">Confidence</span>
-                <span class="val">@confidence%</span>
+                <span class="lbl">Today</span>
+                <span class="val @Fmt.Cls(snap?.Stats.TodayPnl ?? 0)">@(snap == null ? "—" : Fmt.Signed(snap.Stats.TodayPnl))</span>
+            </div>
+            <div class="vt-header-stat">
+                <span class="lbl">Positions</span>
+                <span class="val">@(snap?.Positions.Count ?? 0)</span>
             </div>
         </div>
 
         <div class="vt-header-right">
-            <span class="vt-pill @statusClass">
-                <span class="dot"></span>
-                @statusText
+            <span class="vt-pill @(snap?.SessionOpen == true ? "info" : "warn")" title="@snap?.SessionReason">
+                <span class="dot"></span>@(snap?.SessionOpen == true ? "SESSION" : "OBSERVE")
             </span>
-            <span class="vt-pill" title="Last engine snapshot">
-                ⏱ @lastUpdateText
-            </span>
+
+            @if (confirmToggle)
+            {
+                <span class="vt-pill warn">Подтвердить?</span>
+                <button class="vt-btn sm @(snap?.TradingEnabled == true ? "danger" : "success")" @onclick="ToggleTrading">Да</button>
+                <button class="vt-btn sm ghost" @onclick="() => confirmToggle = false">Нет</button>
+            }
+            else
+            {
+                <button class="vt-pill @(snap?.TradingEnabled == true ? "live" : "danger")" style="cursor:pointer" @onclick="() => confirmToggle = true"
+                        title="Глобальный выключатель новых входов (сопровождение позиций продолжает работать)">
+                    <span class="dot"></span>@(snap?.TradingEnabled == true ? "TRADING ON" : "TRADING OFF")
+                </button>
+            }
         </div>
     </header>
 
-    <aside class="vt-sidebar">
-        <NavMenu />
-        <div class="vt-sidebar-foot">
-            VertexAutoTrade · Futures USD-M<br />
-            Algo SL/TP · AI Regime
-        </div>
-    </aside>
-
     <main class="vt-main">
+        @if (snap != null && !snap.ApiOk)
+        {
+            <div class="vt-alert danger"><b>Нет данных биржи.</b>&nbsp;@snap.ApiError</div>
+        }
         @Body
     </main>
 </div>
 
 @code {
-    private System.Threading.Timer? _timer;
-    private decimal balance;
-    private string symbol = "";
-    private string regime = "";
-    private decimal confidence;
-    private string statusText = "OFFLINE";
-    private string statusClass = "danger";
-    private string lastUpdateText = "—";
+    private TerminalSnapshot? snap;
+    private Timer? _timer;
+    private bool confirmToggle;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        RefreshHeader();
-        _timer = new System.Threading.Timer(_ =>
-        {
-            InvokeAsync(() =>
-            {
-                RefreshHeader();
-                StateHasChanged();
-            });
-        }, null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+        await Refresh();
+        _timer = new Timer(async _ => { await Refresh(); await InvokeAsync(StateHasChanged); }, null, 5000, 5000);
     }
 
-    private void RefreshHeader()
+    private async Task Refresh()
     {
-        try
-        {
-            var s = EngineService.Load();
-            if (s == null)
-            {
-                statusText = "NO DATA";
-                statusClass = "warn";
-                lastUpdateText = "—";
-                return;
-            }
-
-            balance = s.BalanceUsdt;
-            symbol = s.Symbol ?? "";
-            regime = string.IsNullOrWhiteSpace(s.SmartRegime) ? (s.MarketRegime ?? "") : s.SmartRegime;
-            confidence = s.Confidence;
-
-            var st = (s.Status ?? "").Trim();
-            if (string.IsNullOrEmpty(st))
-            {
-                statusText = "IDLE";
-                statusClass = "warn";
-            }
-            else if (st.Contains("RUN", StringComparison.OrdinalIgnoreCase) ||
-                     st.Contains("ACTIVE", StringComparison.OrdinalIgnoreCase) ||
-                     st.Contains("OK", StringComparison.OrdinalIgnoreCase))
-            {
-                statusText = st.ToUpperInvariant();
-                statusClass = "live";
-            }
-            else if (st.Contains("ERR", StringComparison.OrdinalIgnoreCase) ||
-                     st.Contains("FAIL", StringComparison.OrdinalIgnoreCase) ||
-                     st.Contains("STOP", StringComparison.OrdinalIgnoreCase))
-            {
-                statusText = st.ToUpperInvariant();
-                statusClass = "danger";
-            }
-            else
-            {
-                statusText = st.ToUpperInvariant();
-                statusClass = "warn";
-            }
-
-            var age = DateTime.UtcNow - s.LastUpdate.ToUniversalTime();
-            if (age.TotalSeconds < 0) age = TimeSpan.Zero;
-            if (age.TotalSeconds < 90)
-                lastUpdateText = $"{(int)age.TotalSeconds}s ago";
-            else if (age.TotalMinutes < 60)
-                lastUpdateText = $"{(int)age.TotalMinutes}m ago";
-            else
-                lastUpdateText = s.LastUpdate.ToLocalTime().ToString("HH:mm:ss");
-        }
-        catch
-        {
-            statusText = "ERROR";
-            statusClass = "danger";
-        }
+        try { snap = await Data.GetAsync(); } catch { }
     }
 
-    private static string FormatMoney(decimal v) => v.ToString("0.##");
+    private async Task ToggleTrading()
+    {
+        confirmToggle = false;
+        var next = !(snap?.TradingEnabled ?? false);
+        Data.Control.SetTradingEnabled(next, "web-header");
+        snap = await Data.GetAsync(force: true);
+    }
 
     public void Dispose() => _timer?.Dispose();
 }

@@ -1,0 +1,20 @@
+@using System.Globalization
+<svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none">
+    @if (!string.IsNullOrEmpty(_d))
+    {
+        <path d="@_d" fill="none" stroke="@(Up ? "#19c37d" : "#f0465a")" stroke-width="1.6" vector-effect="non-scaling-stroke" />
+    }
+</svg>
+@code {
+    [Parameter] public IReadOnlyList<decimal> Values { get; set; } = Array.Empty<decimal>();
+    private string _d = "";
+    private bool Up => Values.Count < 2 || Values[^1] >= Values[0];
+    protected override void OnParametersSet()
+    {
+        if (Values.Count < 2) { _d = ""; return; }
+        decimal min = Values.Min(), max = Values.Max();
+        if (max == min) max = min + 1;
+        var pts = Values.Select((v, i) => $"{(100.0 * i / (Values.Count - 1)).ToString("0.#", CultureInfo.InvariantCulture)},{(30 - (double)((v - min) / (max - min)) * 28 - 1).ToString("0.#", CultureInfo.InvariantCulture)}");
+        _d = "M" + string.Join(" L", pts);
+    }
+}

@@ -1,235 +1,200 @@
 @page "/"
 @using VertexAutoTradeBinance8.Models
-@using VertexAutoTradeBinance8.Web.Models
-@using VertexAutoTradeBinance8.Web.Services
-@inject EngineStateService EngineService
-@inject ExecutedSignalUiService ExecutedUi
-@inject MissedTradeFileService MissedService
+@using VertexAutoTradeBinance8.Configuration
+@using VertexAutoTradeBinance8.Web.Shared.Ui
+@inject TerminalDataService Data
+@inject TradingOptions Opt
 @implements IDisposable
+
+<PageTitle>Vertex · Dashboard</PageTitle>
 
 <div class="vt-page-title">
     <div>
-        <h1>Trading Terminal</h1>
-        <p>Live overview · engine · risk · recent activity</p>
+        <h1>Dashboard</h1>
+        <p>Портфель, риск и активность бота · обновление каждые 5 с</p>
     </div>
-    <div style="display:flex;gap:8px;">
-        <span class="vt-badge ok">auto 5s</span>
-        <a class="vt-btn primary" href="settings">⚙ Settings</a>
+    <div class="vt-page-actions">
+        <span class="vt-hint mono">@(s == null ? "" : Fmt.Local(s.AtUtc, "HH:mm:ss"))</span>
+        <a class="vt-btn sm" href="trades">Журнал</a>
+        <a class="vt-btn sm primary" href="positions">Позиции</a>
     </div>
 </div>
 
-<div class="vt-status-strip">
-    @if (state != null)
-    {
-        <span class="vt-badge @(state.LiquidityDanger ? "err" : "ok")">
-            Liquidity @(state.LiquidityDanger ? "DANGER" : "OK")
-        </span>
-        <span class="vt-badge @(state.SoftEntry ? "warn" : "neutral")">
-            SoftEntry @(state.SoftEntry ? "ON" : "OFF")
-        </span>
-        <span class="vt-badge @(state.BlockedByLiquidity ? "err" : "ok")">
-            @(state.BlockedByLiquidity ? "Blocked by liquidity" : "Entries allowed")
-        </span>
-        <span class="vt-badge info">@state.Mode</span>
-        <span class="vt-badge neutral">TF @state.Timeframe</span>
-    }
-    else
-    {
-        <span class="vt-badge warn">Waiting for engine_state.json…</span>
-    }
-</div>
+@if (s == null)
+{
+    <div class="vt-card"><div class="vt-empty">Загрузка…</div></div>
+}
+else
+{
+    var st = s.Stats;
+    var dailyLimit = s.Wallet * Opt.MaxDailyLossPercent / 100m;
+    var dailyUsed = st.TodayPnl < 0 && dailyLimit > 0 ? Math.Min(1m, -st.TodayPnl / dailyLimit) : 0m;
+    var maxOpen = Opt.MaxOpenPositions > 0 ? Opt.MaxOpenPositions : 4;
 
-<div class="vt-grid vt-grid-4" style="margin-bottom:14px;">
-    <div class="vt-card tight">
-        <div class="vt-kpi yellow">
-            <span class="label">Balance</span>
-            <span class="value">@Fmt(state?.BalanceUsdt ?? 0)</span>
-            <span class="sub">USDT futures wallet</span>
-        </div>
-    </div>
-    <div class="vt-card tight">
-        <div class="vt-kpi blue">
-            <span class="label">Active Symbol</span>
-            <span class="value" style="font-size:18px;">@(state?.Symbol ?? "—")</span>
-            <span class="sub">@regimeText</span>
-        </div>
-    </div>
-    <div class="vt-card tight">
-        <div class="vt-kpi @(slope >= 0 ? "green" : "red")">
-            <span class="label">Slope / Vol</span>
-            <span class="value">@Fmt(slope)%</span>
-            <span class="sub">vol @Fmt(vol)% · conf @Fmt(conf)%</span>
-        </div>
-    </div>
-    <div class="vt-card tight">
+    <div class="vt-kpi-grid" style="margin-bottom:16px">
         <div class="vt-kpi">
-            <span class="label">Today activity</span>
-            <span class="value">@executedCount</span>
-            <span class="sub">@missedCount missed · engine pulse</span>
+            <span class="label">Equity</span>
+            <span class="value">@Fmt.Money(s.Equity)</span>
+            <span class="sub">wallet @Fmt.Money(s.Wallet) · USDT</span>
+            <Sparkline Values="@spark" />
         </div>
-    </div>
-</div>
-
-<div class="vt-grid vt-grid-2" style="margin-bottom:14px;">
-    <div class="vt-card">
-        <div class="vt-card-header">
-            <div class="vt-card-title">Engine snapshot</div>
-            <span class="vt-badge neutral">@((state?.LastUpdate.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "—")</span>
+        <div class="vt-kpi @(st.NetPnl >= 0 ? "green" : "red")">
+            <span class="label">Net PnL</span>
+            <span class="value">@Fmt.Signed(st.NetPnl)</span>
+            <span class="sub">7d @Fmt.Signed(st.WeekPnl) · fees @Fmt.Money(st.Fees)</span>
         </div>
-        @if (state == null)
-        {
-            <div class="vt-empty"><div class="ico">◎</div>Нет данных от движка. Проверь EngineState path в appsettings.</div>
-        }
-        else
-        {
-            <table class="vt-table">
-                <tbody>
-                    <tr><td class="sym">Status</td><td>@state.Status</td></tr>
-                    <tr><td class="sym">Mode</td><td>@state.Mode</td></tr>
-                    <tr><td class="sym">Base regime</td><td>@state.MarketRegime</td></tr>
-                    <tr><td class="sym">Smart regime</td><td>@state.SmartRegime</td></tr>
-                    <tr><td class="sym">Slope</td><td>@state.Slope</td></tr>
-                    <tr><td class="sym">Volatility</td><td>@state.Volatility</td></tr>
-                    <tr><td class="sym">Confidence</td><td>@state.Confidence %</td></tr>
-                    <tr><td class="sym">Liquidity reason</td><td>@(string.IsNullOrEmpty(state.LiquidityReason) ? "—" : state.LiquidityReason)</td></tr>
-                </tbody>
-            </table>
-        }
+        <div class="vt-kpi @(st.TodayPnl >= 0 ? "green" : "red")">
+            <span class="label">Today</span>
+            <span class="value">@Fmt.Signed(st.TodayPnl)</span>
+            <span class="sub">@st.TodayTrades сделок · UTC день</span>
+        </div>
+        <div class="vt-kpi">
+            <span class="label">Win rate</span>
+            <span class="value">@Fmt.Pct(st.WinRate)</span>
+            <span class="sub">@st.Wins W / @st.Losses L · @st.Trades всего</span>
+        </div>
+        <div class="vt-kpi @(st.ProfitFactor >= 1.3m ? "green" : st.ProfitFactor >= 1m ? "yellow" : "red")">
+            <span class="label">Profit factor</span>
+            <span class="value">@(st.Trades == 0 ? "—" : st.ProfitFactor.ToString("0.00"))</span>
+            <span class="sub">avg W @Fmt.Signed(st.AvgWin) · avg L @Fmt.Signed(st.AvgLoss)</span>
+        </div>
+        <div class="vt-kpi red">
+            <span class="label">Max drawdown</span>
+            <span class="value">@Fmt.Money(st.MaxDrawdown)</span>
+            <span class="sub">по реализованному PnL</span>
+        </div>
     </div>
 
-    <div class="vt-card">
-        <div class="vt-card-header">
-            <div class="vt-card-title">Quick actions</div>
+    <div class="vt-grid vt-grid-12" style="margin-bottom:16px">
+        <div class="vt-card span-8">
+            <div class="vt-card-header">
+                <div class="vt-card-title"><span class="dot"></span>Equity curve · realized</div>
+                <span class="vt-badge @(st.NetPnl >= 0 ? "ok" : "err")">@Fmt.Signed(st.NetPnl) USDT</span>
+            </div>
+            <EquityChart Points="@st.Curve" Height="250" />
         </div>
-        <div style="display:grid;gap:10px;">
-            <a class="vt-btn" href="engine">◎ Open full engine state</a>
-            <a class="vt-btn" href="executed-signals">↗ Executed signals</a>
-            <a class="vt-btn" href="missed-trades">⊘ Missed trades / signals</a>
-            <a class="vt-btn" href="ai-learning">✎ AI learning stats</a>
-            <a class="vt-btn" href="reports">▦ PnL & reports</a>
-            <a class="vt-btn primary" href="settings">⚙ Risk & strategy settings</a>
-        </div>
-        <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--vt-border);">
-            <div class="vt-label">System health</div>
-            <div class="vt-meter" style="margin-top:8px;"><span style="width:@healthPct%"></span></div>
-            <div class="vt-hint" style="margin-top:8px;">@healthText</div>
-        </div>
-    </div>
-</div>
 
-<div class="vt-card">
-    <div class="vt-card-header">
-        <div class="vt-card-title">Recent executed signals</div>
-        <a href="executed-signals" class="vt-btn ghost">View all →</a>
-    </div>
-    @if (recent.Count == 0)
-    {
-        <div class="vt-empty"><div class="ico">↗</div>Пока нет исполненных сигналов</div>
-    }
-    else
-    {
-        <div class="vt-table-wrap">
-            <table class="vt-table">
-                <thead>
-                    <tr>
-                        <th>Time</th>
-                        <th>Symbol</th>
-                        <th>Side</th>
-                        <th>Qty</th>
-                        <th>Notional</th>
-                        <th>Status</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var r in recent)
-                    {
-                        <tr>
-                            <td>@r.Time.ToLocalTime().ToString("HH:mm:ss")</td>
-                            <td class="sym">@r.Symbol</td>
-                            <td class="@(r.Side?.Contains("Buy", StringComparison.OrdinalIgnoreCase)==true ? "pos-long" : "pos-short")">@r.Side</td>
-                            <td>@r.Qty</td>
-                            <td>@Fmt(r.Notional)</td>
-                            <td><span class="vt-badge info">@r.Status</span></td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
+        <div class="vt-card span-4">
+            <div class="vt-card-header">
+                <div class="vt-card-title"><span class="dot"></span>Risk & engine</div>
+                <span class="vt-badge @(s.EngineAlive ? "ok" : "warn")">@(s.EngineAlive ? "online" : "offline")</span>
+            </div>
+
+            <div class="vt-stack" style="gap:14px">
+                <div class="vt-row"><span class="muted">Trading</span><span class="vt-spacer"></span>
+                    <span class="vt-badge @(s.TradingEnabled ? "ok" : "err")">@(s.TradingEnabled ? "ON" : "OFF")</span></div>
+                <div class="vt-row"><span class="muted">Session</span><span class="vt-spacer"></span>
+                    <span class="vt-badge @(s.SessionOpen ? "info" : "warn")" title="@s.SessionReason">@(s.SessionOpen ? "open" : "observe")</span></div>
+                <div class="vt-row"><span class="muted">Engine heartbeat</span><span class="vt-spacer"></span>
+                    <span class="mono">@Fmt.Ago(s.EngineHeartbeat) ago</span></div>
+                <div class="vt-row"><span class="muted">Last scan</span><span class="vt-spacer"></span>
+                    <span class="mono">@(string.IsNullOrEmpty(s.EngineSymbol) ? "—" : s.EngineSymbol) · @s.EngineRegime</span></div>
+
+                <div>
+                    <div class="vt-row" style="margin-bottom:6px"><span class="muted">Open positions</span><span class="vt-spacer"></span>
+                        <span class="mono">@s.Positions.Count / @maxOpen</span></div>
+                    <div class="vt-meter"><span style="width:@(Math.Min(100, s.Positions.Count * 100 / Math.Max(1, maxOpen)))%"></span></div>
+                </div>
+                <div>
+                    <div class="vt-row" style="margin-bottom:6px"><span class="muted">Daily loss limit (@Opt.MaxDailyLossPercent%)</span><span class="vt-spacer"></span>
+                        <span class="mono">@Fmt.Money(Math.Max(0, -st.TodayPnl)) / @Fmt.Money(dailyLimit)</span></div>
+                    <div class="vt-meter red"><span style="width:@((int)(dailyUsed * 100))%"></span></div>
+                </div>
+                <div class="vt-row"><span class="muted">Risk / trade</span><span class="vt-spacer"></span>
+                    <span class="mono">@Opt.BaseRiskPercent% (max @Opt.MaxRiskPercent%) · @(Opt.Leverage)x</span></div>
+            </div>
         </div>
-    }
-</div>
+    </div>
+
+    <div class="vt-grid vt-grid-12">
+        <div class="vt-card flush span-7">
+            <div class="vt-card-header">
+                <div class="vt-card-title"><span class="dot"></span>Open positions</div>
+                <a class="vt-btn sm ghost" href="positions">Все →</a>
+            </div>
+            @if (s.Positions.Count == 0)
+            {
+                <div class="vt-empty"><div>Нет открытых позиций</div><div class="vt-hint">Бот ищет сетапы по активным символам</div></div>
+            }
+            else
+            {
+                <div class="vt-table-wrap">
+                    <table class="vt-table">
+                        <thead><tr><th>Symbol</th><th>Side</th><th class="r">Size</th><th class="r">Entry</th><th class="r">Mark</th><th class="r">uPnL</th><th class="r">R</th><th>Stage</th></tr></thead>
+                        <tbody>
+                            @foreach (var p in s.Positions)
+                            {
+                                <tr>
+                                    <td class="sym">@p.Symbol @if (!p.Managed) { <span class="vt-badge neutral" style="margin-left:6px">manual</span> }</td>
+                                    <td><span class="vt-badge @(p.IsLong ? "long" : "short")">@p.Side @(p.Leverage)x</span></td>
+                                    <td class="r">@Fmt.Money(p.Notional)</td>
+                                    <td class="r">@Fmt.Price(p.Entry)</td>
+                                    <td class="r">@Fmt.Price(p.Mark)</td>
+                                    <td class="r @Fmt.Cls(p.UnrealizedPnl)">@Fmt.Signed(p.UnrealizedPnl)</td>
+                                    <td class="r @Fmt.Cls(p.RMultiple ?? 0)">@(p.RMultiple?.ToString("0.00") ?? "—")</td>
+                                    <td><span class="vt-stage"><i class="@(p.Stage >= 0 && p.Managed ? "on" : "")"></i><i class="@(p.Stage >= 1 ? "on" : "")"></i><i class="@(p.Stage >= 2 ? "on" : "")"></i></span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <div class="vt-card flush span-5">
+            <div class="vt-card-header">
+                <div class="vt-card-title"><span class="dot"></span>Recent closes</div>
+                <a class="vt-btn sm ghost" href="trades">Журнал →</a>
+            </div>
+            @if (s.RecentClosed.Count == 0)
+            {
+                <div class="vt-empty">Закрытых сделок пока нет</div>
+            }
+            else
+            {
+                <div class="vt-table-wrap">
+                    <table class="vt-table">
+                        <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th class="r">PnL</th><th>Exit</th></tr></thead>
+                        <tbody>
+                            @foreach (var r in s.RecentClosed)
+                            {
+                                <tr>
+                                    <td class="dim">@Fmt.Local(r.EffectiveCloseTime)</td>
+                                    <td class="sym">@r.Symbol</td>
+                                    <td><span class="vt-badge @(r.Side == SignalSide.Buy ? "long" : "short")">@(r.Side == SignalSide.Buy ? "L" : "S")</span></td>
+                                    <td class="r @Fmt.Cls(r.PnL ?? 0)">@Fmt.Signed(r.PnL ?? 0)</td>
+                                    <td class="dim" style="font-family:var(--vt-font)">@(r.CloseReason ?? r.Status.ToString())</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    </div>
+}
 
 @code {
-    private EngineStateModel? state;
-    private System.Threading.Timer? _timer;
-    private int executedCount;
-    private int missedCount;
-    private decimal slope, vol, conf;
-    private string regimeText = "—";
-    private int healthPct = 30;
-    private string healthText = "Waiting for engine…";
-    private List<ExecutedSignalRow> recent = new();
+    private TerminalSnapshot? s;
+    private List<decimal> spark = new();
+    private Timer? _timer;
 
-    
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        Refresh();
-        _timer = new System.Threading.Timer(
-            _ => InvokeAsync(() => { Refresh(); StateHasChanged(); }),
-            null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+        await Load();
+        _timer = new Timer(async _ => { await Load(); await InvokeAsync(StateHasChanged); }, null, 5000, 5000);
     }
 
-    private void Refresh()
+    private async Task Load()
     {
-        state = EngineService.Load();
-        slope = state?.Slope ?? 0;
-        vol = state?.Volatility ?? 0;
-        conf = state?.Confidence ?? 0;
-        regimeText = state == null ? "—" :
-            $"{state.SmartRegime} · {state.MarketRegime}";
-
         try
         {
-            var list = ExecutedUi.GetAll().OrderByDescending(x => x.Time).Take(8).ToList();
-            recent = list.Select(x => new ExecutedSignalRow
-            {
-                Time = x.Time,
-                Symbol = x.Symbol,
-                Side = x.Side.ToString(),
-                Qty = x.Qty,
-                Notional = x.Notional,
-                Status = x.Status.ToString()
-            }).ToList();
-            executedCount = list.Count;
+            s = await Data.GetAsync();
+            var curve = s.Stats.Curve;
+            spark = curve.Skip(Math.Max(0, curve.Count - 40)).Select(x => x.equity).ToList();
         }
-        catch { recent = new(); executedCount = 0; }
-
-        try { missedCount = MissedService.Load().Count; } catch { missedCount = 0; }
-
-        if (state == null)
-        {
-            healthPct = 20;
-            healthText = "Engine snapshot missing — check path C:\\VertexShared\\engine_state.json";
-        }
-        else
-        {
-            var age = DateTime.UtcNow - state.LastUpdate.ToUniversalTime();
-            if (age.TotalMinutes < 2) { healthPct = 95; healthText = "Engine live · snapshot fresh"; }
-            else if (age.TotalMinutes < 10) { healthPct = 70; healthText = "Engine snapshot aging"; }
-            else { healthPct = 40; healthText = "Engine snapshot stale — is bot running?"; }
-            if (state.LiquidityDanger) { healthPct = Math.Min(healthPct, 55); healthText += " · liquidity risk"; }
-        }
+        catch { }
     }
 
-    private static string Fmt(decimal v) => v.ToString("0.##");
-    public void Dispose() { try { _timer?.Dispose(); } catch { } }
-
-    private class ExecutedSignalRow
-    {
-        public DateTime Time { get; set; }
-        public string Symbol { get; set; } = "";
-        public string? Side { get; set; }
-        public decimal Qty { get; set; }
-        public decimal Notional { get; set; }
-        public string Status { get; set; } = "";
-    }
+    public void Dispose() => _timer?.Dispose();
 }
