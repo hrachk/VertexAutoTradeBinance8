@@ -141,13 +141,29 @@ public sealed class StrategyCoreEngine
         _ = EvaluateIfQualityAsync(sym);
     }
 
+    // The WS close path evaluates almost every bar before the 45s scan reaches it, so the
+    // scan only ever printed reasons=[same_bar:28] and the real verdicts were invisible.
+    // Collect them here and print them with the next scan.
+    private readonly ConcurrentDictionary<string, int> _wsReasons = new(StringComparer.OrdinalIgnoreCase);
+    private int _wsEvaluated, _wsEmitted;
+
     private async Task EvaluateIfQualityAsync(string symbol)
     {
         try
         {
             if (!await IsQualitySymbolAsync(symbol).ConfigureAwait(false))
                 return;
-            await EvaluateAsync(symbol).ConfigureAwait(false);
+            var (ev, em, reason) = await EvaluateAsync(symbol).ConfigureAwait(false);
+            if (ev) Interlocked.Increment(ref _wsEvaluated);
+            if (em) Interlocked.Increment(ref _wsEmitted);
+            if (ev && !string.IsNullOrEmpty(reason))
+            {
+                var key = reason;
+                int colon = key.IndexOf(':');
+                if (colon > 0) key = key.Substring(0, colon);
+                _wsReasons.AddOrUpdate(key, 1, (_, c) => c + 1);
+                _log.LogInformation("[CORE][EVAL][{sym}] {r}", symbol, reason);
+            }
         }
         catch (Exception ex)
         {
@@ -176,6 +192,8 @@ public sealed class StrategyCoreEngine
                 try
                 {
                     var (ev, em, reason) = await EvaluateAsync(sym).ConfigureAwait(false);
+                    if (ev && !em && !string.IsNullOrEmpty(reason))
+                        _log.LogInformation("[CORE][EVAL][{sym}] {r}", sym, reason);
                     if (ev) evaluated++;
                     if (em) emitted++;
                     if (reason == "thin_klines") thin++;
@@ -202,6 +220,17 @@ public sealed class StrategyCoreEngine
             int freshAttempts = batch.Count - sameBar - cooldown;
             if (emitted == 0 && freshAttempts > 0) _zeroEmitStreak++;
             else if (emitted > 0) _zeroEmitStreak = 0;
+
+            int wsEv = Interlocked.Exchange(ref _wsEvaluated, 0);
+            int wsEm = Interlocked.Exchange(ref _wsEmitted, 0);
+            if (wsEv > 0)
+            {
+                var snap = _wsReasons.ToArray();
+                _wsReasons.Clear();
+                _log.LogInformation("[CORE][BAR] evaluated={e} emitted={m} reasons=[{r}]",
+                    wsEv, wsEm,
+                    string.Join(",", snap.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key}:{kv.Value}")));
+            }
 
             var topReasons = string.Join(",",
                 reasonBag.OrderByDescending(kv => kv.Value).Take(5).Select(kv => $"{kv.Key}:{kv.Value}"));
@@ -275,6 +304,16 @@ public sealed class StrategyCoreEngine
         if (_lastSignalBarMs.TryGetValue(symbol, out var prev) && prev == barKey)
             return (false, false, "same_bar");
 
+        // US stock/ETF perps (NVDA, SOXL, SPY, ANT …) trade 24/7 on Binance, but price discovery
+        // happens in the US cash session. Overnight/pre-market setups are built on compressed ATR
+        // and thin books, then the open sweeps the stop (AMDUSDT 20.11: stopped, then −3.7R move
+        // in the signal's favour; SOXLUSDT/NVDAUSDT shaken at the 14:00 UTC pre-open spike).
+        if (IsUsEquityPerp(symbol) && !InUsCashSession(DateTime.UtcNow))
+        {
+            _lastSignalBarMs[symbol] = barKey;
+            return (true, false, "us_session_closed");
+        }
+
         var slice = list.Take(closedIdx + 1).ToList();
         if (slice.Count < MinBars) return (false, false, "thin_slice");
 
@@ -330,6 +369,14 @@ public sealed class StrategyCoreEngine
             return (true, false, "sanity:" + sanity);
         }
 
+        // One idea, one risk unit: at 16:00–16:30 on 20.11 CORE fired NVDA, TQQQ, QQQ, SPY,
+        // SOXL shorts and a SOXS long — six copies of "US tech down". Cap per cluster+side.
+        if (!TryReserveCluster(symbol, signal.Side == SignalSide.Buy, out var clusterWhy))
+        {
+            _log.LogInformation("[CORE][{sym}] {why}", symbol, clusterWhy);
+            return (true, false, "cluster_cap");
+        }
+
         _cooldown[symbol] = DateTime.UtcNow;
         {
             var e0 = signal.EntryPrice;
@@ -344,6 +391,87 @@ public sealed class StrategyCoreEngine
 
         OnSignalGenerated?.Invoke(signal);
         return (true, true, "ok");
+    }
+
+    // ── Sessions & correlation clusters ───────────────────────────────────
+    private static readonly string[] DefaultUsEquities =
+    {
+        "NVDA","AMD","MU","SNDK","INTC","AVGO","TSM","SOXL","SOXS","TQQQ","SQQQ","QQQ","SPY","IWM",
+        "TSLA","AAPL","MSFT","META","AMZN","GOOGL","NFLX","PLTR","COIN","MSTR","HOOD","CRCL","EWY",
+        "DRAM","ANT","ORCL","CRWV","NBIS","SMCI","ARM",
+    };
+    private static readonly string[] Metals = { "XAU", "XAG", "XPT", "XPD", "COPPER" };
+    private static readonly string[] Energy = { "CL", "BZ", "NATGAS", "NG" };
+    private static readonly TimeZoneInfo? NewYork = FindNewYork();
+
+    private static TimeZoneInfo? FindNewYork()
+    {
+        foreach (var id in new[] { "America/New_York", "Eastern Standard Time" })
+        {
+            try { return TimeZoneInfo.FindSystemTimeZoneById(id); } catch { }
+        }
+        return null;
+    }
+
+    private static string Base(string symbol)
+        => symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase) ? symbol[..^4].ToUpperInvariant() : symbol.ToUpperInvariant();
+
+    private bool IsUsEquityPerp(string symbol)
+    {
+        var b = Base(symbol);
+        var cfgList = _cfg?.GetSection("CoreEngine:UsEquityPerps").GetChildren()
+            .Select(c => (c.Value ?? "").Trim().ToUpperInvariant()).Where(v => v.Length > 0).ToArray();
+        var list = cfgList is { Length: > 0 } ? cfgList : DefaultUsEquities;
+        return list.Contains(b);
+    }
+
+    /// <summary>US regular session minus the first 15 and last 30 minutes (09:45–15:30 New York), Mon–Fri.</summary>
+    private static bool InUsCashSession(DateTime utcNow)
+    {
+        if (NewYork == null) return true; // cannot tell → do not block
+        var ny = TimeZoneInfo.ConvertTimeFromUtc(utcNow, NewYork);
+        if (ny.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday) return false;
+        var t = ny.TimeOfDay;
+        return t >= new TimeSpan(9, 45, 0) && t <= new TimeSpan(15, 30, 0);
+    }
+
+    private string ClusterOf(string symbol)
+    {
+        var b = Base(symbol);
+        if (IsUsEquityPerp(symbol)) return "US_EQUITY";
+        if (Metals.Contains(b)) return "METALS";
+        if (Energy.Contains(b)) return "ENERGY";
+        return "CRYPTO";
+    }
+
+    private readonly object _clusterLock = new();
+    private readonly Dictionary<string, List<DateTime>> _clusterHits = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// TradFi clusters: one signal per cluster+side per 3h. Crypto (all alts move with BTC):
+    /// two per side per 2h. Reserved only when the signal is actually emitted.
+    /// </summary>
+    private bool TryReserveCluster(string symbol, bool isLong, out string why)
+    {
+        var cluster = ClusterOf(symbol);
+        bool crypto = cluster == "CRYPTO";
+        int max = crypto ? 2 : 1;
+        var window = crypto ? TimeSpan.FromHours(2) : TimeSpan.FromHours(3);
+        var key = cluster + (isLong ? ":L" : ":S");
+        var now = DateTime.UtcNow;
+        lock (_clusterLock)
+        {
+            if (!_clusterHits.TryGetValue(key, out var hits)) _clusterHits[key] = hits = new List<DateTime>();
+            hits.RemoveAll(t => now - t > window);
+            if (hits.Count >= max)
+            {
+                why = $"cluster_cap {key} {hits.Count}/{max} in {window.TotalHours:0}h";
+                return false;
+            }
+            hits.Add(now);
+            why = "";
+            return true;
+        }
     }
 
     /// <summary>True when the newest bar opened more than two bar lengths ago (stream stopped updating).</summary>

@@ -263,7 +263,7 @@ public static class InstitutionalTrendSetup
             decimal sl, risk;
             string slWhy;
             bool stopOk = ladder.Enabled && ladder.UsePullbackStop
-                ? TryStopPullback(true, close, atr15, m15, out sl, out risk, out slWhy)
+                ? TryStopPullback(true, close, atr15, atr1h, AtrDaily(d1Raw), m15, h1, out sl, out risk, out slWhy)
                 : TryStop(true, close, swingLo, atr1h, atr15, m15, out sl, out risk, out slWhy);
             if (!stopOk)
                 return Fail(slWhy);
@@ -307,7 +307,7 @@ public static class InstitutionalTrendSetup
         decimal slS, riskS;
         string slWhyS;
         bool stopOkS = ladderS.Enabled && ladderS.UsePullbackStop
-            ? TryStopPullback(false, close, atr15, m15, out slS, out riskS, out slWhyS)
+            ? TryStopPullback(false, close, atr15, atr1h, AtrDaily(d1Raw), m15, h1, out slS, out riskS, out slWhyS)
             : TryStop(false, close, swingHi, atr1h, atr15, m15, out slS, out riskS, out slWhyS);
         if (!stopOkS)
             return Fail(slWhyS);
@@ -414,15 +414,22 @@ public static class InstitutionalTrendSetup
     }
 
     /// <summary>
-    /// Pullback stop (RLadder StopMode=Pullback). The entry is timed on 15m, so the
-    /// invalidation is the 15m pullback extreme, not the far 1H impulse origin.
-    /// The old 1H-sized stop (1–3.2%) with 15m-pivot targets capped every trade at
-    /// ≈1.15R (client_001 logs). Stop = pullback extreme ± sweep room, never inside
-    /// noise (≥ max(MinRiskPct, 1.0×ATR15)), never wider than MaxRiskPct.
+    /// Pullback stop (RLadder StopMode=Pullback), v2 — liquidity-aware.
+    ///
+    /// v1 (15m pullback extreme + max(0.35×ATR15, 0.15%)) was swept on 2026-11-20:
+    /// AMDUSDT short (stop 0.93%) and ANTUSDT short (1.10%) were stopped by one wick and then
+    /// fell 3–5R in the trade's direction. Stops sat inside normal hourly noise and just
+    /// in front of the 1H swing where the crowd's stops rest.
+    ///
+    /// v2: invalidation = 15m pullback extreme, extended to the nearest 1H swing extreme when
+    /// that swing is within 1×ATR1H (the liquidity pool a sweep targets); pad =
+    /// max(0.5×ATR15, 0.25×ATR1H, 0.20%); distance floor = max(MinRiskPct, 1.2×ATR15,
+    /// 0.6×ATR1H, 0.2×ATR1D) so overnight-compressed 15m ATR cannot produce a micro stop.
+    /// Never wider than MaxRiskPct (setup is skipped instead).
     /// </summary>
     private static bool TryStopPullback(
-        bool isLong, decimal close, decimal atr15,
-        List<BinanceFuturesUsdtKline> m15,
+        bool isLong, decimal close, decimal atr15, decimal atr1h, decimal atrD,
+        List<BinanceFuturesUsdtKline> m15, List<BinanceFuturesUsdtKline> h1,
         out decimal sl, out decimal risk, out string why)
     {
         sl = 0; risk = 0; why = "";
@@ -432,17 +439,27 @@ public static class InstitutionalTrendSetup
         for (int k = m15.Count - 8; k < m15.Count; k++)
             pool = isLong ? Math.Min(pool, m15[k].LowPrice) : Math.Max(pool, m15[k].HighPrice);
 
-        decimal sweepRoom = Math.Max(atr15 * 0.35m, close * 0.0015m);
+        // Nearest 1H swing beyond the pullback extreme: if a sweep would reach it, the stop goes past it.
+        if (h1.Count >= 12 && atr1h > 0)
+        {
+            var recent = h1.TakeLast(12).ToList();
+            decimal swing = isLong ? recent.Min(x => x.LowPrice) : recent.Max(x => x.HighPrice);
+            bool beyond = isLong ? swing < pool : swing > pool;
+            if (beyond && Math.Abs(swing - pool) <= atr1h)
+                pool = swing;
+        }
+
+        decimal sweepRoom = Math.Max(Math.Max(atr15 * 0.5m, atr1h * 0.25m), close * 0.0020m);
         decimal s = isLong ? pool - sweepRoom : pool + sweepRoom;
         s = NudgePastRound(s, close, isLong);
 
-        decimal minDist = Math.Max(close * MinRiskPct * 0.85m, atr15 * 1.0m);
+        decimal minDist = Math.Max(Math.Max(close * MinRiskPct * 0.85m, atr15 * 1.2m),
+                                   Math.Max(atr1h * 0.6m, atrD * 0.2m));
         decimal maxDist = close * MaxRiskPct;
         decimal dist = isLong ? close - s : s - close;
         if (dist <= 0) { why = "bad_risk"; return false; }
         if (dist < minDist)
         {
-            // Widen away from noise; never pull a stop closer than the floor.
             dist = minDist;
             s = isLong ? close - dist : close + dist;
         }
@@ -451,6 +468,14 @@ public static class InstitutionalTrendSetup
         sl = s;
         risk = dist;
         return true;
+    }
+
+    /// <summary>ATR(14) of closed daily bars; 0 when unavailable.</summary>
+    private static decimal AtrDaily(IReadOnlyList<BinanceFuturesUsdtKline>? d1Raw)
+    {
+        if (d1Raw == null || d1Raw.Count < 16) return 0m;
+        var d1 = ClosedBars(d1Raw, 1440);
+        return d1.Count >= 16 ? Atr(d1, 14) : 0m;
     }
 
     /// <summary>
