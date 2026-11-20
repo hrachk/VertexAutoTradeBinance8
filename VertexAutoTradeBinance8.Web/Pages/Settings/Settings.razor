@@ -173,8 +173,9 @@
         </div>
 
         <!-- Advanced connection params -->
-        <div class="st-card">
+        <div class="st-card st-card-legacy">
             <div class="st-card-head"><div class="st-card-title">Advanced</div></div>
+            <div class="st-legacy-note">Not used by the Engine: Binance:Depth / DepthUpdateMs are never read.</div>
             <div class="st-card-sub">Order book depth and update rate. Defaults are fine for most setups.</div>
 
             <div class="st-fields" style="margin-top:14px">
@@ -302,8 +303,9 @@
             </div>
         </div>
 
-        <div class="st-card">
+        <div class="st-card st-card-legacy">
             <div class="st-card-head"><div class="st-card-title">Pullback Entry</div></div>
+            <div class="st-legacy-note">Not used by the Engine: feeds the legacy trend engine only; the router ignores its signals (CORE has its own pullback logic).</div>
             <div class="st-card-sub">Powers the trend engine's TryPullbackEma21 entry: waits for price to touch the EMA after a clear trend move, then enters on a rejection candle bouncing off it. Live-reloadable — no restart needed.</div>
             <div class="st-field">
                 <label>EMA Period</label>
@@ -356,11 +358,11 @@
             }
         </div>
 
-        <div class="st-card">
+        <div class="st-card st-card-legacy">
             <div class="st-card-head">
                 <div class="st-card-title">⚡ Controlled Trend Engine</div>
-                <span class="st-live-pill">● live</span>
             </div>
+            <div class="st-legacy-note">Not used by the Engine: AdaptiveEngine:* is never read.</div>
             <div class="st-card-sub">
                 Parameters for the AdaptiveEngine in Controlled Trend regime — tight directional moves with low volatility.
                 RiskBias scales position size (0.65 = 65% of normal). MinRR is the minimum acceptable Risk/Reward.
@@ -405,6 +407,58 @@
 
     private RenderFragment RiskTab() => @<div class="st-grid">
 
+        <div class="st-card st-card-wide st-card-core">
+            <div class="st-card-head">
+                <div class="st-card-title">🎯 CORE sizing — what actually sets the position size</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">
+                Every signal (Live and Demo) is sized by <code>Volume = Risk$ / (Entry − Stop)</code>, where Risk$ = balance × risk %.
+                Risk is recomputed from the current balance on every trade (compounding) and cut automatically in drawdown
+                (−3% → ×0.85, −6% → ×0.7, −10% → ×0.5, −15% → ×0.25).
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Risk % — majors (BTC/ETH/BNB/SOL) <span class="st-field-hint">0.0075 = 0.75%</span></label>
+                    <input title="Trading:CoreRiskPctMajor" class="st-input" type="number" step="0.0005" min="0.001" max="0.05"
+                           value="@GetDecimal("Trading:CoreRiskPctMajor", 0.0075m)" @onchange="@((ChangeEventArgs e) => SetFractionAsync("Trading:CoreRiskPctMajor", e, 0.001m, 0.05m))" />
+                </div>
+                <div class="st-field">
+                    <label>Risk % — alts <span class="st-field-hint">0.006 = 0.6%</span></label>
+                    <input title="Trading:CoreRiskPctAlt" class="st-input" type="number" step="0.0005" min="0.001" max="0.05"
+                           value="@GetDecimal("Trading:CoreRiskPctAlt", 0.006m)" @onchange="@((ChangeEventArgs e) => SetFractionAsync("Trading:CoreRiskPctAlt", e, 0.001m, 0.05m))" />
+                </div>
+                <div class="st-field">
+                    <label>Max loss per trade <span class="st-field-hint">hard ceiling, 0.02 = 2%</span></label>
+                    <input title="Trading:MaxRiskPctPerTrade" class="st-input" type="number" step="0.001" min="0.002" max="0.05"
+                           value="@GetDecimal("Trading:MaxRiskPctPerTrade", 0.02m)" @onchange="@((ChangeEventArgs e) => SetFractionAsync("Trading:MaxRiskPctPerTrade", e, 0.002m, 0.05m))" />
+                </div>
+                <div class="st-field">
+                    <label>Max notional, × equity <span class="st-field-hint">1.0 = position ≤ 100% of balance</span></label>
+                    <input title="Trading:MaxNotionalPctOfEquity" class="st-input" type="number" step="0.1" min="0.1" max="3"
+                           value="@GetDecimal("Trading:MaxNotionalPctOfEquity", 1.0m)" @onchange="@((ChangeEventArgs e) => SetFractionAsync("Trading:MaxNotionalPctOfEquity", e, 0.1m, 3m))" />
+                </div>
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Min confidence to trade — default <span class="st-field-hint">CORE is capped at 0.52, range leg at 0.42</span></label>
+                    <input title="SignalConfidence:Default:MinExecute" class="st-input" type="number" step="0.01" min="0.3" max="0.9"
+                           value="@GetDecimal("SignalConfidence:Default:MinExecute", 0.58m)" @onchange="@((ChangeEventArgs e) => SetFractionAsync("SignalConfidence:Default:MinExecute", e, 0.3m, 0.9m))" />
+                </div>
+                <div class="st-field">
+                    <label>Min confidence — BTC</label>
+                    <input title="SignalConfidence:BTC:MinExecute" class="st-input" type="number" step="0.01" min="0.3" max="0.9"
+                           value="@GetDecimal("SignalConfidence:BTC:MinExecute", 0.55m)" @onchange="@((ChangeEventArgs e) => SetFractionAsync("SignalConfidence:BTC:MinExecute", e, 0.3m, 0.9m))" />
+                </div>
+                <div class="st-field">
+                    <label>Min confidence — ETH</label>
+                    <input title="SignalConfidence:ETH:MinExecute" class="st-input" type="number" step="0.01" min="0.3" max="0.9"
+                           value="@GetDecimal("SignalConfidence:ETH:MinExecute", 0.55m)" @onchange="@((ChangeEventArgs e) => SetFractionAsync("SignalConfidence:ETH:MinExecute", e, 0.3m, 0.9m))" />
+                </div>
+            </div>
+            <div class="st-card-sub" style="margin-top:6px">Targets, break-even and stop locks are on <a href="/risk-desk">Risk desk</a>.</div>
+        </div>
+
         @foreach (var profile in TradingProfiles)
         {
             var profileKey = profile.Key;
@@ -421,7 +475,7 @@
                 </div>
 
                 <div class="st-field">
-                    <label>Risk Per Trade (fraction of balance, e.g. 0.03 = 3%)</label>
+                    <label>Risk Per Trade <span class="st-legacy-tag">not used for sizing — CORE risk % above applies</span></label>
                     <input title="Risk Per Trade (fraction of balance, e.g. 0.03 = 3%)" class="st-input" type="number" step="0.001" value="@GetDecimal($"{profileKey}:RiskPerTrade", 0.03m)"
                            @onchange="@((ChangeEventArgs e) => OnRiskPerTradeChanged(profileKey, e))" />
                 </div>
@@ -440,7 +494,7 @@
                 </div>
 
                 <div class="st-field">
-                    <label>Max Margin Per Trade <span class="st-field-hint">fraction of balance (0.12 = 12%)</span></label>
+                    <label>Max Margin Per Trade <span class="st-legacy-tag">not used by 1R sizing — notional is capped by “Max notional, × equity” above</span></label>
                     <input title="Max margin fraction of balance per single position" class="st-input" type="number" step="0.01" min="0.01" max="0.50"
                            value="@GetDecimal($"{profileKey}:MaxMarginPercent", 0.12m)"
                            @onchange="@((ChangeEventArgs e) => OnMaxMarginPercentChanged(profileKey, e))" />
@@ -448,11 +502,11 @@
             </div>
         }
 
-        <div class="st-card st-card-wide">
+        <div class="st-card st-card-wide st-card-legacy">
             <div class="st-card-head">
                 <div class="st-card-title">🤖 AI Signal Confidence Thresholds</div>
-                <span class="st-live-pill">● live</span>
             </div>
+            <div class="st-legacy-note">Not used by the Engine: MinEntry / Bands / Early TP drive the legacy engine only. The execution threshold (MinExecute) is in “CORE sizing” above.</div>
             <div class="st-card-sub">
                 Minimum AI confidence score (0–1) required for a signal to pass the AI confirmation gate (step 3 of the signal pipeline).
                 Lower = more signals pass, higher = fewer but higher-quality signals.
@@ -1292,29 +1346,28 @@
                 <div class="st-card-title">🎯 How Exits Work</div>
             </div>
             <div class="st-card-sub">
-                Exits are managed by <strong>PositionSupervisor</strong> using ATR-based dynamic logic — not static config values.
-                SL/TP levels are placed at entry time by OrderExecutor, then Supervisor trails and adjusts them automatically.
+                CORE positions (Live and Demo) exit on the <strong>R-ladder</strong>, where 1R = the distance from entry to the stop.
+                The stop is placed behind the liquidity pool and triggers on the <strong>mark price</strong>, so a single last-trade wick does not fill it.
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;">
                 <div style="background:var(--st-bg3);border:1px solid var(--st-bdr);border-radius:10px;padding:14px;">
-                    <div style="font-size:12px;font-weight:700;color:#60a5fa;margin-bottom:8px;">📈 Signal Positions</div>
+                    <div style="font-size:12px;font-weight:700;color:#60a5fa;margin-bottom:8px;">Targets</div>
                     <div style="font-size:12px;color:var(--st-dim);line-height:1.7;">
-                        BE trigger: <code>ATR × 1.3</code><br/>
-                        Partial close step: <code>ATR × 2.0</code><br/>
-                        Partial size: <code>34%</code> (42% toxic)<br/>
-                        SL buffer: <code>ATR × 0.3–0.5</code>
+                        Ladder: <code>@(LadderText("RLadder:TargetsR", "2 / 3 / 5 / 7"))</code> R<br/>
+                        Share closed at each target: <code>@(LadderText("RLadder:Weights", "25% each"))</code><br/>
+                        Minimum room to the nearest 1H/4H/daily level: <code>@GetDecimal("RLadder:MinRoomR", 2m) R</code>
                     </div>
                 </div>
                 <div style="background:var(--st-bg3);border:1px solid var(--st-bdr);border-radius:10px;padding:14px;">
-                    <div style="font-size:12px;font-weight:700;color:#34d399;margin-bottom:8px;">📅 DCA Positions</div>
+                    <div style="font-size:12px;font-weight:700;color:#34d399;margin-bottom:8px;">Stop management</div>
                     <div style="font-size:12px;color:var(--st-dim);line-height:1.7;">
-                        BE trigger: <code>ATR × 3.0</code><br/>
-                        Partial close step: <code>ATR × 5.0</code><br/>
-                        Partial size: <code>20%</code><br/>
-                        SL buffer: <code>ATR × 1.2</code>
+                        After TP1 the stop moves to break-even (plus fees)<br/>
+                        At +3R the stop locks +1R, at +4R → +2R, at +5R → +3R, at +6R → +4R<br/>
+                        Stop trigger: <code>@GetStr("Trading:StopWorkingType", "MARK_PRICE")</code>
                     </div>
                 </div>
             </div>
+            <div class="st-card-sub" style="margin-top:10px">Edit the ladder on <a href="/risk-desk">Risk desk</a>.</div>
         </div>
 
         <div class="st-card st-card-wide">
@@ -1343,11 +1396,11 @@
             </div>
         </div>
 
-        <div class="st-card st-card-wide">
+        <div class="st-card st-card-wide st-card-legacy">
             <div class="st-card-head">
                 <div class="st-card-title">📐 Take Profit Levels (ATR Multipliers)</div>
-                <span class="st-live-pill">● live</span>
             </div>
+            <div class="st-legacy-note">Not used by the Engine: CORE exits use the R-ladder (2/3/5/7R) — edit it on Risk desk.</div>
             <div class="st-card-sub">
                 ATR multipliers that set how far each TP is placed from the entry price.
                 TP1 should be ≥ 1.5× ATR to guarantee RR ≥ 1:1 (SL is typically 1–1.5×ATR).
@@ -1398,11 +1451,11 @@
             </div>
         </div>
 
-        <div class="st-card st-card-wide">
+        <div class="st-card st-card-wide st-card-legacy">
             <div class="st-card-head">
                 <div class="st-card-title">🛡 Position Supervisor — Break-Even Triggers</div>
-                <span class="st-live-pill">● live</span>
             </div>
+            <div class="st-legacy-note">Not used by the Engine: break-even is moved by the R-ladder after TP1.</div>
             <div class="st-card-sub">
                 Controls when Supervisor moves SL to break-even and closes partial positions.
                 R = risk distance (|entry − SL|). Minor = smaller/newer positions. Major = larger well-confirmed positions.
@@ -1490,11 +1543,11 @@
             </div>
         </div>
 
-        <div class="st-card">
+        <div class="st-card st-card-legacy">
             <div class="st-card-head">
                 <div class="st-card-title">🛡 HedgeKill</div>
-                <span class="st-live-pill">● live</span>
             </div>
+            <div class="st-legacy-note">Not used by the Engine: HedgeKill settings are registered but no service uses them.</div>
             <div class="st-card-sub">
                 HedgeKill manages conflicting hedge positions (simultaneous LONG+SHORT on the same symbol).
                 <strong>Hybrid</strong> mode closes the losing side at a fraction when the net loss exceeds the threshold.
@@ -1576,8 +1629,9 @@
             </div>
         </div>
 
-        <div class="st-card st-card-muted">
+        <div class="st-card st-card-muted st-card-legacy">
             <div class="st-card-head"><div class="st-card-title">🐞 Debug</div></div>
+            <div class="st-legacy-note">Not used by the Engine: Debug:EnableStrategyDebug is never read.</div>
             <div class="st-toggle-row">
                 <label class="st-toggle">
                     <input type="checkbox" checked="@GetBool("Debug:EnableStrategyDebug", true)" @onchange="OnDebugToggle" />
@@ -2330,6 +2384,40 @@
         }
     }
 
+    // Fractions (risk %, confidence) are clamped to a safe range before saving,
+    // so a typo like "2" instead of "0.02" can never reach the Engine.
+    private Task SetFractionAsync(string path, ChangeEventArgs e, decimal min, decimal max)
+    {
+        if (!decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var v))
+        {
+            ShowToast("Enter a number, e.g. 0.0075", isError: true);
+            return Task.CompletedTask;
+        }
+        if (v < min || v > max)
+        {
+            ShowToast($"Allowed range for {path}: {min}–{max}", isError: true);
+            return Task.CompletedTask;
+        }
+        return SetAsync(path, v);
+    }
+
+    private string LadderText(string path, string fallback)
+    {
+        if (GetNode(path) is not JsonArray arr || arr.Count == 0) return fallback;
+        var parts = new List<string>();
+        foreach (var n in arr)
+        {
+            try
+            {
+                var d = n!.GetValue<decimal>();
+                parts.Add(path.EndsWith("Weights") ? $"{d:P0}" : d.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+            }
+            catch { }
+        }
+        return parts.Count == 0 ? fallback : string.Join(" / ", parts);
+    }
+
     private bool RequireAuthenticatedSession()
     {
         if (Auth.IsAuthenticated) return true;
@@ -2449,6 +2537,11 @@
 .st-archive-sym{font-family:monospace;font-weight:700;color:var(--acc);}
 .st-archive-tf-pill{display:inline-block;font-size:10.5px;background:var(--bg3);border:1px solid var(--bdr);color:var(--txt);padding:2px 8px;border-radius:10px;margin-right:5px;}
 .st-card-muted{opacity:.7;}
+.st-card-legacy{opacity:.55;border-style:dashed;}
+.st-card-legacy:hover{opacity:.85;}
+.st-legacy-note{font-size:11.5px;color:var(--st-yel);background:rgba(234,179,8,0.08);border:1px solid rgba(234,179,8,0.25);border-radius:8px;padding:6px 10px;margin:4px 0 10px;}
+.st-legacy-tag{font-size:10.5px;font-weight:600;color:var(--st-yel);margin-left:6px;}
+.st-card-core{border-color:rgba(59,130,246,0.45);}
 .st-card-warn{background:rgba(234,179,8,0.05);border-color:rgba(234,179,8,0.25);}
 .st-input-wide{width:100%;max-width:520px;}
 .st-input-mono{font-family:'Cascadia Code','Fira Code',monospace;font-size:12px;letter-spacing:.3px;}
