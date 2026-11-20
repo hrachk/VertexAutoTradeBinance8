@@ -99,6 +99,7 @@ namespace VertexAutoTradeBinance8
         private readonly ShadowMlGatekeeper? _mlGate;
         private readonly InstitutionalEntryPipeline? _instPipe;
         private readonly IOptionsMonitor<HardRiskOptions>? _hardRiskOptions;
+        private readonly IConfiguration? _cfg;
         private readonly SymbolInfoService _symbolInfo;
         private readonly FundingRateService _fundingRate;
         private readonly RealtimeMomentumDetector _momentum;
@@ -205,13 +206,15 @@ namespace VertexAutoTradeBinance8
             ShadowMlGatekeeper? mlGate = null,
             InstitutionalEntryPipeline? institutionalPipeline = null,
             DualModeTradingPolicy? dualMode = null,
-            IOptionsMonitor<HardRiskOptions>? hardRiskOptions = null)
+            IOptionsMonitor<HardRiskOptions>? hardRiskOptions = null,
+            IConfiguration? cfg = null)
         {
             _tradeJournal = tradeJournal;
             _approvedEntries = approvedEntries;
             _mlGate = mlGate;
             _instPipe = institutionalPipeline;
             _hardRiskOptions = hardRiskOptions;
+            _cfg = cfg;
             _dualMode = dualMode;
             if (_tradeJournal != null && _instPipe != null)
                 _tradeJournal.TradeClosed += e => _instPipe.OnTradeClosed(
@@ -1356,7 +1359,12 @@ namespace VertexAutoTradeBinance8
                 liveOpenPositionCount = await _supervisor.GetActivePositionsCountAsync(ct).ConfigureAwait(false);
                 int tradingMax = _tradingMonitor?.CurrentValue?.MaxOpenPositions ?? _options.MaxOpenPositions;
                 if (tradingMax <= 0) tradingMax = 5;
-                int hardRiskMax = _hardRiskOptions?.CurrentValue?.MaxOpenPositions ?? int.MaxValue;
+                // RiskEngine:Hard:MaxOpenPositions has a class default of 3. Applied
+                // unconditionally it silently capped Trading:MaxOpenPositions from
+                // Settings at 3; it now caps only when it is set in config.
+                int hardRiskMax = _cfg?["RiskEngine:Hard:MaxOpenPositions"] is null
+                    ? int.MaxValue
+                    : (_hardRiskOptions?.CurrentValue?.MaxOpenPositions ?? int.MaxValue);
                 int effectiveLiveMax = hardRiskMax > 0 ? Math.Min(tradingMax, hardRiskMax) : tradingMax;
                 if (liveOpenPositionCount >= effectiveLiveMax)
                 {

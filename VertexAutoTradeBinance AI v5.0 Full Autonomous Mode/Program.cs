@@ -171,9 +171,18 @@ public class Program
                     // set explicitly in the Trading section if needed — a second silent
                     // binding only made config harder to reason about.
 
+                    // BTC/ETH profiles inherit every base Trading value first and
+                    // then apply their own overrides. Bound from Trading:BTC alone,
+                    // a profile fell back to class defaults for anything it did not
+                    // repeat (MinNotionalGuard, MinNotionalGuardPercent, …), so a
+                    // value saved in Settings for "Default" never reached BTC/ETH.
+                    services.Configure<TradingOptions>("BTC",
+                        ctx.Configuration.GetSection("Trading"));
                     services.Configure<TradingOptions>("BTC",
                         ctx.Configuration.GetSection("Trading:BTC"));
 
+                    services.Configure<TradingOptions>("ETH",
+                        ctx.Configuration.GetSection("Trading"));
                     services.Configure<TradingOptions>("ETH",
                         ctx.Configuration.GetSection("Trading:ETH"));
 
@@ -322,7 +331,10 @@ public class Program
                     {
                         if (!o.EnableMlHardReject && ctx.Configuration.GetValue("MlGate:EnableMlSkipGate", false))
                             o.EnableMlHardReject = true;
-                        if (ctx.Configuration.GetValue<decimal?>("MlGate:SkipThreshold") is decimal thr)
+                        // The legacy key only fills in when the Settings key is absent;
+                        // it used to overwrite Institutional:MlSkipThreshold every time.
+                        if (ctx.Configuration["Institutional:MlSkipThreshold"] is null
+                            && ctx.Configuration.GetValue<decimal?>("MlGate:SkipThreshold") is decimal thr)
                             o.MlSkipThreshold = thr;
                     });
 
