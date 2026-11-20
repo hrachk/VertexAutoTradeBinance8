@@ -95,6 +95,9 @@ builder.Services.Configure<DcaOptions>(builder.Configuration.GetSection("Dca"));
         VertexAutoTrade.Core.Risk.RLadderOptions.FromKeys(k => cfgRoot["RLadder:" + k]));
     ApplyLadder();
     Microsoft.Extensions.Primitives.ChangeToken.OnChange(((IConfiguration)cfgRoot).GetReloadToken, ApplyLadder);
+    void ApplyStops() => VertexAutoTrade.Core.Risk.StopTriggerPolicy.Configure(cfgRoot["Trading:StopWorkingType"]);
+    ApplyStops();
+    Microsoft.Extensions.Primitives.ChangeToken.OnChange(((IConfiguration)cfgRoot).GetReloadToken, ApplyStops);
 }
 builder.Services.AddSingleton<MarketTickStore>();
 builder.Services.AddSingleton<MarketDataLiveState>();

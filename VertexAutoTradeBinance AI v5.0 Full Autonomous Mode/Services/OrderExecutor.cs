@@ -3130,7 +3130,8 @@ public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
                 reduceOnly: isHedge ? null : true,
                 newClientOrderId: clientOrderId,
                 positionSide: isHedge ? posSide : null,
-                workingType: WorkingType.Contract,
+                workingType: futType == FuturesOrderType.StopMarket && VertexAutoTrade.Core.Risk.StopTriggerPolicy.UseMarkForStops
+                    ? WorkingType.Mark : WorkingType.Contract,
                 selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                 ct: ct));
 

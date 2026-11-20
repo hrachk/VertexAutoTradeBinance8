@@ -86,4 +86,15 @@ public class RLadderPolicyTests
         RiskScaling.Kelly(0.30m, 4m).Should().Be(0.125m);
         RiskScaling.ExpectancyR(0.30m, 4m).Should().Be(0.5m);
     }
+
+    [Fact]
+    public void Stops_arm_on_mark_price_by_default_take_profits_do_not()
+    {
+        StopTriggerPolicy.Configure(null);
+        StopTriggerPolicy.Resolve("STOP_MARKET", "CONTRACT_PRICE").Should().Be("MARK_PRICE");
+        StopTriggerPolicy.Resolve("TAKE_PROFIT_MARKET", "CONTRACT_PRICE").Should().Be("CONTRACT_PRICE");
+        StopTriggerPolicy.Configure("CONTRACT_PRICE");
+        StopTriggerPolicy.Resolve("STOP_MARKET", "CONTRACT_PRICE").Should().Be("CONTRACT_PRICE");
+        StopTriggerPolicy.Configure("MARK_PRICE");
+    }
 }

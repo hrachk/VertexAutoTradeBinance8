@@ -4434,6 +4434,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 var ts = await GetBinanceTimestampAsync(ct);
                 string D(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
+                workingType = VertexAutoTrade.Core.Risk.StopTriggerPolicy.Resolve(type, workingType);
 
                 var q = new List<KeyValuePair<string, string>>
                 {

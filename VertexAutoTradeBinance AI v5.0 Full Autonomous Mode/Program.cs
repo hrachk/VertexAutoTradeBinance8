@@ -160,6 +160,9 @@ public class Program
                             VertexAutoTrade.Core.Risk.RLadderOptions.FromKeys(k => cfgRoot["RLadder:" + k]));
                         ApplyLadder();
                         Microsoft.Extensions.Primitives.ChangeToken.OnChange(cfgRoot.GetReloadToken, ApplyLadder);
+                        void ApplyStops() => VertexAutoTrade.Core.Risk.StopTriggerPolicy.Configure(cfgRoot["Trading:StopWorkingType"]);
+                        ApplyStops();
+                        Microsoft.Extensions.Primitives.ChangeToken.OnChange(cfgRoot.GetReloadToken, ApplyStops);
                     }
 
                     // NOTE: SignalOnlyMode section previously also bound to TradingOptions

@@ -194,6 +194,7 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             string D(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
+            workingType = VertexAutoTrade.Core.Risk.StopTriggerPolicy.Resolve(type, workingType);
 
             for (int attempt = 0; attempt < 2; attempt++)
             {

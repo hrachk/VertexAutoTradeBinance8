@@ -114,6 +114,53 @@ public sealed class DemoAccountService
     // DCA state lives on the active ledger (_dcaState property).
     private Timer? _dcaTimer;
 
+    // ── Mark-price stops (parity with Live STOP_MARKET workingType=MARK_PRICE) ──
+    // Last-trade ticks include single-venue wicks; 4 Demo shorts on 2026-11-20 were stopped by one
+    // spike and three then ran 1.3–5R in the signal's direction. Stops now arm on the mark price.
+    private static readonly HttpClient MarkHttp = new() { Timeout = TimeSpan.FromSeconds(5) };
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (decimal Mark, DateTime At)> _marks =
+        new(StringComparer.OrdinalIgnoreCase);
+    private Timer? _markTimer;
+    private int _markBusy;
+
+    private async Task RefreshMarksAsync()
+    {
+        if (!VertexAutoTrade.Core.Risk.StopTriggerPolicy.UseMarkForStops) return;
+        if (Interlocked.Exchange(ref _markBusy, 1) == 1) return;
+        try
+        {
+            HashSet<string> open;
+            lock (_lock)
+                open = _ledgers.Values.SelectMany(l => l.State.Positions).Select(p => p.Symbol)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (open.Count == 0) return;
+            var json = await MarkHttp.GetStringAsync("https://fapi.binance.com/fapi/v1/premiumIndex").ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(json);
+            var now = DateTime.UtcNow;
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var sym = el.GetProperty("symbol").GetString();
+                if (sym == null || !open.Contains(sym)) continue;
+                if (decimal.TryParse(el.GetProperty("markPrice").GetString(),
+                        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var mk) && mk > 0)
+                    _marks[sym] = (mk, now);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[DEMO] mark refresh failed");
+        }
+        finally { Interlocked.Exchange(ref _markBusy, 0); }
+    }
+
+    /// <summary>Price that arms stops: fresh mark (≤15 s old) when mark stops are on, else the last tick.</summary>
+    private decimal StopReference(string symbol, decimal lastPrice)
+    {
+        if (!VertexAutoTrade.Core.Risk.StopTriggerPolicy.UseMarkForStops) return lastPrice;
+        return _marks.TryGetValue(symbol, out var m) && (DateTime.UtcNow - m.At).TotalSeconds <= 15
+            ? m.Mark : lastPrice;
+    }
+
     public event Action? Updated;
 
     /// <summary>Binance USD-M Futures default taker fee (0.04%).</summary>
@@ -274,6 +321,7 @@ public sealed class DemoAccountService
         // measured in days/weeks, matching the real DcaService's own
         // check interval.
         _dcaTimer = new Timer(_ => _ = CheckDcaCycleAsync(), null, TimeSpan.FromMinutes(1), TimeSpan.FromHours(1));
+        _markTimer = new Timer(_ => _ = RefreshMarksAsync(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(2));
     }
 
     public DemoAccountState GetSnapshot()
@@ -1231,7 +1279,8 @@ _state.History.Add(new DemoClosedTrade
 
                 if (pos.StopLoss.HasValue && pos.StopLoss.Value > 0)
                 {
-                    bool slHit = isLong ? price <= pos.StopLoss.Value : price >= pos.StopLoss.Value;
+                    decimal stopRef = StopReference(symbol, price);
+                    bool slHit = isLong ? stopRef <= pos.StopLoss.Value : stopRef >= pos.StopLoss.Value;
                     if (slHit)
                     {
                         string slReason = "SL";
