@@ -24,7 +24,6 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ISignalBus? _bus;
         private readonly SemaphoreSlim _lock = new(1, 1);
         private const int MaxRecords = 50;
-        private const int MaxMissedRecords = 500;
         private static readonly TimeSpan RecordTtl = TimeSpan.FromHours(2);
 
         private readonly TradeJournalService? _journal;
@@ -184,27 +183,7 @@ namespace VertexAutoTradeBinance8.Services
         {
             try
             {
-                List<MissedTradeRecord> list = new();
-                if (File.Exists(_missedPath))
-                {
-                    try
-                    {
-                        var json = await File.ReadAllTextAsync(_missedPath, ct);
-                        list = JsonSerializer.Deserialize<List<MissedTradeRecord>>(json) ?? new();
-                    }
-                    catch { list = new(); }
-                }
-
-                list.Insert(0, record);
-                if (list.Count > MaxMissedRecords)
-                    list = list.Take(MaxMissedRecords).ToList();
-
-                var dir = Path.GetDirectoryName(_missedPath);
-                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-
-                var tmp = _missedPath + ".tmp";
-                await File.WriteAllTextAsync(tmp, JsonSerializer.Serialize(list), ct);
-                File.Move(tmp, _missedPath, overwrite: true);
+                await MissedTradeStore.AppendAsync(_missedPath, record, ct);
             }
             catch (Exception ex)
             {

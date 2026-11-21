@@ -18,7 +18,7 @@
     <div class="sl-header">
         <div class="sl-header-left">
             <div class="sl-title">📡 SIGNAL LOG</div>
-            <div class="sl-sub">Blocked & failed trade signals · Auto-refresh 5s</div>
+            <div class="sl-sub">Every CORE / Mean-Reversion signal and what happened to it · refreshes every 5 s</div>
         </div>
         <div class="sl-header-stats">
             <div class="sl-hs">
@@ -33,9 +33,13 @@
                 <div class="sl-hs-val">@_all.Count(r=>r.Side=="Sell")</div>
                 <div class="sl-hs-lab">SHORT ▼</div>
             </div>
-            <div class="sl-hs sl-hs-hi">
-                <div class="sl-hs-val">@_all.Count(r=>r.Confidence>=70)</div>
-                <div class="sl-hs-lab">HIGH CONF</div>
+            <div class="sl-hs sl-hs-up">
+                <div class="sl-hs-val">@_all.Count(r=>r.Outcome=="Approved")</div>
+                <div class="sl-hs-lab">APPROVED</div>
+            </div>
+            <div class="sl-hs sl-hs-dn">
+                <div class="sl-hs-val">@_all.Count(r=>r.Outcome=="Blocked")</div>
+                <div class="sl-hs-lab">BLOCKED</div>
             </div>
             <div class="sl-hs sl-hs-err">
                 <div class="sl-hs-val">@_execFail</div>
@@ -123,7 +127,7 @@
                                     @(isLong ? "▲ LONG" : "▼ SHORT")
                                 </span>
                                 <!-- Stage -->
-                                <span class="sl-stage">@r.Stage</span>
+                                @if (!string.IsNullOrEmpty(r.Stage)) { <span class="sl-stage">@r.Stage</span> }
                             </div>
                             <div class="sl-row1-right">
                                 @if (r.Reason != null && r.Reason.Contains("_VWAP"))
@@ -135,8 +139,8 @@
                                     <span class="sl-confirm-badge" title="This signal's direction was confirmed by the higher-timeframe structure of the same symbol">HTF✓</span>
                                 }
                                 <!-- Block reason — color coded -->
-                                <span class="sl-reason-badge @RCls(CleanReason(r.Reason))" title="@r.Reason">
-                                    @SR(CleanReason(r.Reason))
+                                <span class="sl-outcome sl-outcome-@r.Outcome.ToLowerInvariant()" title="@OutcomeHint(r)">
+                                    @OutcomeLabel(r)
                                 </span>
                                 <!-- Time — readable size -->
                                 <span class="sl-time">@r.Time.ToLocalTime().ToString("dd.MM  HH:mm:ss")</span>
@@ -151,7 +155,10 @@
                                 </div>
                                 <span class="sl-conf-pct @ccls">@r.Confidence%</span>
                             </div>
-                            <span class="sl-regime @RegCls(r.Regime)">@RegStr(r.Regime)</span>
+                            @if (r.Regime != VertexAutoTradeBinance8.Models.MarketRegime.Unknown)
+                            {
+                                <span class="sl-regime @RegCls(r.Regime)">@RegStr(r.Regime)</span>
+                            }
                         </div>
 
                         <!-- ── ROW 3: Key numbers ── -->
@@ -183,14 +190,28 @@
                                 <div class="sl-nl">ATR</div>
                                 <div class="sl-nv">@r.ATR.ToString("G3")</div>
                             </div>
-                            <div class="sl-num">
-                                <div class="sl-nl">Volatility</div>
-                                <div class="sl-nv">@r.Vol.ToString("P1")</div>
-                            </div>
-                            <div class="sl-num">
-                                <div class="sl-nl">Balance</div>
-                                <div class="sl-nv @(r.FreeBalance<5?"sl-dn":"")">$@r.FreeBalance.ToString("F1")</div>
-                            </div>
+                            @if (r.StopLoss > 0 && r.Entry > 0)
+                            {
+                                var riskPct = Math.Abs(r.Entry - r.StopLoss) / r.Entry * 100m;
+                                <div class="sl-num">
+                                    <div class="sl-nl">Stop distance</div>
+                                    <div class="sl-nv">@riskPct.ToString("F2")%</div>
+                                </div>
+                            }
+                            @if (r.Vol > 0)
+                            {
+                                <div class="sl-num">
+                                    <div class="sl-nl">Volatility</div>
+                                    <div class="sl-nv">@r.Vol.ToString("P1")</div>
+                                </div>
+                            }
+                            @if (r.FreeBalance > 0)
+                            {
+                                <div class="sl-num">
+                                    <div class="sl-nl">Balance</div>
+                                    <div class="sl-nv">$@r.FreeBalance.ToString("F1")</div>
+                                </div>
+                            }
                         </div>
 
                         <div class="sl-thesis-brief">@ThesisBrief(r)</div>
@@ -200,7 +221,8 @@
                         {
                             <div class="sl-detail" @onclick:stopPropagation="true">
                                 <div class="sl-detail-grid">
-                                    <div class="sl-dr"><span class="sl-dl">Block Reason</span><span class="sl-dv @RCls(r.Reason)">@r.Reason</span></div>
+                                    <div class="sl-dr"><span class="sl-dl">Outcome</span><span class="sl-dv">@OutcomeLabel(r)</span></div>
+                                    <div class="sl-dr"><span class="sl-dl">Engine detail</span><span class="sl-dv mono">@(string.IsNullOrEmpty(r.Event) ? "—" : r.Event) @(r.Reason)</span></div>
                                     <div class="sl-dr"><span class="sl-dl">Regime</span><span class="sl-dv @RegCls(r.Regime)">@RegStr(r.Regime)</span></div>
                                     <div class="sl-dr"><span class="sl-dl">Slope</span><span class="sl-dv mono">@r.Slope.ToString("G4")</span></div>
                                     <div class="sl-dr"><span class="sl-dl">Deviation</span><span class="sl-dv mono">@r.Deviation.ToString("G3")</span></div>
@@ -358,6 +380,11 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
 .side-l{background:rgba(63,185,80,.12);color:var(--grn);border:1px solid rgba(63,185,80,.2);}
 .side-s{background:rgba(248,81,73,.12);color:var(--red);border:1px solid rgba(248,81,73,.2);}
 
+/* Outcome badge */
+.sl-outcome{font-size:11.5px;font-weight:600;padding:4px 10px;border-radius:999px;border:1px solid transparent;white-space:nowrap;}
+.sl-outcome-approved{color:#34d399;background:rgba(52,211,153,.10);border-color:rgba(52,211,153,.35);}
+.sl-outcome-blocked{color:#f87171;background:rgba(248,113,113,.10);border-color:rgba(248,113,113,.35);}
+.sl-outcome-signal{color:#93a4bf;background:rgba(147,164,191,.08);border-color:rgba(147,164,191,.25);}
 /* Stage */
 .sl-stage{font-size:11px;color:var(--dim);background:var(--bg3);padding:2px 7px;border-radius:4px;}
 
@@ -564,8 +591,120 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
         }
         catch { /* non-fatal */ }
 
+        _all = Consolidate(_all, LoadApproved(root!));
+
         _execFail = _all.Count(r => (r.Reason ?? "").Contains("Exec") || (r.Reason ?? "").Contains("EXEC") || (r.Reason ?? "").Contains("Failed"));
         Rebuild();
+    }
+
+
+    // ── Signal log consolidation ──────────────────────────────────────
+    // missed_trades.json holds a SIGNAL row when a strategy emits and a
+    // REJECT_* row when a gate blocks it, so one setup used to appear as two
+    // cards. Rows with no symbol or no time (left by an old file-format bug)
+    // are dropped. Each signal becomes one card with its outcome:
+    //   Approved — published to approved_entries (Demo opens from there)
+    //   Blocked  — a gate rejected it (reason shown in plain words)
+    //   Signal   — emitted, no decision recorded
+    static bool IsBlankRec(MissedRec r) => string.IsNullOrWhiteSpace(r.Symbol) || r.Time.Year < 2020;
+    static bool IsSignalRow(MissedRec r) => string.IsNullOrEmpty(r.Event) || r.Event.Equals("SIGNAL", StringComparison.OrdinalIgnoreCase);
+    static bool IsDecisionRow(MissedRec r) => !IsSignalRow(r) && !r.Event.StartsWith("SIMULATED", StringComparison.OrdinalIgnoreCase);
+    static DateTime AsUtc(DateTime t) => t.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(t, DateTimeKind.Utc) : t.ToUniversalTime();
+
+    record ApprovedRef(string Symbol, string Side, DateTime Utc);
+
+    List<ApprovedRef> LoadApproved(string root)
+    {
+        try
+        {
+            var path = Path.Combine(root, "approved_entries.json");
+            if (!File.Exists(path)) return new();
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var doc = System.Text.Json.JsonDocument.Parse(fs);
+            var list = new List<ApprovedRef>();
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                string Get(string n) => e.EnumerateObject().FirstOrDefault(p => p.Name.Equals(n, StringComparison.OrdinalIgnoreCase)).Value is var v
+                    && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
+                if (DateTime.TryParse(Get("Utc"), null, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var t))
+                    list.Add(new ApprovedRef(Get("Symbol"), Get("Side"), t));
+            }
+            return list;
+        }
+        catch { return new(); }
+    }
+
+    List<MissedRec> Consolidate(List<MissedRec> rows, List<ApprovedRef> approved)
+    {
+        var clean = rows.Where(r => !IsBlankRec(r)).ToList();
+        foreach (var r in clean) r.Time = AsUtc(r.Time);
+        var decisions = clean.Where(IsDecisionRow).ToList();
+        var used = new HashSet<MissedRec>();
+        var result = new List<MissedRec>();
+
+        foreach (var s in clean.Where(IsSignalRow).OrderBy(r => r.Time))
+        {
+            var d = decisions.Where(x => !used.Contains(x)
+                        && x.Symbol == s.Symbol && x.Side == s.Side
+                        && (x.Time - s.Time).TotalSeconds is >= -5 and <= 180)
+                    .OrderBy(x => x.Time).FirstOrDefault();
+            if (d != null)
+            {
+                used.Add(d);
+                if (d.Entry <= 0) d.Entry = s.Entry;
+                if (d.StopLoss <= 0) d.StopLoss = s.StopLoss;
+                if (d.TakeProfits.Count == 0) d.TakeProfits = s.TakeProfits;
+                if (d.Confidence <= 0) d.Confidence = s.Confidence;
+                if (d.ATR <= 0) d.ATR = s.ATR;
+                d.Outcome = "Blocked";
+                result.Add(d);
+                continue;
+            }
+            bool ok = approved.Any(a => a.Symbol == s.Symbol && a.Side == s.Side
+                                        && Math.Abs((a.Utc - s.Time).TotalSeconds) <= 180);
+            s.Outcome = ok ? "Approved" : "Signal";
+            result.Add(s);
+        }
+        foreach (var d in decisions.Where(x => !used.Contains(x)))
+        {
+            d.Outcome = "Blocked";
+            result.Add(d);
+        }
+        return result.OrderByDescending(r => r.Time).ToList();
+    }
+
+    string OutcomeLabel(MissedRec r) => r.Outcome switch
+    {
+        "Approved" => "✓ Approved → Demo",
+        "Blocked"  => "⛔ " + BlockLabel(r),
+        _          => "• Signal, no decision yet"
+    };
+
+    string OutcomeHint(MissedRec r) => r.Outcome == "Blocked"
+        ? $"{r.Event}: {r.Reason}"
+        : r.Outcome == "Approved" ? "Passed every gate and was published to approved_entries.json"
+        : "The engine emitted this signal; no gate decision was recorded";
+
+    // Plain-language reason for a blocked signal.
+    string BlockLabel(MissedRec r)
+    {
+        var s = ((r.Event ?? "") + " " + (r.Reason ?? "")).ToUpperInvariant();
+        if (s.Contains("DAILYLOSS") || s.Contains("DAILY LOSS") || s.Contains("HARDBLOCK")) return "Daily loss limit";
+        if (s.Contains("ANTITILT") || s.Contains("ANTI_TILT") || s.Contains("TILT")) return "Pause after losing streak";
+        if (s.Contains("NEWS") || s.Contains("MACRO")) return "News / macro pause";
+        if (s.Contains("ML")) return "ML filter";
+        if (s.Contains("SAME_SIDE") || s.Contains("SAMESIDE")) return "Same-side limit";
+        if (s.Contains("MAX_OPEN") || s.Contains("MAXOPEN") || s.Contains("POSITION LIMIT")) return "Position limit";
+        if (s.Contains("CORREL")) return "Correlated position open";
+        if (s.Contains("COOLDOWN")) return "Cooldown";
+        if (s.Contains("SPREAD")) return "Spread too wide";
+        if (s.Contains("CONF")) return "Confidence too low";
+        if (s.Contains("NOTIONAL") || s.Contains("TOO_SMALL")) return "Below min order size";
+        if (s.Contains("BALANCE")) return "Insufficient balance";
+        if (s.Contains("EXEC") || s.Contains("FAILED")) return "Execution failed";
+        if (s.Contains("SANITY") || s.Contains("STALE") || s.Contains("PRICE MOVED")) return "Price moved away";
+        var raw = string.IsNullOrEmpty(r.Reason) ? r.Event : r.Reason;
+        return raw.Length > 32 ? raw[..32] + "…" : raw;
     }
 
     void Rebuild()
@@ -576,7 +715,8 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
             .OrderByDescending(g => g.Count).ToList();
 
         _byReason = _all
-            .GroupBy(r => string.IsNullOrEmpty(r.Reason) ? "Unknown" : r.Reason)
+            .Where(r => r.Outcome == "Blocked")
+            .GroupBy(r => BlockLabel(r))
             .Select(g => new ReasonG(g.Key, g.Count()))
             .OrderByDescending(g => g.Count).ToList();
 
@@ -585,6 +725,8 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
             new("ALL",   "All",          _all.Count),
             new("LONG",  "▲ Long",       _all.Count(r => r.Side == "Buy")),
             new("SHORT", "▼ Short",      _all.Count(r => r.Side == "Sell")),
+            new("OK",    "Approved",     _all.Count(r => r.Outcome == "Approved")),
+            new("BLK",   "Blocked",      _all.Count(r => r.Outcome == "Blocked")),
             new("HIGH",  "Conf ≥ 70",    _all.Count(r => r.Confidence >= 70)),
             new("EXEC",  "Exec Failed",  _execFail),
             new("BAL",   "Low Balance",  _all.Count(r => r.Reason.Contains("Balance") || r.Reason.Contains("balance"))),
@@ -609,6 +751,8 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
             "LONG"  => q.Where(r => r.Side == "Buy"),
             "SHORT" => q.Where(r => r.Side == "Sell"),
             "HIGH"  => q.Where(r => r.Confidence >= 70),
+            "OK"    => q.Where(r => r.Outcome == "Approved"),
+            "BLK"   => q.Where(r => r.Outcome == "Blocked"),
             "EXEC"  => q.Where(r => r.Reason.Contains("Exec") || r.Reason.Contains("EXEC") || r.Reason.Contains("Failed")),
             "BAL"   => q.Where(r => r.Reason.Contains("Balance") || r.Reason.Contains("balance")),
             "MIN"   => q.Where(r => r.Reason.Contains("Notional") || r.Reason.Contains("TOO_SMALL")),

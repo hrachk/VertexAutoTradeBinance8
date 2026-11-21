@@ -17,16 +17,6 @@ namespace VertexAutoTradeBinance8.Services
         private readonly string _filePath;
         private readonly SemaphoreSlim _ioGate = new(1, 1);
 
-        // WriteIndented intentionally OFF — indented JSON is 3-4x larger
-        // (adds ~100 bytes of whitespace per record) and this file can
-        // accumulate thousands of records per day. Compact JSON keeps
-        // the file small and still human-readable in any JSON formatter.
-        private static readonly JsonSerializerOptions JsonOpts = new()
-        {
-            WriteIndented = false,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        };
-
         public SimulatedTradeService(
             MarketDataService marketData,
             AiSelfLearningService learningService,
@@ -454,84 +444,16 @@ namespace VertexAutoTradeBinance8.Services
         // INTERNAL IO
         // =========================================================
 
-        private static readonly SemaphoreSlim _globalIoGate = new(1, 1);
-
-        // Maximum records kept in missed_trades.json.
-        // Older entries are trimmed automatically on every write so the
-        // file never grows unbounded. At ~800 bytes/record (compact JSON)
-        // this keeps the file well under 500 KB — well inside the Web's
-        // 10 MB hard guard and fast to read/parse on every 5-second tick.
-        private const int MaxRecords = 500;
-
+        // missed_trades.json is written only through MissedTradeStore (one lock, one format).
         private async Task AppendRecordAsync(MissedTradeRecord record)
         {
-            await _globalIoGate.WaitAsync();
             try
             {
-                List<MissedTradeRecord> list;
-
-                if (File.Exists(_filePath))
-                {
-                    try
-                    {
-                        await using var fs = new FileStream(
-                            _filePath,
-                            FileMode.Open,
-                            FileAccess.Read,
-                            FileShare.ReadWrite);
-
-                        list = await JsonSerializer.DeserializeAsync<List<MissedTradeRecord>>(fs, JsonOpts)
-                               ?? new List<MissedTradeRecord>();
-                    }
-                    catch
-                    {
-                        // File may be corrupt / too large — start fresh
-                        list = new List<MissedTradeRecord>();
-                    }
-                }
-                else
-                {
-                    list = new List<MissedTradeRecord>();
-                }
-
-                list.Add(record);
-
-                // ── Trim oldest records to stay within MaxRecords ──────
-                // Keeps only the most recent MaxRecords entries.
-                // RemoveRange on the front is O(N) but at 500 records
-                // this is negligible; avoids a full Sort/LINQ allocation.
-                if (list.Count > MaxRecords)
-                    list.RemoveRange(0, list.Count - MaxRecords);
-
-                var tmp = _filePath + ".tmp";
-                var bak = _filePath + ".bak";
-
-                await using (var fs = new FileStream(
-                    tmp,
-                    FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.None))
-                {
-                    await JsonSerializer.SerializeAsync(fs, list, JsonOpts);
-                    await fs.FlushAsync();
-                }
-
-                if (File.Exists(_filePath))
-                {
-                    File.Replace(tmp, _filePath, bak, ignoreMetadataErrors: true);
-                }
-                else
-                {
-                    File.Move(tmp, _filePath);
-                }
+                await MissedTradeStore.AppendAsync(_filePath, record);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[SIM] AppendRecordAsync failed (IO-safe)");
-            }
-            finally
-            {
-                _globalIoGate.Release();
             }
         }
 

@@ -14,6 +14,11 @@ namespace VertexAutoTradeBinance8.Web.Models
         /// Stage was previously used for filtering but Stage ≠ Event → Stage was always "".
         /// </summary>
         public string Event { get; set; } = "";
+
+        /// <summary>Computed by the Signal log page: Approved / Blocked / Signal.
+        /// Not part of missed_trades.json.</summary>
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string Outcome { get; set; } = "";
         public string Side { get; set; } = "";
 
         public decimal Entry { get; set; }
