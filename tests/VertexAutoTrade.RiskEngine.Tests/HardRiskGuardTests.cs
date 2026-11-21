@@ -89,4 +89,28 @@ public class HardRiskGuardTests
         p.Allowed.Should().BeFalse();
         p.Reason.Should().Be(RiskBlockReason.DailyLossR);
     }
+
+    [Fact]
+    public void Daily_loss_trip_ends_at_utc_midnight_not_24h_later()
+    {
+        // 2026-11-20: −3.39R by 22:01 UTC. The next day's 01:00 UTC signal must pass.
+        var g = Sut();
+        var late = new DateTime(2026, 11, 20, 22, 1, 0, DateTimeKind.Utc);
+        var p = g.EvaluateEntry(Snap(rToday: -3.39m, utc: late));
+        p.Allowed.Should().BeFalse();
+        p.Reason.Should().Be(RiskBlockReason.DailyLossR);
+        p.BlockedUntilUtc.Should().Be(new DateTime(2026, 11, 21, 0, 0, 0, DateTimeKind.Utc));
+
+        g.EvaluateEntry(Snap(utc: late.AddHours(1))).Allowed.Should().BeFalse(); // same day
+        g.EvaluateEntry(Snap(utc: late.AddHours(3))).Allowed.Should().BeTrue();  // 01:01 next day
+    }
+
+    [Fact]
+    public void Non_daily_trip_keeps_its_full_duration()
+    {
+        var g = Sut();
+        var t = new DateTime(2026, 11, 20, 22, 0, 0, DateTimeKind.Utc);
+        g.Trip(RiskBlockReason.HardBlockActive, t, "manual");
+        g.EvaluateEntry(Snap(utc: t.AddHours(5))).Allowed.Should().BeFalse();
+    }
 }

@@ -12,7 +12,10 @@ namespace VertexAutoTrade.RiskEngine.Guards;
 /// </summary>
 public sealed class HardRiskGuard : IHardRiskGuard
 {
-    private readonly HardRiskOptions _opt;
+    private readonly HardRiskOptions? _fixedOpt;
+    private readonly IOptionsMonitor<HardRiskOptions>? _monitor;
+    // Settings changes (RiskEngine:Hard:*) apply without a restart.
+    private HardRiskOptions _opt => _monitor?.CurrentValue ?? _fixedOpt ?? new HardRiskOptions();
     private readonly ILogger<HardRiskGuard>? _log;
     private readonly object _gate = new();
 
@@ -22,15 +25,22 @@ public sealed class HardRiskGuard : IHardRiskGuard
     private decimal _realizedRToday;
     private DateTime _rDayUtc;
 
-    public HardRiskGuard(IOptions<HardRiskOptions> options, ILogger<HardRiskGuard>? log = null)
-        : this(options.Value, log) { }
-
-    public HardRiskGuard(HardRiskOptions options, ILogger<HardRiskGuard>? log = null)
+    public HardRiskGuard(IOptionsMonitor<HardRiskOptions> options, ILogger<HardRiskGuard>? log = null)
     {
-        _opt = options ?? new HardRiskOptions();
+        _monitor = options;
         _log = log;
         _rDayUtc = DateTime.UtcNow.Date;
     }
+
+    public HardRiskGuard(HardRiskOptions options, ILogger<HardRiskGuard>? log = null)
+    {
+        _fixedOpt = options ?? new HardRiskOptions();
+        _log = log;
+        _rDayUtc = DateTime.UtcNow.Date;
+    }
+
+    private static bool IsDailyLimit(RiskBlockReason r)
+        => r is RiskBlockReason.DailyLossR or RiskBlockReason.DailyLossEquity;
 
     public void RegisterClosedR(decimal realizedR, DateTime closedAtUtc)
     {
@@ -45,7 +55,16 @@ public sealed class HardRiskGuard : IHardRiskGuard
     {
         lock (_gate)
         {
-            var until = utcNow.ToUniversalTime().AddHours(Math.Max(1, _opt.BlockHoursAfterTrip));
+            utcNow = utcNow.ToUniversalTime();
+            var until = utcNow.AddHours(Math.Max(1, _opt.BlockHoursAfterTrip));
+            // A daily loss limit stops the rest of THAT trading day only. Before,
+            // a limit hit at 22:00 UTC blocked the whole next day as well (the
+            // trip ran a flat 24h from the moment it was first evaluated).
+            if (IsDailyLimit(reason))
+            {
+                var nextDay = utcNow.Date.AddDays(1);
+                if (nextDay < until) until = nextDay;
+            }
             _blockedUntilUtc = until;
             _blockReason = reason;
             _blockDetail = detail;
@@ -68,6 +87,14 @@ public sealed class HardRiskGuard : IHardRiskGuard
         lock (_gate)
         {
             utcNow = utcNow.ToUniversalTime();
+            // New UTC day: a daily-loss trip from yesterday no longer applies.
+            if (_blockedUntilUtc is not null && IsDailyLimit(_blockReason) && utcNow.Date > _rDayUtc)
+            {
+                _blockedUntilUtc = null;
+                _blockDetail = null;
+                _blockReason = RiskBlockReason.None;
+            }
+
             if (_blockedUntilUtc is { } u && utcNow < u)
             {
                 untilUtc = u;
@@ -126,7 +153,7 @@ public sealed class HardRiskGuard : IHardRiskGuard
             var msg = $"Daily loss {dayR:F2}R hit limit −{_opt.MaxDailyLossR:F2}R";
             Trip(RiskBlockReason.DailyLossR, now, msg);
             return new EntryPermission(false, RiskBlockReason.DailyLossR, msg, 0m,
-                now.AddHours(_opt.BlockHoursAfterTrip));
+                now.Date.AddDays(1));
         }
 
         if (_opt.MaxDailyLossEquityFraction > 0 && snapshot.EquityUsd > 0)
@@ -139,7 +166,7 @@ public sealed class HardRiskGuard : IHardRiskGuard
                 var msg = $"Daily equity loss {lossFrac:P2} >= {_opt.MaxDailyLossEquityFraction:P2}";
                 Trip(RiskBlockReason.DailyLossEquity, now, msg);
                 return new EntryPermission(false, RiskBlockReason.DailyLossEquity, msg, 0m,
-                    now.AddHours(_opt.BlockHoursAfterTrip));
+                    now.Date.AddDays(1));
             }
         }
 

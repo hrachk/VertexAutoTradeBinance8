@@ -456,6 +456,18 @@
                            value="@GetDecimal("SignalConfidence:ETH:MinExecute", 0.55m)" @onchange="@((ChangeEventArgs e) => SetFractionAsync("SignalConfidence:ETH:MinExecute", e, 0.3m, 0.9m))" />
                 </div>
             </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Daily loss limit, R <span class="st-field-hint">new entries stop for the rest of the UTC day</span></label>
+                    <input title="RiskEngine:Hard:MaxDailyLossR" class="st-input" type="number" step="0.5" min="1" max="10"
+                           value="@GetDecimal("RiskEngine:Hard:MaxDailyLossR", 3m)" @onchange="@((ChangeEventArgs e) => SetFractionAsync("RiskEngine:Hard:MaxDailyLossR", e, 1m, 10m))" />
+                </div>
+                <div class="st-field">
+                    <label>Daily loss limit, % equity <span class="st-field-hint">0.03 = 3%; resets at 00:00 UTC (04:00 Yerevan)</span></label>
+                    <input title="RiskEngine:Hard:MaxDailyLossEquityFraction" class="st-input" type="number" step="0.005" min="0.005" max="0.1"
+                           value="@GetDecimal("RiskEngine:Hard:MaxDailyLossEquityFraction", 0.03m)" @onchange="@((ChangeEventArgs e) => SetFractionAsync("RiskEngine:Hard:MaxDailyLossEquityFraction", e, 0.005m, 0.1m))" />
+                </div>
+            </div>
             <div class="st-card-sub" style="margin-top:6px">Targets, break-even and stop locks are on <a href="/risk-desk">Risk desk</a>.</div>
         </div>
 
