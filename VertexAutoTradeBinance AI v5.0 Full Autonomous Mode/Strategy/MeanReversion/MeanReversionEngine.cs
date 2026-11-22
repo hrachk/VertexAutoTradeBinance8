@@ -51,6 +51,44 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
         private readonly ConcurrentDictionary<string, DateTime> _lastSignalTime = new(StringComparer.OrdinalIgnoreCase);
 
         private MarketDataFacade? _boundMarketData;
+
+        // Per-bar verdict tally, logged once per closed bar like [CORE][BAR],
+        // so "no MR signals" can be traced to the gate that stops them.
+        private readonly ConcurrentDictionary<string, string> _lastReject = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, int> _barTally = new(StringComparer.OrdinalIgnoreCase);
+        private readonly object _barLock = new();
+        private DateTime _barOpenUtc;
+        private int _barEvaluated, _barEmitted;
+
+        private TradeSignal? Reject(string symbol, string why)
+        {
+            _lastReject[symbol] = why;
+            return null;
+        }
+
+        private void Tally(DateTime barOpenUtc, string verdict, bool emitted)
+        {
+            lock (_barLock)
+            {
+                if (barOpenUtc != _barOpenUtc)
+                {
+                    if (_barEvaluated > 0)
+                    {
+                        var reasons = string.Join(",", _barTally.OrderByDescending(kv => kv.Value)
+                            .Select(kv => $"{kv.Key}:{kv.Value}"));
+                        _logger.LogInformation("[MEANREV][BAR] {bar:HH:mm}Z evaluated={n} emitted={e} reasons=[{r}]",
+                            _barOpenUtc, _barEvaluated, _barEmitted, reasons);
+                    }
+                    _barTally.Clear();
+                    _barEvaluated = 0;
+                    _barEmitted = 0;
+                    _barOpenUtc = barOpenUtc;
+                }
+                _barEvaluated++;
+                if (emitted) _barEmitted++;
+                _barTally.AddOrUpdate(verdict, 1, (_, v) => v + 1);
+            }
+        }
         private Action<string, KlineInterval, BinanceFuturesUsdtKline>? _onKlineHandler;
 
         public MeanReversionEngine(
@@ -119,15 +157,24 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             if (klines == null || klines.Count < Math.Max(_opt.Window, 60))
                 return;
 
+            var barOpen = klines[^1].OpenTime;
+            _lastReject.TryRemove(symbol, out _);
             var signal = await TryBuildSignalAsync(symbol, tf, klines);
-            if (signal == null) return;
+            if (signal == null)
+            {
+                Tally(barOpen, _lastReject.TryGetValue(symbol, out var why) ? why : "no_setup", false);
+                return;
+            }
 
             // Cooldown: don't re-signal the same symbol within the window
             var key = $"{symbol}:{signal.Side}";
             var now = DateTime.UtcNow;
             if (_lastSignalTime.TryGetValue(key, out var last) &&
                 now - last < _opt.SignalCooldown)
+            {
+                Tally(barOpen, "cooldown", false);
                 return;
+            }
 
             _lastSignalTime[key] = now;
 
@@ -143,10 +190,12 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
                 if (!VertexAutoTradeBinance8.Strategy.EntrySanityGate.Allow(signal, klines, null, out var san))
                 {
                     _logger.LogInformation("[MEANREV][{symbol}] SANITY BLOCK {r}", symbol, san);
+                    Tally(barOpen, "sanity", false);
                     return;
                 }
             }
             catch { /* never break MR loop */ }
+            Tally(barOpen, "ok", true);
             OnSignalGenerated?.Invoke(signal);
         }
 
@@ -169,16 +218,15 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             var btcMode = _dualMode?.CurrentBtcMode ?? DualMarketMode.Unknown;
             if (ExecutableStrategyPolicy.IsCoreMajorSymbol(symbol)
                 && btcMode == DualMarketMode.Trend)
-                return null;
+                return Reject(symbol, "major_in_btc_trend");
             if (btcMode == DualMarketMode.Chaos)
             {
-                _logger.LogDebug("[MEANREV] skip {sym} — BTC dual=CHAOS", symbol);
-                return null;
+                return Reject(symbol, "btc_chaos");
             }
 
             // Do not fade expanding volatility (trend ignition) — primary MR failure mode
             if (IsAtrExpanding(klines, 14, 20, 1.45m))
-                return null;
+                return Reject(symbol, "atr_expanding");
 
             // ── GATE 1: Regime — BTC DualMode RANGE OR symbol Range/Squeeze ──
             var smart = _smartRegimeService.Evaluate(symbol, tf, klines);
@@ -194,42 +242,42 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
                 {
                     // Parallel scalp in TREND only on local range/squeeze pockets — not pure trend chase
                     if (!rangeLike)
-                        return null;
+                        return Reject(symbol, "not_range_in_btc_trend");
                 }
                 else if (_opt.AllowWhenBtcRange && btcRange)
                 {
                     // BTC range/unknown: allow even if local smart still mild-slope
                 }
                 else if (!rangeLike)
-                    return null;
+                    return Reject(symbol, "not_range");
             }
 
             // ── GATE 2: Z-Score extreme ──
             var bands = ZScoreCalculator.ComputeBands(klines, _opt.Window, _opt.EntrySigma);
-            if (!bands.IsValid) return null;
+            if (!bands.IsValid) return Reject(symbol, "bands_invalid");
 
             bool longSetup  = bands.ZScore <= -_opt.EntrySigma;
             bool shortSetup = bands.ZScore >= _opt.EntrySigma;
-            if (!longSetup && !shortSetup) return null;
+            if (!longSetup && !shortSetup) return Reject(symbol, "z_inside");
 
             // A -2σ print inside a downtrend is continuation, not a long.
             // Fading it is the trade that "signals long and the market shorts".
             if (IsTrendAgainstFade(klines, longSetup))
-                return null;
+                return Reject(symbol, "trend_against_fade");
             if (ImpulseStillRunning(klines, longSetup))
-                return null;
+                return Reject(symbol, "impulse_running");
 
             // ── GATE 3: Volume confirmation ──
             if (!ZScoreCalculator.IsVolumeSurge(klines, _opt.VolumeAvgPeriod, _opt.VolumeSurgeMultiplier))
-                return null;
+                return Reject(symbol, "no_volume_surge");
 
             // ── GATE 4: Reversal confirmation (not a falling knife) ──
             if (_opt.RequireReversalConfirmation &&
                 !ZScoreCalculator.HasReversalConfirmation(klines, longSetup, _opt.ReversalLookback))
-                return null;
+                return Reject(symbol, "no_reversal_candle");
 
             if (FadeWickIsFalse(klines, longSetup))
-                return null;
+                return Reject(symbol, "false_wick");
 
             // ── GATE 5: BTC correlation guard ──
             // Skip fading a move that's really just BTC dragging the whole
@@ -257,13 +305,13 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
                             (longSetup && btcBands.ZScore <= -1.0m) ||
                             (shortSetup && btcBands.ZScore >= 1.0m);
                         if (btcBands.IsValid && btcSameDirection)
-                            return null;
+                            return Reject(symbol, "btc_same_extreme");
                     }
                 }
             }
 
             decimal atr = ZScoreCalculator.Atr(klines, 14, klines.Count - 1);
-            if (atr <= 0m) return null;
+            if (atr <= 0m) return Reject(symbol, "no_atr");
 
             decimal entry = bands.LastClose;
             decimal stopLoss;
@@ -284,14 +332,14 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
 
             decimal risk = Math.Abs(entry - stopLoss);
             decimal reward = Math.Abs(takeProfit - entry);
-            if (risk <= 0m || entry <= 0m) return null;
+            if (risk <= 0m || entry <= 0m) return Reject(symbol, "bad_levels");
 
             // Align with EntrySanityGate range band. Widen a noise stop; never
             // pull a wide structural stop inward (that is a guaranteed stop-out).
             decimal minDist = entry * VertexAutoTradeBinance8.Strategy.EntrySanityGate.RangeMinRiskPct;
             decimal maxDist = entry * VertexAutoTradeBinance8.Strategy.EntrySanityGate.RangeMaxRiskPct;
             if (risk > maxDist)
-                return null;
+                return Reject(symbol, "sl_too_wide");
             if (risk < minDist)
             {
                 stopLoss = longSetup ? entry - minDist : entry + minDist;
@@ -299,7 +347,7 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             }
 
             if (reward / risk < _opt.MinRewardRiskRatio)
-                return null;
+                return Reject(symbol, $"rr_low:{reward / risk:0.0}");
 
             // TP ladder: mean (thesis) + extension toward opposite band (symbol bands, not fixed R)
             var tps = new List<decimal> { takeProfit };
