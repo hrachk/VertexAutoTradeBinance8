@@ -32,6 +32,8 @@ public sealed class MarketDataPushClient : BackgroundService
     private long _ticksSent;
     private long _klinesSent;
     private long _sendFailures;
+    private long _droppedSinceLog;
+    private DateTime _lastDropLogUtc = DateTime.MinValue;
 
     public MarketDataPushClient(
         WsKlineSubscriber ws,
@@ -160,8 +162,19 @@ public sealed class MarketDataPushClient : BackgroundService
             {
                 if (connection.State != HubConnectionState.Connected)
                 {
-                    _logger.LogWarning("[DashboardPush] Dropping message — connection state is {state}", connection.State);
-                    continue; // drop silently — chart falls back to file snapshot
+                    // One line per 30 s with a count. Logging every dropped tick wrote
+                    // ~60k lines a minute while the Web was down (client_001 22.11:
+                    // 70 MB of logs in 35 min).
+                    _droppedSinceLog++;
+                    var nowUtc = DateTime.UtcNow;
+                    if (nowUtc - _lastDropLogUtc >= TimeSpan.FromSeconds(30))
+                    {
+                        _logger.LogWarning("[DashboardPush] Web not connected (state={state}) — dropped {n} updates in the last 30 s",
+                            connection.State, _droppedSinceLog);
+                        _droppedSinceLog = 0;
+                        _lastDropLogUtc = nowUtc;
+                    }
+                    continue; // chart falls back to file snapshot
                 }
 
                 try
